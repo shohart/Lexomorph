@@ -4,7 +4,7 @@
 
 Lexomorph (formerly SuperDictate Next) is built around local speech
 recognition. This page lists what stays on your device and what can leave it.
-The sync server address and the repository still carry the old name on purpose;
+The sync server address still carries the old name on purpose;
 see [docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md).
 
 ## 💾 Data that stays on your device

@@ -18,8 +18,8 @@ Python + PySide6 вместо Swift + AppKit, но поведение и име�
 `LexomorphOvHost.exe`, значение автозапуска `Lexomorph`, переменные `LEXOMORPH_*`
 (старые `SUPERDICTATE_*` читаются как запасной вариант ещё один релиз). Остались
 Python-пакет `superdictate` (внутреннее имя), адрес сервера синхронизации
-`superdictate.bykovlegal.ru` и репозиторий `shohart/SuperDictate-Next` (их
-переименует владелец проекта; GitHub перенаправляет старые адреса).
+`superdictate.bykovlegal.ru` (его переименует владелец проекта). Репозиторий теперь
+`shohart/Lexomorph`; GitHub перенаправляет старый адрес `shohart/SuperDictate-Next`.
 
 **Переход с SuperDictate.** Установщик `Lexomorph-Setup-X.Y.Z.exe` удаляет прежнюю
 установку SuperDictate (программу, ярлыки, автозапуск), но не данные. При первом
@@ -34,7 +34,7 @@ Python-пакет `superdictate` (внутреннее имя), адрес се�
 цепочка авторства — в [NOTICE.md](NOTICE.md).
 
 > **Состояние.** Готовые установщики публикуются на
-> [странице релизов](https://github.com/shohart/SuperDictate-Next/releases)
+> [странице релизов](https://github.com/shohart/Lexomorph/releases)
 > под тегами `win-vX.Y.Z` (последний опубликованный — `win-v0.9.7`, под старым
 > именем SuperDictate). Установщик `Lexomorph-Setup-1.0.0.exe` собран и
 > проверен на сборочной машине, но ещё не опубликован. Установщик не имеет
@@ -229,7 +229,7 @@ macOS: Enter запоминает сразу, Esc или щелчок отмен
 ## Установка
 
 Скачайте `Lexomorph-Setup-X.Y.Z.exe` из последней записи `win-v*` на
-[странице релизов](https://github.com/shohart/SuperDictate-Next/releases) и
+[странице релизов](https://github.com/shohart/Lexomorph/releases) и
 запустите. Релизы Windows никогда не помечаются как «Latest», поэтому ссылка
 «latest» ведёт на релиз macOS. Установка для текущего пользователя, права
 администратора не нужны; минимум Windows 10 версии 1809 (сборка 17763), 64

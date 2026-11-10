@@ -1,6 +1,6 @@
 # Releases: macOS and Windows
 
-Both platforms publish to `shohart/SuperDictate-Next` and are told apart by
+Both platforms publish to `shohart/Lexomorph` (formerly `shohart/SuperDictate-Next`; old URLs redirect) and are told apart by
 the tag prefix, never by which release GitHub calls "latest".
 
 | Platform | Tag | Asset | GitHub "latest" | Who reads it |
@@ -49,7 +49,7 @@ the tag prefix, never by which release GitHub calls "latest".
    then `gh workflow run "release smoke"` (Actions do not trigger on their
    own in this repo) and wait for it to pass.
 6. Pushes from this Mac go over HTTPS (the SSH key is a read-only deploy key):
-   `git -c credential.helper='!gh auth git-credential' push https://github.com/shohart/SuperDictate-Next.git main`.
+   `git -c credential.helper='!gh auth git-credential' push https://github.com/shohart/Lexomorph.git main`.
 
 **One-time bridge.** macOS 0.7.0 and earlier read `releases/latest` and only
 understand a `vX.Y.Z` tag, downloading from `releases/download/vX.Y.Z/`. So

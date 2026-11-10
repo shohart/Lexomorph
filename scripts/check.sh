@@ -53,8 +53,8 @@ grep -q 'com.apple.security.device.audio-input' entitlements.plist
 grep -q 'com.apple.security.device.microphone' entitlements.plist
 
 ! grep -q 'shohart/SuperDictate-Intel\|shlgd/SuperDictate' README.md README.ru.md
-grep -q 'raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh' README.md
-grep -q 'raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh' README.ru.md
+grep -q 'raw.githubusercontent.com/shohart/Lexomorph/main/install.sh' README.md
+grep -q 'raw.githubusercontent.com/shohart/Lexomorph/main/install.sh' README.ru.md
 grep -q '^REF="${LEXOMORPH_REF:-\$SOURCE_COMMIT}"$' install.sh
 grep -q '^EXPECTED_SOURCE_COMMIT="${LEXOMORPH_SOURCE_COMMIT:-\$SOURCE_COMMIT}"$' install.sh
 grep -q 'verify_source_ref' install.sh

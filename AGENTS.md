@@ -47,8 +47,9 @@ after the new bundle is installed (see below).
 - Data: `~/Library/Application Support/Lexomorph`, logs
   `~/Library/Logs/Lexomorph-*`, defaults domain `com.local.lexomorph`, Keychain
   service `com.local.lexomorph.vocab-sync`.
-- Deliberately not renamed (owner-managed infrastructure): the repository
-  `shohart/SuperDictate-Next`, the sync server domain
+- The repository is `shohart/Lexomorph` (renamed from `shohart/SuperDictate-Next`;
+  GitHub redirects the old address, never create a repository under the old name).
+- Deliberately not renamed (owner-managed infrastructure): the sync server domain
   `superdictate.bykovlegal.ru`, `server/`, `windows/`, the native C++
   `SuperDictateOnnxHost` CMake target (staged into the bundle as
   `LexomorphOnnxHost`) and the C++ bridge file names. Credits to Parakey

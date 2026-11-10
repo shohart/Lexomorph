@@ -8,7 +8,7 @@ network use in the README privacy table and PRIVACY.md, and test on macOS 14 or
 newer (Apple Silicon or Intel) and, for Windows changes, on Windows 10 1809 or
 newer. Since 1.0.0 the identifiers on both platforms (bundle ID
 `com.local.lexomorph`, `Lexomorph.app`, `%LOCALAPPDATA%\Lexomorph`, the data
-paths) carry the new name; the repository `shohart/SuperDictate-Next`, the sync
+paths) carry the new name; the repository is `shohart/Lexomorph` (formerly `shohart/SuperDictate-Next`, redirected); the sync
 server address and a few internal names (the Python package `superdictate`, C++
 file names) keep the old one on purpose; see
 [docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md) before

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-REPOSITORY="${LEXOMORPH_REPOSITORY:-shohart/SuperDictate-Next}"
+REPOSITORY="${LEXOMORPH_REPOSITORY:-shohart/Lexomorph}"
 RELEASE_VERSION="1.0.0"
 # macOS releases are tagged mac-vX.Y.Z (Windows ones win-vX.Y.Z, same repo);
 # 0.7.0 and earlier carry the legacy vX.Y.Z tag.

@@ -20,8 +20,8 @@ and `LexomorphOvHost.exe`, autostart value `Lexomorph`, environment variables
 `LEXOMORPH_*` (the old `SUPERDICTATE_*` are still read as a fallback for one
 more release). Still named SuperDictate: the Python package `superdictate`
 (an internal name), the sync server address `superdictate.bykovlegal.ru` and
-the repository `shohart/SuperDictate-Next` (the owner renames those; GitHub
-redirects the old addresses).
+(the owner renames it). The repository is now `shohart/Lexomorph`; GitHub
+redirects the old `shohart/SuperDictate-Next` address.
 
 **Moving from SuperDictate.** The installer `Lexomorph-Setup-X.Y.Z.exe` removes
 an installed SuperDictate (program, shortcuts, autostart entry) but not its
@@ -38,7 +38,7 @@ Provenance and what this is based on: [PROVENANCE.md](PROVENANCE.md). The
 chain of authorship: [NOTICE.md](NOTICE.md).
 
 > **Status.** Ready-made installers are published on the
-> [Releases page](https://github.com/shohart/SuperDictate-Next/releases) under
+> [Releases page](https://github.com/shohart/Lexomorph/releases) under
 > `win-vX.Y.Z` tags (the newest published one is `win-v0.9.7`, still under the
 > old SuperDictate name). `Lexomorph-Setup-1.0.0.exe` has been built and
 > checked on the build machine but is not published yet. The installer is not
@@ -226,7 +226,7 @@ rebound in Settings > Shortcuts.
 ## Installation
 
 Download `Lexomorph-Setup-X.Y.Z.exe` from the newest `win-v*` entry on the
-[Releases page](https://github.com/shohart/SuperDictate-Next/releases) and run
+[Releases page](https://github.com/shohart/Lexomorph/releases) and run
 it. Windows releases are never marked "Latest", so the "latest" link leads to
 the macOS release. The install is per user and needs no administrator rights;
 the minimum is Windows 10 version 1809 (build 17763), 64-bit. The installer is

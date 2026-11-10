@@ -8,7 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Платформы: macOS 14+ и Windows 10+](https://img.shields.io/badge/platforms-macOS%2014%2B%20%7C%20Windows%2010%2B-lightgrey.svg)](#поддерживаемые-платформы)
-[![Последний релиз macOS](https://img.shields.io/github/v/release/shohart/SuperDictate-Next?label=macOS%20release)](https://github.com/shohart/SuperDictate-Next/releases)
+[![Последний релиз macOS](https://img.shields.io/github/v/release/shohart/Lexomorph?label=macOS%20release)](https://github.com/shohart/Lexomorph/releases)
 
 Lexomorph — персональный адаптивный движок письма для macOS и Windows. Он
 соединяет распознавание речи с языковой коррекцией, личным словарём и
@@ -95,7 +95,7 @@ Lexomorph — персональный адаптивный движок пис�
 | Платформа | Требования | Как получить |
 |---|---|---|
 | macOS | macOS 14 и новее, Apple Silicon или Intel. Проверено вручную на одной Intel-машине; CI работает только на Apple Silicon. | Установка одной командой (ниже). Опубликованный `Lexomorph.zip` собран под **Intel (x86_64)**; на Apple Silicon собирайте из исходников тем же установщиком. |
-| Windows | Windows 10 версии 1809 (сборка 17763) и новее, 64-разрядная. Установка для текущего пользователя, права администратора не нужны. | `Lexomorph-Setup-X.Y.Z.exe` из записи `win-v*` на [странице релизов](https://github.com/shohart/SuperDictate-Next/releases). Установщик не подписан Authenticode. CI для Windows нет; сборки проверяются вручную. |
+| Windows | Windows 10 версии 1809 (сборка 17763) и новее, 64-разрядная. Установка для текущего пользователя, права администратора не нужны. | `Lexomorph-Setup-X.Y.Z.exe` из записи `win-v*` на [странице релизов](https://github.com/shohart/Lexomorph/releases). Установщик не подписан Authenticode. CI для Windows нет; сборки проверяются вручную. |
 
 Linux не поддерживается. На ноутбуках Intel с NPU версия для Windows умеет
 распознавать речь и на NPU (OpenVINO), см. [windows/README.ru.md](windows/README.ru.md).
@@ -140,11 +140,11 @@ Linux не поддерживается. На ноутбуках Intel с NPU в
 Откройте Terminal, вставьте и нажмите Enter:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | /bin/bash
+curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/install.sh | /bin/bash
 ```
 
 Установщик скачивает `Lexomorph.zip` из
-[GitHub Releases](https://github.com/shohart/SuperDictate-Next/releases),
+[GitHub Releases](https://github.com/shohart/Lexomorph/releases),
 проверяет закреплённую SHA-256, версию, bundle ID, архитектуру, подпись кода и
 права на микрофон, затем заменяет `/Applications/Lexomorph.app` и открывает
 приложение. Xcode не нужен. История, настройки и скачанные модели сохраняются.
@@ -158,7 +158,7 @@ curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/inst
 отклонит. Соберите из исходников тем же скриптом:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | LEXOMORPH_BUILD_FROM_SOURCE=1 /bin/bash
+curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/install.sh | LEXOMORPH_BUILD_FROM_SOURCE=1 /bin/bash
 ```
 
 Нужны бесплатные Command Line Tools от Apple; если их нет, установщик откроет
@@ -169,7 +169,7 @@ curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/inst
 ### Windows
 
 Скачайте `Lexomorph-Setup-X.Y.Z.exe` из самой новой записи `win-v*` на
-[странице релизов](https://github.com/shohart/SuperDictate-Next/releases) и
+[странице релизов](https://github.com/shohart/Lexomorph/releases) и
 запустите. Релизы Windows никогда не помечаются «latest», поэтому бейдж выше и
 ссылка «latest» показывают релиз macOS. Приложение ставится для текущего
 пользователя. Установщик не подписан Authenticode, поэтому SmartScreen может
@@ -193,7 +193,7 @@ curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/inst
 ### Удаление
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/uninstall.sh | bash
 ```
 
 Удаляет приложение и фоновую службу. История, настройки и модели сохраняются,
@@ -333,8 +333,8 @@ curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/unin
 
 ```bash
 xcode-select --install
-git clone https://github.com/shohart/SuperDictate-Next.git
-cd SuperDictate-Next
+git clone https://github.com/shohart/Lexomorph.git
+cd Lexomorph
 swift run -c debug --package-path swift Lexomorph --self-test all
 ./scripts/build-app.sh ./dist/Lexomorph.app
 ```
@@ -409,9 +409,9 @@ Lexomorph — тот же проект под новым именем. С вер
 Подробности, откат и список переименованного:
 [docs/branding/MIGRATION_NOTES.ru.md](docs/branding/MIGRATION_NOTES.ru.md).
 Правила бренда: [docs/branding/BRAND_GUIDELINES.ru.md](docs/branding/BRAND_GUIDELINES.ru.md).
-Пока под прежним именем, намеренно: репозиторий `shohart/SuperDictate-Next`
-(после переименования GitHub перенаправляет) и адрес сервера синхронизации
-`superdictate.bykovlegal.ru`.
+Репозиторий теперь `shohart/Lexomorph` (раньше `shohart/SuperDictate-Next`, GitHub
+перенаправляет старый адрес). Пока под прежним именем, намеренно: адрес сервера
+синхронизации `superdictate.bykovlegal.ru`.
 
 ## Участие
 

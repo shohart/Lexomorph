@@ -45,7 +45,12 @@ line numbers (as of before the rename) are in `REBRAND_AUDIT.md`. Identifiers ar
 - Decide whether to rename the displayed mode names (`Polish`, `Structured task`, `Official` to Clean, Polish, Formal)
   and whether to introduce a Raw mode. Do not change the internal values (`polish`, `structured_task`, `official`).
 
-## 3. Repository and sync domain rename (the owner does it; only after the transition release)
+## 3. Repository and sync domain rename
+
+**Done 2026-11-10:** the repository was renamed to `shohart/Lexomorph`; redirects of the old name were checked for the
+releases API, raw `update.json`/`install.sh`/`uninstall.sh`, release downloads and the `feat/llm-postproc-gec` raw files.
+The URLs compiled into released binaries keep the old name and work through the redirect; do not create a repository
+under the old name. The sync domain is not renamed yet. The steps below are kept as the record and for the domain.
 
 The repository `shohart/SuperDictate-Next` and the domain `superdictate.bykovlegal.ru` are deliberately kept in the
 code and the documentation. Order:

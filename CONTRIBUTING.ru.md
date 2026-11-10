@@ -8,7 +8,8 @@ Issue и pull request в Lexomorph (ранее SuperDictate Next) приветс
 на macOS 14 и новее (Apple Silicon или Intel), а изменения для Windows — на Windows 10
 1809 и новее. С версии 1.0.0 идентификаторы на обеих платформах (bundle ID
 `com.local.lexomorph`, `Lexomorph.app`, `%LOCALAPPDATA%\Lexomorph`, пути данных) носят
-новое имя; репозиторий `shohart/SuperDictate-Next`, адрес сервера синхронизации и
+новое имя; репозиторий теперь `shohart/Lexomorph` (раньше `shohart/SuperDictate-Next`, со
+переадресацией); адрес сервера синхронизации и
 несколько внутренних имён (Python-пакет `superdictate`, имена файлов C++) намеренно
 сохраняют старое; перед любым переименованием см.
 [docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md). Документация

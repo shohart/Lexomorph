@@ -25,7 +25,7 @@ jobs:
       - name: Read the release pinned on main
         id: pin
         run: |
-          curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh \
+          curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/install.sh \
             -o "$RUNNER_TEMP/install.sh"
           version="$(sed -n 's/^RELEASE_VERSION="\(.*\)"$/\1/p' "$RUNNER_TEMP/install.sh")"
           tag="$(sed -n 's/^RELEASE_TAG="\(.*\)"$/\1/p' "$RUNNER_TEMP/install.sh")"
@@ -41,7 +41,7 @@ jobs:
         run: test "$TAG" = "$PINNED"
       - name: Install from the public command
         run: |
-          curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | \
+          curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/install.sh | \
             LEXOMORPH_NO_OPEN=1 bash
       - name: Verify installed release
         env:
@@ -79,5 +79,5 @@ jobs:
           done
       - name: Uninstall
         run: |
-          curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/uninstall.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/uninstall.sh | bash
           test ! -e /Applications/Lexomorph.app

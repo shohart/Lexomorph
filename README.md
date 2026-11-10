@@ -8,7 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platforms: macOS 14+ and Windows 10+](https://img.shields.io/badge/platforms-macOS%2014%2B%20%7C%20Windows%2010%2B-lightgrey.svg)](#supported-platforms)
-[![Latest macOS release](https://img.shields.io/github/v/release/shohart/SuperDictate-Next?label=macOS%20release)](https://github.com/shohart/SuperDictate-Next/releases)
+[![Latest macOS release](https://img.shields.io/github/v/release/shohart/Lexomorph?label=macOS%20release)](https://github.com/shohart/Lexomorph/releases)
 
 Lexomorph is a personal adaptive writing engine for macOS and Windows. It
 combines speech recognition with language-specific correction, a personal
@@ -95,7 +95,7 @@ can use its own backend.
 | Platform | Requirements | How you get it |
 |---|---|---|
 | macOS | macOS 14 or newer, Apple Silicon or Intel. Verified by hand on one Intel machine; CI runs on Apple Silicon only. | One-line installer (below). The published `Lexomorph.zip` is built for **Intel (x86_64)**; on Apple Silicon, build from source with the same installer. |
-| Windows | Windows 10 version 1809 (build 17763) or newer, 64-bit. Per-user install, no administrator rights needed. | `Lexomorph-Setup-X.Y.Z.exe` from a `win-v*` entry on the [Releases page](https://github.com/shohart/SuperDictate-Next/releases). The installer is not Authenticode-signed. There is no Windows CI; Windows builds are checked by hand. |
+| Windows | Windows 10 version 1809 (build 17763) or newer, 64-bit. Per-user install, no administrator rights needed. | `Lexomorph-Setup-X.Y.Z.exe` from a `win-v*` entry on the [Releases page](https://github.com/shohart/Lexomorph/releases). The installer is not Authenticode-signed. There is no Windows CI; Windows builds are checked by hand. |
 
 Linux is not supported. On Intel laptops with an NPU, the Windows version can
 also recognize speech on the NPU (OpenVINO); see [windows/README.md](windows/README.md).
@@ -139,11 +139,11 @@ Sync is opt-in and is the only thing that needs an account. More details:
 Open Terminal, paste, press Enter:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | /bin/bash
+curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/install.sh | /bin/bash
 ```
 
 The installer downloads `Lexomorph.zip` from
-[GitHub Releases](https://github.com/shohart/SuperDictate-Next/releases),
+[GitHub Releases](https://github.com/shohart/Lexomorph/releases),
 verifies a pinned SHA-256, the version, the bundle ID, the architecture, the
 code signature and the microphone entitlements, then replaces
 `/Applications/Lexomorph.app` and opens it. Xcode is not needed. Your
@@ -158,7 +158,7 @@ with `scripts/build-app.sh` are signed ad-hoc unless you pass `SIGN_IDENTITY`.
 it. Build from source with the same script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | LEXOMORPH_BUILD_FROM_SOURCE=1 /bin/bash
+curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/install.sh | LEXOMORPH_BUILD_FROM_SOURCE=1 /bin/bash
 ```
 
 This needs the free Apple Command Line Tools; if they are missing, the
@@ -169,7 +169,7 @@ commit and verifies it against GitHub.
 ### Windows
 
 Download `Lexomorph-Setup-X.Y.Z.exe` from the newest `win-v*` entry on the
-[Releases page](https://github.com/shohart/SuperDictate-Next/releases) and run
+[Releases page](https://github.com/shohart/Lexomorph/releases) and run
 it. Windows releases are never marked "latest", so the badge above and the
 "latest" link show the macOS release. The app is installed for the current user.
 The installer is not Authenticode-signed, so SmartScreen may warn about an
@@ -192,7 +192,7 @@ unknown publisher. Details: [windows/README.md](windows/README.md).
 ### Uninstalling
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/shohart/Lexomorph/main/uninstall.sh | bash
 ```
 
 Removes the app and the background service. History, settings and models are
@@ -331,8 +331,8 @@ Manual build for development (macOS):
 
 ```bash
 xcode-select --install
-git clone https://github.com/shohart/SuperDictate-Next.git
-cd SuperDictate-Next
+git clone https://github.com/shohart/Lexomorph.git
+cd Lexomorph
 swift run -c debug --package-path swift Lexomorph --self-test all
 ./scripts/build-app.sh ./dist/Lexomorph.app
 ```
@@ -408,8 +408,8 @@ also in the identifiers, so for the system it is a new application:
 Details, rollback and the list of what was renamed:
 [docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md). Brand
 rules: [docs/branding/BRAND_GUIDELINES.md](docs/branding/BRAND_GUIDELINES.md).
-Still named SuperDictate for now, on purpose: the repository
-`shohart/SuperDictate-Next` (GitHub redirects after a rename) and the sync
+The repository is `shohart/Lexomorph` (formerly `shohart/SuperDictate-Next`; GitHub
+redirects the old address). Still named SuperDictate for now, on purpose: the sync
 server address `superdictate.bykovlegal.ru`.
 
 ## Contributing
