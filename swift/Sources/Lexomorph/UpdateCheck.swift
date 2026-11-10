@@ -204,7 +204,7 @@ enum UpdateCheck {
 }
 
 /// `update.json`. `sha256` is the checksum of `SuperDictate.zip` (the transition bridge that
-/// pre-0.10 clients download); `lexomorph_sha256` is the checksum of `Lexomorph.zip`, the archive
+/// pre-1.0 clients download); `lexomorph_sha256` is the checksum of `Lexomorph.zip`, the archive
 /// this client downloads. Extra keys are ignored, so the same file stays valid for old clients.
 struct LexomorphUpdateManifest: Decodable, Equatable, Sendable {
     let version: String

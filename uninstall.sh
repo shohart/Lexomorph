@@ -4,7 +4,7 @@ set -euo pipefail
 
 # Usage: uninstall.sh [--legacy]
 #   (no flag)  remove Lexomorph (app + LaunchAgent); data is kept.
-#   --legacy   additionally remove a pre-0.10 SuperDictate installation
+#   --legacy   additionally remove a pre-1.0 SuperDictate installation
 #              (app + LaunchAgent). Its data, defaults and Keychain item are
 #              never touched: they are the rollback path.
 

@@ -7,7 +7,7 @@ swift/Info.plist by hand when bumping — there is no build step here that
 could read it automatically.
 """
 
-VERSION = "0.10.0"
+VERSION = "1.0.0"
 UPSTREAM_BASE = (
     "Lexomorph (formerly SuperDictate Next; macOS), itself a fork of SuperDictate by shlgd "
     "and Parakey by Richard Courtman"

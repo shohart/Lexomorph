@@ -17,7 +17,7 @@ into text that matches the way you want to write. Hold a hotkey, speak, and
 the text is typed into whatever field is focused.
 
 > **Lexomorph is the new name of SuperDictate Next.** Same project, a broader
-> vision: from speech recognition to adaptive, personal writing. Since 0.10.0
+> vision: from speech recognition to adaptive, personal writing. Since 1.0.0
 > the app, its files and its data carry the new name; the repository and the
 > sync server address keep the old one for now. Coming from SuperDictate Next?
 > See [Moving from SuperDictate Next](#moving-from-superdictate-next).
@@ -113,7 +113,7 @@ turn on. Nothing here is "offline by default": the first run downloads models.
 | Local LLM models | the pinned model catalog; the correction adapter is fetched from this repository on GitHub | when you press download | a file request | none | not downloaded |
 | Update check | api.github.com, raw.githubusercontent.com | macOS: when you open the panel, plus a background check if you enable it. Windows: automatic by default | a request for the release list | none | macOS: panel only; Windows: on |
 | LLM correction or rewrite on **your own endpoint** | the URL you enter (the field suggests OpenRouter) | only if you pick the custom endpoint | **the dictated text** and the instruction prompt; no audio | your API key, stored **as plain text** in the settings (macOS UserDefaults, Windows `Settings.json`) | off; the default backend is the local model |
-| Account sync of vocabulary and ASR terms | the sync server run by the project owner (`superdictate.bykovlegal.ru`; source in [server/vocab-sync](server/vocab-sync)) | only after you sign in | replacement rules (source, replacement, origin, ASR-hint flag) and ASR terms; since 0.10.0 (unreleased), also your custom mode names, colors and instructions and per-day usage counters | e-mail and password; the token is kept in the macOS Keychain or Windows DPAPI | off |
+| Account sync of vocabulary and ASR terms | the sync server run by the project owner (`superdictate.bykovlegal.ru`; source in [server/vocab-sync](server/vocab-sync)) | only after you sign in | replacement rules (source, replacement, origin, ASR-hint flag) and ASR terms; since 1.0.0 (unreleased), also your custom mode names, colors and instructions and per-day usage counters | e-mail and password; the token is kept in the macOS Keychain or Windows DPAPI | off |
 | History, settings, diagnostics | your disk only | always | stays on the device | none | on |
 | Analytics and telemetry | none in the code | n/a | n/a | n/a | n/a |
 
@@ -181,7 +181,7 @@ unknown publisher. Details: [windows/README.md](windows/README.md).
   when it appears. The app downloads the new build, verifies the checksum, bundle
   ID, version and signature, replaces itself and relaunches. The panel
   checks when opened; the automatic background check is **off by default** on
-  macOS and can be enabled in the settings. (Copies older than 0.10.0 cannot update into Lexomorph from
+  macOS and can be enabled in the settings. (Copies older than 1.0.0 cannot update into Lexomorph from
   inside the app; see [Moving from SuperDictate Next](#moving-from-superdictate-next).)
 - **macOS, from Terminal:** run the install command again. It replaces only
   `/Applications/Lexomorph.app`.
@@ -286,7 +286,7 @@ that server, so they leave the device.
 |---|---|
 | Replacement dictionary and ASR terms between your Macs (one JSON file in a folder you choose, for example iCloud, Dropbox or Syncthing; no account) | released (macOS) |
 | Dictionary and ASR terms between macOS and Windows, through an account (e-mail and password) on the sync server | released: dictionary in 0.9.3, ASR terms in 0.9.5; off until you sign in |
-| Custom writing modes (name, color, instruction) and dictation statistics per day and device | **unreleased: ships with 0.10.0; no published release contains it yet** |
+| Custom writing modes (name, color, instruction) and dictation statistics per day and device | **unreleased: ships with 1.0.0; no published release contains it yet** |
 | Settings, hotkeys, the active mode | not synced (hotkeys and the active mode are intentionally local) |
 | Mobile devices | no client exists |
 
@@ -382,7 +382,7 @@ Parakeet Ultra covers 25 languages, GigaAM v3 is Russian only.
 
 ## Moving from SuperDictate Next
 
-Lexomorph is the same project under a new name. Since 0.10.0 the new name is
+Lexomorph is the same project under a new name. Since 1.0.0 the new name is
 also in the identifiers, so for the system it is a new application:
 
 - **macOS:** `/Applications/Lexomorph.app`, bundle ID `com.local.lexomorph`,
@@ -398,7 +398,7 @@ also in the identifiers, so for the system it is a new application:
   (program, shortcuts, autostart entry), and the first launch copies
   `%LOCALAPPDATA%\SuperDictate` to `%LOCALAPPDATA%\Lexomorph`. The old folder
   stays as the way back.
-- **Updating:** copies of SuperDictate older than 0.10.0 do not update
+- **Updating:** copies of SuperDictate older than 1.0.0 do not update
   themselves into Lexomorph, because they only accept the old app name and
   asset. Install Lexomorph with the installer once; after that, updates work
   from inside the app.
@@ -432,6 +432,6 @@ Lexomorph (formerly SuperDictate Next, and before that SuperDictate-Intel) is a
 fork of [SuperDictate](https://github.com/shlgd/SuperDictate), which is based on
 the open-source [Parakey](https://github.com/rcourtman/parakey) project by
 Richard Courtman. The name changed from SuperDictate-Intel to SuperDictate Next
-with v0.5.0, and to Lexomorph in 0.10.0, which is not published yet (the latest
+with v0.5.0, and to Lexomorph in 1.0.0, which is not published yet (the latest
 release is 0.9.7). Old repository URLs redirect. The brand has not been checked
 for trademark or domain availability.

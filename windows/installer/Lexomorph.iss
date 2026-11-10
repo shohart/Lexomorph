@@ -15,7 +15,7 @@
 ; where it is, as the way back.
 
 #define AppName        "Lexomorph"
-#define AppVersion     "0.10.0"
+#define AppVersion     "1.0.0"
 #define AppPublisher   "Lexomorph (formerly SuperDictate Next)"
 #define AppURL         "https://github.com/shohart/SuperDictate-Next"
 #define AppExeName     "Lexomorph.exe"

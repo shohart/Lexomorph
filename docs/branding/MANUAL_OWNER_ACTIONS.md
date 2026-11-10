@@ -28,10 +28,10 @@ line numbers (as of before the rename) are in `REBRAND_AUDIT.md`. Identifiers ar
    installation, because 0.9.x clients cannot update into Lexomorph from inside the app. **Not implemented in the code
    yet; it is yours to build and publish.** Requirements are in `MIGRATION_NOTES.md`, section 5.
 2. Let the transition release spread.
-3. Publish 0.10.0 following `docs/RELEASING.md`: macOS `mac-v0.10.0` with `Lexomorph.zip`, Windows `win-v0.10.0` with
-   `Lexomorph-Setup-0.10.0.exe` (never "latest"). Self-tests and the mandatory `scripts/verify-release.sh`.
+3. Publish 1.0.0 following `docs/RELEASING.md`: macOS `mac-v1.0.0` with `Lexomorph.zip`, Windows `win-v1.0.0` with
+   `Lexomorph-Setup-1.0.0.exe` (never "latest"). Self-tests and the mandatory `scripts/verify-release.sh`.
 4. Fill in the pins: `install.sh` (`RELEASE_SHA256`, `SOURCE_COMMIT`) and `update.json` currently hold placeholders
-   (all zeros). **Do not merge `release/0.10.0` into `main` before the release is published.** `scripts/check.sh`
+   (all zeros). **Do not merge `release/1.0.0` into `main` before the release is published.** `scripts/check.sh`
    checks that the version and SHA agree with `Info.plist`.
 5. Run `gh workflow run "release smoke"` and wait for it to pass.
 6. Release notes: "Lexomorph (formerly SuperDictate Next)"; permissions must be granted again on macOS; settings and
@@ -71,13 +71,13 @@ code and the documentation. Order:
   bundle ID, but it must not happen a second time). Releases are not notarized.
 - Any change to `Info.plist` changes the ZIP: a new checksum in `install.sh` and `update.json`, and the mandatory
   `scripts/verify-release.sh`.
-- Run `Lexomorph-Setup-0.10.0.exe` on a clean Windows machine and on one with SuperDictate installed (removal of the
+- Run `Lexomorph-Setup-1.0.0.exe` on a clean Windows machine and on one with SuperDictate installed (removal of the
   old app, autostart, data copy, uninstall questions). So far it has only been built and compiled. There is no Windows
   CI.
 - The Windows installer is not Authenticode-signed (SmartScreen warns). Decide whether to buy a certificate.
 - Run the macOS migration on a machine that has real SuperDictate data (the migration self-test groups
   `legacy-migration` and `interface-language-default` use temporary data only).
-- The published `SuperDictate.zip` is Intel-only (x86_64); Apple Silicon builds from source. Decide whether the 0.10.0
+- The published `SuperDictate.zip` is Intel-only (x86_64); Apple Silicon builds from source. Decide whether the 1.0.0
   ZIP should be universal.
 
 ## 5. GitHub: social preview, About, topics

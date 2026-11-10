@@ -14,7 +14,7 @@ post-processing prompts. The code is separate (Python + PySide6 instead of
 Swift + AppKit), but behavior and setting names are shared so that the same
 thing means the same on both platforms.
 
-Since 0.10.0 the app is called Lexomorph in every identifier: data folder
+Since 1.0.0 the app is called Lexomorph in every identifier: data folder
 `%LOCALAPPDATA%\Lexomorph`, `Lexomorph.exe`, helpers `LexomorphOnnxHost.exe`
 and `LexomorphOvHost.exe`, autostart value `Lexomorph`, environment variables
 `LEXOMORPH_*` (the old `SUPERDICTATE_*` are still read as a fallback for one
@@ -40,7 +40,7 @@ chain of authorship: [NOTICE.md](NOTICE.md).
 > **Status.** Ready-made installers are published on the
 > [Releases page](https://github.com/shohart/SuperDictate-Next/releases) under
 > `win-vX.Y.Z` tags (the newest published one is `win-v0.9.7`, still under the
-> old SuperDictate name). `Lexomorph-Setup-0.10.0.exe` has been built and
+> old SuperDictate name). `Lexomorph-Setup-1.0.0.exe` has been built and
 > checked on the build machine but is not published yet. The installer is not
 > Authenticode-signed, so SmartScreen may warn about an unknown publisher.
 > Some macOS features are not ported yet; see
@@ -164,7 +164,7 @@ lost thanks to a short ring buffer. The price: while the stream is open,
 Windows shows the microphone-in-use indicator. Nothing is sent anywhere, only
 the last ~0.4 s is held in memory, and nothing is written to disk.
 
-**Start and stop cues** (0.10.0) are played from preloaded buffers. The stop
+**Start and stop cues** (1.0.0) are played from preloaded buffers. The stop
 cue goes out before the slow stream close and resampling and is not recorded.
 The start cue goes out before the stream opens only when the last real open was
 fast (average under 60 ms) or the stream is already warm (Instant start);
@@ -233,7 +233,7 @@ the minimum is Windows 10 version 1809 (build 17763), 64-bit. The installer is
 in English and Russian (by the system language), and autostart is a checkbox.
 It is not Authenticode-signed.
 
-The 0.10.0 installer installs a new application (a new AppId): it closes and
+The 1.0.0 installer installs a new application (a new AppId): it closes and
 removes an installed SuperDictate (program, shortcuts, autostart entry) and
 leaves its data alone. When uninstalling, Lexomorph asks whether to delete the
 data folder and the old SuperDictate folder (the backup the migration copied
@@ -374,7 +374,7 @@ old order, for comparison), and an optional device name as the second argument.
 
 ## Environment variables
 
-The primary prefix is `LEXOMORPH_`; the pre-0.10 `SUPERDICTATE_` is read as a
+The primary prefix is `LEXOMORPH_`; the pre-1.0 `SUPERDICTATE_` is read as a
 fallback (for one more release) when the new variable is not set.
 
 | Variable | What it does |

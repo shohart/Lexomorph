@@ -1,9 +1,9 @@
-# Lexomorph 0.10: identifier rename and data migration
+# Lexomorph 1.0: identifier rename and data migration
 
 **[Читать по-русски](MIGRATION_NOTES.ru.md)**
 
 Owner decision (it replaces the earlier "do not change identifiers"): the SuperDictate / Parakey names are replaced
-everywhere on macOS, identifiers included, and on Windows. The version is 0.10.0. This document describes what was
+everywhere on macOS, identifiers included, and on Windows. The version is 1.0.0. This document describes what was
 renamed, how data moves over, how to roll back, and what is still open for the release.
 
 ## 1. What was renamed
@@ -128,13 +128,13 @@ macOS, or `%LOCALAPPDATA%\Lexomorph` on Windows. This is an explicit user action
   `Lexomorph.zip` fails that check (the download URL for `SuperDictate.zip` does not exist for the new tag). Users
   move over with `install.sh`.
 - **Windows 0.9.x** only opens the release page and does not install anything itself; it accepts any `.exe`, `.msi` or
-  `.zip` asset of the newest `win-v*` release, so `Lexomorph-Setup-0.10.0.exe` is offered normally and the user runs
+  `.zip` asset of the newest `win-v*` release, so `Lexomorph-Setup-1.0.0.exe` is offered normally and the user runs
   it. The installer removes the old SuperDictate and the first launch copies the data.
 
 ### Transition release (TODO for the owner; not implemented in code yet)
 
 Because 0.9.x macOS clients can never update into Lexomorph, a **transition release under the old names** is needed
-before (or together with) 0.10.0. It must be built and published the old way: bundle `SuperDictate.app`, bundle ID
+before (or together with) 1.0.0. It must be built and published the old way: bundle `SuperDictate.app`, bundle ID
 `com.local.superdictate`, the same signing identity, asset `SuperDictate.zip`, a `mac-v0.9.x` tag, `update.json` on
 `main` with that version, so that the existing in-app updater accepts it. What it has to do:
 
@@ -143,18 +143,18 @@ before (or together with) 0.10.0. It must be built and published the old way: bu
    Monitoring again; settings, vocabulary and models are carried over, and the old data is kept.
 2. Lead the user to the installation of Lexomorph: show the one-line installer command or a link to the Releases page
    and the README (`install.sh`), instead of offering an in-app update to a release the old updater cannot install.
-3. Teach the old update check to recognize a release of the Lexomorph era (for example a tag at or above `mac-v0.10.0`
+3. Teach the old update check to recognize a release of the Lexomorph era (for example a tag at or above `mac-v1.0.0`
    or a release without `SuperDictate.zip`) and show the explanation instead of attempting the update, so that 0.9.x
-   users never see a failed download once 0.10.0 is published.
+   users never see a failed download once 1.0.0 is published.
 4. Optionally the same message on Windows (the 0.9.x Windows update notice is only a link to the release page, so the
-   release notes of `win-v0.10.0` can carry the explanation instead).
+   release notes of `win-v1.0.0` can carry the explanation instead).
 
-The transition release must be out and given time to spread before `mac-v0.10.0` is published as the "latest" macOS
+The transition release must be out and given time to spread before `mac-v1.0.0` is published as the "latest" macOS
 release; clients older than the transition release should be able to update into it with the old updater.
 
 ## 6. Risks and limits
 
-- `install.sh` and `update.json` hold **placeholders** (SHA-256 of all zeros, source commit of all zeros, version 0.10.0)
+- `install.sh` and `update.json` hold **placeholders** (SHA-256 of all zeros, source commit of all zeros, version 1.0.0)
   until the release procedure in `docs/RELEASING.md` fills them in; until then the installer fails on the checksum.
   Do not merge the rename into `main` before the release is published: the one-line installer in the README reads
   `install.sh` from `main`, and `update.json` on `main` is what the in-app updaters compare against.
@@ -162,4 +162,4 @@ release; clients older than the transition release should be able to update into
   did not go through the scripts). The scripts unload the old agent beforehand.
 - A Keychain dialog may appear when the old token is read (the ACL is bound to the old package's signature).
 - The published `SuperDictate.zip` is Intel-only (x86_64); the installer rejects other architectures, so Apple
-  Silicon users build from source. Decide whether the 0.10.0 ZIP should be universal.
+  Silicon users build from source. Decide whether the 1.0.0 ZIP should be universal.

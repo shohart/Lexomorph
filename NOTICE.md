@@ -5,7 +5,7 @@ SuperDictate) is derived from
 [Parakey](https://github.com/rcourtman/parakey), originally created by
 Richard Courtman and distributed under the MIT License. The intermediate fork,
 [SuperDictate](https://github.com/shlgd/SuperDictate), is by shlgd. The product
-was renamed to Lexomorph in 0.10.0; the credits do not change with the name.
+was renamed to Lexomorph in 1.0.0; the credits do not change with the name.
 
 The original copyright notice and license are preserved in `LICENSE`.
 Lexomorph includes substantial product, interface, service-management,

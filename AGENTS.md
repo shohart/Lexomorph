@@ -14,7 +14,7 @@
   code-signing certificate). It must NOT change between installations without
   the owner's decision: a different signer changes the designated requirement
   and macOS resets every granted permission. The one switch from
-  "PolterType Dev" was made once, at the move to Lexomorph 0.10.0. Do not
+  "PolterType Dev" was made once, at the move to Lexomorph 1.0.0. Do not
   create new certificates; the scripts pick the identity by its hash.
 - Never call `tccutil reset` automatically. Permission removal is an explicit
   user action.
@@ -25,7 +25,7 @@
 Run `scripts/install-local.sh`. It builds into a temporary directory, signs
 with the stable local identity when available, replaces the single installed
 bundle, and restarts the background agent without opening another app window.
-When a pre-0.10 `/Applications/SuperDictate.app` is found, it is retired only
+When a pre-1.0 `/Applications/SuperDictate.app` is found, it is retired only
 after the new bundle is installed (see below).
 
 ## Self-tests
@@ -56,9 +56,9 @@ after the new bundle is installed (see below).
 - The interface language defaults to the system language (Russian system ->
   `ru`, otherwise `en`); a language saved by the user always wins.
 
-## Historical: pre-0.10 identifiers
+## Historical: pre-1.0 identifiers
 
-Before 0.10.0 the app was SuperDictate (Next). These identifiers exist only
+Before 1.0.0 the app was SuperDictate (Next). These identifiers exist only
 for migration (`swift/Sources/Lexomorph/Migration.swift`, `LegacyIdentifiers`)
 and for retiring the old installation in the install/uninstall scripts:
 

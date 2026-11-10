@@ -7,7 +7,7 @@ holds settings, history and the ONNX model cache. Keeping the model inside
 the same tree means an uninstall that spares user data also spares the
 ~600 MB download, matching the macOS uninstall.sh behaviour.
 
-The app was called SuperDictate until 0.10.0 (and Dictation and D1CT before
+The app was called SuperDictate until 1.0.0 (and Dictation and D1CT before
 that). The first launch under the new name *copies* the old tree here and
 leaves the original alone: it is the way back if the new build has to be
 rolled back. See :func:`migrate_legacy_directory`.
@@ -38,7 +38,7 @@ LEGACY_ENV_PREFIX = "SUPERDICTATE_"
 
 
 def env(name: str) -> Optional[str]:
-    """``LEXOMORPH_<name>``, else the pre-0.10 ``SUPERDICTATE_<name>``."""
+    """``LEXOMORPH_<name>``, else the pre-1.0 ``SUPERDICTATE_<name>``."""
     return os.environ.get(ENV_PREFIX + name) or os.environ.get(LEGACY_ENV_PREFIX + name)
 
 

@@ -6,14 +6,14 @@ chronological order. This file covers the release history published on
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased (0.10.0)
+## Unreleased (1.0.0)
 
-Not released yet; the publication date is set when the release is published. macOS ships as `mac-v0.10.0` and Windows as `win-v0.10.0`. `install.sh` and `update.json` hold placeholder pins (all-zero SHA-256 and source commit) until the release procedure in `docs/RELEASING.md` fills them in, and the rename must not be merged into `main` before then. Copies of 0.9.x cannot update into Lexomorph from inside the app (they check for `SuperDictate.app` and `SuperDictate.zip`); a transition release under the old names is planned and is not implemented yet, see `docs/branding/MIGRATION_NOTES.md`.
+Not released yet; the publication date is set when the release is published. macOS ships as `mac-v1.0.0` and Windows as `win-v1.0.0`. `install.sh` and `update.json` hold placeholder pins (all-zero SHA-256 and source commit) until the release procedure in `docs/RELEASING.md` fills them in, and the rename must not be merged into `main` before then. Copies of 0.9.x cannot update into Lexomorph from inside the app (they check for `SuperDictate.app` and `SuperDictate.zip`); a transition release under the old names is planned and is not implemented yet, see `docs/branding/MIGRATION_NOTES.md`.
 
 ### Changed
 - **Rename: Lexomorph is the new name of SuperDictate Next, in every identifier, on both platforms.** Tagline: "Speak freely. Write precisely."
   - macOS: `/Applications/Lexomorph.app` (bundle ID `com.local.lexomorph`, LaunchAgent `com.local.lexomorph.agent`, data in `~/Library/Application Support/Lexomorph`, logs `~/Library/Logs/Lexomorph-*`, Keychain service `com.local.lexomorph.vocab-sync`, release asset `Lexomorph.zip`, helpers `LexomorphLLMHost` and `LexomorphOnnxHost`, `LEXOMORPH_*` environment variables). macOS treats the renamed app as a new one, so grant Microphone, Accessibility and Input Monitoring again.
-  - Windows: data in `%LOCALAPPDATA%\Lexomorph`, `Lexomorph.exe`, `LexomorphOnnxHost.exe`, `LexomorphOvHost.exe`, `lexomorph-llm-host.exe`, autostart value `Lexomorph`, installer `Lexomorph-Setup-0.10.0.exe` (new AppId), `LEXOMORPH_*` environment variables (`SUPERDICTATE_*` are still read for one release).
+  - Windows: data in `%LOCALAPPDATA%\Lexomorph`, `Lexomorph.exe`, `LexomorphOnnxHost.exe`, `LexomorphOvHost.exe`, `lexomorph-llm-host.exe`, autostart value `Lexomorph`, installer `Lexomorph-Setup-1.0.0.exe` (new AppId), `LEXOMORPH_*` environment variables (`SUPERDICTATE_*` are still read for one release).
   - Not renamed on purpose: the repository `shohart/SuperDictate-Next`, the sync server address, the Python package `superdictate` and the C++ file and CMake target names. The credits to Parakey and SuperDictate stay.
   - README, README.ru, PRIVACY, SECURITY, the issue and pull-request templates and CONTRIBUTING use the new name, a new header image and a "formerly SuperDictate Next" note. English is now the base language of the documentation; the Russian files are adapted translations.
 - **Migration of existing data** (idempotent; the old SuperDictate data is never modified or deleted and stays as the rollback).
@@ -34,7 +34,7 @@ Not released yet; the publication date is set when the release is published. mac
 - **Windows installer:** the uninstall question about the data folder pointed at `Dictation` instead of the real folder, and the autostart value was written and then deleted by an entry of the same name, which could remove the autostart entry right after it was created. Both are fixed; the installer also reads its Russian messages correctly now (UTF-8 BOM).
 
 ### Checked
-- Windows, on the Windows build PC: 93 self-tests pass, `build.ps1` builds `Lexomorph.exe` (file version 0.10.0), and Inno Setup compiles `Lexomorph-Setup-0.10.0.exe`. The installer was not run.
+- Windows, on the Windows build PC: 93 self-tests pass, `build.ps1` builds `Lexomorph.exe` (file version 1.0.0), and Inno Setup compiles `Lexomorph-Setup-1.0.0.exe`. The installer was not run.
 
 ## 0.9.7 — 2026-11-06
 

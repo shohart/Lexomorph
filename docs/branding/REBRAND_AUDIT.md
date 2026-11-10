@@ -1,7 +1,7 @@
 # REBRAND_AUDIT — SuperDictate Next -> Lexomorph (Фаза 0, только аудит)
 
 > **Historical document, in Russian.** Written before the rename: the identifiers shown here (`SuperDictate.app`,
-> `com.local.superdictate`, `Parakey`, `SuperDictate.zip`, and so on) are the pre-0.10 ones. They have since been
+> `com.local.superdictate`, `Parakey`, `SuperDictate.zip`, and so on) are the pre-1.0 ones. They have since been
 > renamed to Lexomorph; see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the current state. The file is kept as it was.
 >
 > *Исторический документ: написан до переименования, показанные идентификаторы относятся к версиям до 0.10.*
@@ -254,7 +254,7 @@ installed.», `:1077` «Parakey could not save that hotkey…», `:716` имя �
 9. **Самотесты** закрепляют бренд-строки (§2.8). Разрыв между строкой в коде и ожиданием в тесте даст красный CI.
 10. **Новый релиз.** Любое изменение `Info.plist` меняет содержимое zip -> новый номер версии, новая SHA-256 в `install.sh` и
     `update.json`, обязательный `scripts/verify-release.sh` (`docs/RELEASING.md`). Номер версии — решение владельца
-    (0.9.8 или 0.10.0); в ребрендинг-ветке версия не повышается.
+    (0.9.8 или 1.0.0); в ребрендинг-ветке версия не повышается.
 11. **Бренд-активы и честность.** Карточки и hero содержат утверждения, которых нет в продукте (§7); публикация без правки —
     нарушение собственного «no fabricated claims».
 12. **Имя `Lexomorph` не проверено на занятость** (домены, товарные знаки, GitHub, brew, App Store, PyPI) — архив это явно не

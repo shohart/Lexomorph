@@ -696,10 +696,10 @@ func selfTest() -> Int32 {
     T.check(chooseLanguage(preferred: ["en-US", "ru"]) == .en, "en first -> en")
     T.check(chooseLanguage(preferred: ["de"]) == .en, "other -> en")
     T.check(chooseLanguage(preferred: []) == .en, "empty -> en")
-    let tx = dialogTexts(lang: .ru, alreadyInstalled: false, version: "0.10.0")
+    let tx = dialogTexts(lang: .ru, alreadyInstalled: false, version: "1.0.0")
     T.check(tx.install == "Установить Lexomorph" && tx.notNow == "Не сейчас", "ru buttons")
-    let te = dialogTexts(lang: .en, alreadyInstalled: false, version: "0.10.0")
-    T.check(te.install == "Install Lexomorph" && te.notNow == "Not now" && te.body.contains("0.10.0"), "en buttons")
+    let te = dialogTexts(lang: .en, alreadyInstalled: false, version: "1.0.0")
+    T.check(te.install == "Install Lexomorph" && te.notNow == "Not now" && te.body.contains("1.0.0"), "en buttons")
 
     print("agent plist")
     let xml = agentPlistXML(label: newAgentLabel, executable: "/Applications/Lexomorph.app/Contents/MacOS/Lexomorph",
@@ -728,7 +728,7 @@ func selfTest() -> Int32 {
         }
         return realRun(path, args)
     }
-    func mkCfg(_ name: String, zipBundleID: String = newBundleID, zipVersion: String = "0.10.0", dry: Bool = true) -> (BridgeConfig, String) {
+    func mkCfg(_ name: String, zipBundleID: String = newBundleID, zipVersion: String = "1.0.0", dry: Bool = true) -> (BridgeConfig, String) {
         let root = base + "/" + name
         try! fm.createDirectory(atPath: root + "/apps", withIntermediateDirectories: true)
         try! fm.createDirectory(atPath: root + "/agents", withIntermediateDirectories: true)
@@ -736,7 +736,7 @@ func selfTest() -> Int32 {
         try! makeFakeApp(at: src, bundleID: zipBundleID, version: zipVersion, marker: "new")
         zipApp(src, to: root + "/Lexomorph.zip")
         let cfg = BridgeConfig(dryRun: dry, appsDir: root + "/apps", launchAgentsDir: root + "/agents", logsDir: nil,
-                               uid: 501, home: root + "/home", bridgeVersion: "0.10.0", zipPath: root + "/Lexomorph.zip",
+                               uid: 501, home: root + "/home", bridgeVersion: "1.0.0", zipPath: root + "/Lexomorph.zip",
                                ownAppPath: root + "/own.app", language: .en)
         return (cfg, root)
     }
@@ -854,8 +854,8 @@ func selfTest() -> Int32 {
         let apps = root + "/apps", agents = root + "/agents", work = apps + "/.Lexomorph.finish.t"
         try! fm.createDirectory(atPath: work, withIntermediateDirectories: true)
         try! fm.createDirectory(atPath: agents, withIntermediateDirectories: true)
-        try! makeFakeApp(at: apps + "/Lexomorph.app", bundleID: newBundleID, version: "0.10.0", marker: "new")
-        try! makeFakeApp(at: apps + "/SuperDictate.app", bundleID: oldBundleID, version: "0.10.0")
+        try! makeFakeApp(at: apps + "/Lexomorph.app", bundleID: newBundleID, version: "1.0.0", marker: "new")
+        try! makeFakeApp(at: apps + "/SuperDictate.app", bundleID: oldBundleID, version: "1.0.0")
         var backup: String? = nil
         if hadPrevious {
             backup = apps + "/.Lexomorph.previous.t"

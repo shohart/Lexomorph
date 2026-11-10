@@ -3,11 +3,11 @@
 set -euo pipefail
 
 REPOSITORY="${LEXOMORPH_REPOSITORY:-shohart/SuperDictate-Next}"
-RELEASE_VERSION="0.10.0"
+RELEASE_VERSION="1.0.0"
 # macOS releases are tagged mac-vX.Y.Z (Windows ones win-vX.Y.Z, same repo);
 # 0.7.0 and earlier carry the legacy vX.Y.Z tag.
-RELEASE_TAG="mac-v0.10.0"
-# PLACEHOLDERS until mac-v0.10.0 is published: scripts/verify-release.sh and
+RELEASE_TAG="mac-v1.0.0"
+# PLACEHOLDERS until mac-v1.0.0 is published: scripts/verify-release.sh and
 # docs/RELEASING.md set the real SHA-256 and source commit. Until then the
 # installer fails closed on the checksum.
 RELEASE_SHA256="0000000000000000000000000000000000000000000000000000000000000000"

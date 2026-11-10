@@ -404,7 +404,7 @@ class Sounds:
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _RUN_VALUE = "Lexomorph"
-# The app was called D1CT, then Dictation, then SuperDictate (until 0.10.0).
+# The app was called D1CT, then Dictation, then SuperDictate (until 1.0.0).
 # Its autostart entry names an executable that is no longer installed, so
 # it is cleared whenever this one is written or removed; left alone it
 # would fail silently at every login.

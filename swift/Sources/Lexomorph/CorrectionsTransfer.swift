@@ -68,7 +68,7 @@ enum TranscriptCorrectionsTransfer {
     }
 
     /// Open panels also accept corrections files exported by SuperDictate
-    /// before 0.10 (extension `.superdictate-corrections`); same JSON.
+    /// before 1.0 (extension `.superdictate-corrections`); same JSON.
     static var importContentTypes: [UTType] {
         var types = [contentType]
         if let legacy = UTType(filenameExtension: LEGACY_CORRECTIONS_FILE_EXTENSION) { types.append(legacy) }

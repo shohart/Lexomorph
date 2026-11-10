@@ -70,7 +70,7 @@ On the Windows build machine, from `windows\`:
    (add `--prerelease` for a test build). Never mark a Windows release
    latest: macOS 0.7.0 and earlier would read it as theirs.
 
-**0.10.0 (Lexomorph rename).** The macOS asset is now `Lexomorph.zip` holding
+**1.0.0 (Lexomorph rename).** The macOS asset is now `Lexomorph.zip` holding
 `Lexomorph.app` (bundle id `com.local.lexomorph`). Clients up to 0.9.x validate
 the old names and cannot self-update into it: they move over with `install.sh`.
 `install.sh` and `update.json` carry placeholder pins (all-zero SHA-256 and

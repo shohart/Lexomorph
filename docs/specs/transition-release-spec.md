@@ -1,4 +1,4 @@
-# Transition release: SuperDictate Next 0.9.x -> Lexomorph 0.10.0
+# Transition release: SuperDictate Next 0.9.x -> Lexomorph 1.0.0
 
 **Status:** design, 2026-11-10. Implemented by the "bridge" tasks below.
 
@@ -14,11 +14,11 @@
 5. a helper script boots out `com.local.superdictate.agent`, swaps `/Applications/SuperDictate.app`,
    verifies, and `open`s it.
 
-So a single release `mac-v0.10.0` must contain **`SuperDictate.zip`** (the *bridge*) and `Lexomorph.zip`
+So a single release `mac-v1.0.0` must contain **`SuperDictate.zip`** (the *bridge*) and `Lexomorph.zip`
 (the real app), and `update.json` must stay valid for the old client (`version`, `sha256` of the bridge zip).
 
 **Windows (`updater.py`)** never downloads or runs anything: it opens the release page for a newer
-`win-vX.Y.Z` that has a `.exe`/`.msi`/`.zip` asset. `Lexomorph-Setup-0.10.0.exe` already satisfies it, and the
+`win-vX.Y.Z` that has a `.exe`/`.msi`/`.zip` asset. `Lexomorph-Setup-1.0.0.exe` already satisfies it, and the
 new installer removes the old SuperDictate install and keeps its data. Windows needs release notes only.
 
 ## 2. macOS bridge app (`SuperDictate.app`, version = release version)
@@ -52,7 +52,7 @@ new installer removes the old SuperDictate install and keeps its data. Windows n
   back to `sha256`.
 - Each macOS release that old clients may still see must also publish a `SuperDictate.zip` bridge whose version
   equals the release version, until the owner decides old clients are gone. `docs/RELEASING.md` documents it.
-- Release notes (EN/RU) for `mac-v0.10.0` and `win-v0.10.0` explain the rename, the changed package and
+- Release notes (EN/RU) for `mac-v1.0.0` and `win-v1.0.0` explain the rename, the changed package and
   signature, the permissions re-grant, data migration and the rollback path.
 
 ## 4. Non-goals / not done here

@@ -24,7 +24,7 @@ say() { printf 'build-bridge: %s\n' "$*"; }
 
 [[ -n "$LEXOMORPH_ZIP" && -n "$VERSION" ]] || fail "usage: build-bridge.sh <Lexomorph.zip> <version> [output-dir]"
 [[ -f "$LEXOMORPH_ZIP" ]] || fail "no such file: $LEXOMORPH_ZIP"
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must look like 0.10.0"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must look like 1.0.0"
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || fail "macOS is required."
 command -v swiftc >/dev/null || fail "swiftc is missing (xcode-select --install)"
 

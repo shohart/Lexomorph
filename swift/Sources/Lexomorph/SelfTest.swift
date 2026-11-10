@@ -10530,7 +10530,7 @@ enum LexomorphSelfTest {
                 legacySupportDir: base.appendingPathComponent("SuperDictate", isDirectory: true),
                 newSupportDir: base.appendingPathComponent("Lexomorph", isDirectory: true),
                 lockFileURL: base.appendingPathComponent(".lexomorph-migration.lock"),
-                appVersion: "0.10.0-test"
+                appVersion: "1.0.0-test"
             )
             config.readLegacyDefaults = { _ in legacyDefaults }
             config.lockTimeoutSeconds = 2
@@ -10580,7 +10580,7 @@ enum LexomorphSelfTest {
         try expect(read(full.legacySupportDir.appendingPathComponent("corrections.sqlite")), equals: "db", "original database is untouched")
         try expect(fm.fileExists(atPath: full.legacySupportDir.appendingPathComponent("AgentStatus.json").path), equals: true, "original is never deleted")
         guard let marker = LegacyMigration.readMarker(full) else { throw SelfTestFailure.failed("migration marker is written") }
-        try expect(marker.appVersion, equals: "0.10.0-test", "marker records the version")
+        try expect(marker.appVersion, equals: "1.0.0-test", "marker records the version")
         try expect(marker.migratedAt.isEmpty, equals: false, "marker records the date")
         try expect(marker.keychain, equals: "pending", "keychain step waits for the agent")
 

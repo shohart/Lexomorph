@@ -22,7 +22,7 @@ Language of the product and its marketing: English. English is also the base lan
 Russian files (`*.ru.md`) are adapted translations with the same facts. This does not limit recognition or interface
 languages (the app has RU and EN; the interface follows the system language by default).
 
-Since 0.10.0 the product name is in the identifiers too (bundle, data paths, release assets). What is still named
+Since 1.0.0 the product name is in the identifiers too (bundle, data paths, release assets). What is still named
 SuperDictate (the repository, the sync server domain, the Python package, C++ names) and why is described in
 `MIGRATION_NOTES.md`.
 

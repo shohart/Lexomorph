@@ -126,7 +126,7 @@ class DpapiTokenStore:
         return bytes(data)
 
     def migrate_legacy(self) -> bool:
-        """Re-save a token protected the pre-0.10 way under the new entropy."""
+        """Re-save a token protected the pre-1.0 way under the new entropy."""
         if sys.platform != "win32" or not self._path.exists():
             return False
         import win32crypt

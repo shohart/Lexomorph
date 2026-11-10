@@ -27,10 +27,10 @@
    Lexomorph, потому что клиенты 0.9.x не могут обновиться до Lexomorph изнутри приложения. **В коде это пока не
    реализовано; собрать и опубликовать нужно вам.** Требования — в `MIGRATION_NOTES.ru.md`, раздел 5.
 2. Дать переходному релизу распространиться.
-3. Выпустить 0.10.0 по `docs/RELEASING.md`: macOS `mac-v0.10.0` с `Lexomorph.zip`, Windows `win-v0.10.0` с
-   `Lexomorph-Setup-0.10.0.exe` (никогда не «latest»). Самотесты и обязательный `scripts/verify-release.sh`.
+3. Выпустить 1.0.0 по `docs/RELEASING.md`: macOS `mac-v1.0.0` с `Lexomorph.zip`, Windows `win-v1.0.0` с
+   `Lexomorph-Setup-1.0.0.exe` (никогда не «latest»). Самотесты и обязательный `scripts/verify-release.sh`.
 4. Подставить пины: в `install.sh` (`RELEASE_SHA256`, `SOURCE_COMMIT`) и `update.json` сейчас заглушки (нули).
-   **Не вливайте `release/0.10.0` в `main` до публикации релиза.** `scripts/check.sh` проверяет, что версия и SHA
+   **Не вливайте `release/1.0.0` в `main` до публикации релиза.** `scripts/check.sh` проверяет, что версия и SHA
    совпадают с `Info.plist`.
 5. Запустить `gh workflow run "release smoke"` и дождаться зелёного результата.
 6. Описание релиза: «Lexomorph (formerly SuperDictate Next)»; на macOS разрешения нужно выдать заново; настройки и
@@ -70,14 +70,14 @@
   не должно). Релизы не нотаризованы.
 - Любое изменение `Info.plist` меняет ZIP: новая сумма в `install.sh` и `update.json` и обязательный
   `scripts/verify-release.sh`.
-- Запустить `Lexomorph-Setup-0.10.0.exe` на чистой машине Windows и на машине с установленным SuperDictate (удаление
+- Запустить `Lexomorph-Setup-1.0.0.exe` на чистой машине Windows и на машине с установленным SuperDictate (удаление
   старого приложения, автозапуск, копирование данных, вопросы при удалении). Пока он только собран и скомпилирован.
   CI для Windows нет.
 - Установщик Windows не подписан Authenticode (SmartScreen предупреждает). Решить, покупать ли сертификат.
 - Прогнать миграцию macOS на машине с настоящими данными SuperDictate (группы самотестов `legacy-migration` и
   `interface-language-default` работают только на временных данных).
 - Опубликованный `SuperDictate.zip` собран только под Intel (x86_64); на Apple Silicon собирают из исходников. Решить,
-  делать ли ZIP для 0.10.0 универсальным.
+  делать ли ZIP для 1.0.0 универсальным.
 
 ## 5. GitHub: social preview, About, topics
 

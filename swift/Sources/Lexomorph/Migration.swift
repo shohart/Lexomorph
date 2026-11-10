@@ -1,4 +1,4 @@
-// Lexomorph 0.10 migration from the pre-0.10 "SuperDictate" identifiers.
+// Lexomorph 1.0 migration from the pre-1.0 "SuperDictate" identifiers.
 //
 // Owner decision: the product, bundle (/Applications/Lexomorph.app), bundle
 // id (com.local.lexomorph), LaunchAgent label, defaults domain, Application

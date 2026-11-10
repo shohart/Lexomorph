@@ -43,12 +43,12 @@ Keychain and `tccutil` are never touched. Failures always exit 0 so launchd does
 ## Release process (per macOS release that old clients may still see)
 
 1. Build and sign `Lexomorph.zip` as usual (see `docs/RELEASING.md`). The bridge must be signed by the SAME identity.
-2. `SIGN_IDENTITY="Aleksei Bykov" scripts/build-bridge.sh /path/Lexomorph.zip 0.10.0 out/`
+2. `SIGN_IDENTITY="Aleksei Bykov" scripts/build-bridge.sh /path/Lexomorph.zip 1.0.0 out/`
    (over bare SSH: `SIGN_VIA_ASUSER=1 SUDO_PASSWORD=...`). Produces `out/SuperDictate.zip` + `.sha256`, runs the
    self-test.
-3. `scripts/check-bridge.sh out/SuperDictate.zip 0.10.0 <sha256 of SuperDictate.zip> /path/Lexomorph.zip`
+3. `scripts/check-bridge.sh out/SuperDictate.zip 1.0.0 <sha256 of SuperDictate.zip> /path/Lexomorph.zip`
    repeats the 0.9.7 client checks and the bridge dry-run.
-4. Publish `SuperDictate.zip` and `Lexomorph.zip` as assets of `mac-v0.10.0`. `update.json` on `main`:
-   `{"version":"0.10.0","sha256":"<SuperDictate.zip>","lexomorph_sha256":"<Lexomorph.zip>"}`. Old clients read
+4. Publish `SuperDictate.zip` and `Lexomorph.zip` as assets of `mac-v1.0.0`. `update.json` on `main`:
+   `{"version":"1.0.0","sha256":"<SuperDictate.zip>","lexomorph_sha256":"<Lexomorph.zip>"}`. Old clients read
    `sha256` (bridge), new clients read `lexomorph_sha256` first.
 5. Keep publishing a bridge with every release until the owner decides old clients are gone.
