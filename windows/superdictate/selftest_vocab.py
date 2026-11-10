@@ -936,6 +936,8 @@ def _FakeController(settings, saved: list):
             super().__init__()
             self.styles = StyleStore(settings)
             self.styles.add_listener(self.custom_styles_changed.emit)
+            from .prompt_overrides import PromptOverrides
+            self.prompts = PromptOverrides(settings)
             self.listener = Listener()
 
         def apply_settings(self) -> None:
@@ -1450,9 +1452,12 @@ class _FakeVocabServer:
         import threading
 
         self.modern = modern
+        #: a server that has styles/usage but predates ``prompts``
+        self.with_prompts = True
         self.revision = 0
         self.styles: dict = {}
         self.usage: dict = {}
+        self.prompts: dict = {}
         self.requests: list[dict] = []
         outer = self
 
@@ -1470,6 +1475,12 @@ class _FakeVocabServer:
                         if known is None or row["updated_at"] > known[0]["updated_at"]:
                             outer.revision += 1
                             outer.styles[row["id"]] = (dict(row), outer.revision)
+                    for row in body.get("prompts") or []:
+                        known = outer.prompts.get(row["style"])
+                        if known is None or row["updated_at"] > known[0]["updated_at"]:
+                            outer.revision += 1
+                            outer.prompts[row["style"]] = (dict(row, revision=outer.revision),
+                                                           outer.revision)
                     for row in body.get("usage") or []:
                         key = (row["day"], row["device"])
                         known = outer.usage.get(key)
@@ -1480,6 +1491,8 @@ class _FakeVocabServer:
                 if outer.modern:
                     answer["styles"] = [r for r, rev in outer.styles.values() if rev > since]
                     answer["usage"] = [r for r, rev in outer.usage.values() if rev > since]
+                    if outer.with_prompts:
+                        answer["prompts"] = [r for r, rev in outer.prompts.values() if rev > since]
                 data = json.dumps(answer).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -1702,6 +1715,229 @@ def test_rewrite_style_activation() -> None:
 
 
 
+def test_prompt_overrides_sync() -> None:
+    """Built-in style prompts: stamps, tombstones, merge, wire, old server."""
+    from . import paths
+    from . import vocabulary_sync as vs
+    from .prompt_overrides import MAX_PROMPT, PromptOverrides
+    from .vocabulary import VocabularyStore
+
+    work = Path(tempfile.mkdtemp(prefix="sd-prompts-selftest-"))
+    stores: list = []
+    server = _FakeVocabServer(modern=True)
+    try:
+        # -- the store alone ------------------------------------------------------
+        settings = _style_settings(work, "p")
+        prompts = PromptOverrides(settings)
+        events: list = []
+        prompts.add_listener(events.append)
+        _check("prompts: nothing set, nothing to send", prompts.changes_since(""), [])
+        _check("prompts: no-op edit changes nothing", (prompts.set_local("polish", ""), events), (False, []))
+        _check("prompts: set", (prompts.set_local("polish", "  Своя инструкция.  "), prompts.get("polish")),
+               (True, "Своя инструкция."))
+        _check("prompts: a local edit notifies as local", events, ["local"])
+        _check("prompts: the pipeline reads the override unchanged",
+               settings.rewrite_config().system_prompt_overrides["polish"], "Своя инструкция.")
+        first = prompts.stamp("polish")
+        prompts.set_local("polish", "Своя инструкция 2.")
+        _check("prompts: a second edit in the same second still orders later",
+               prompts.stamp("polish") > first, True)
+        rows = prompts.changes_since("")
+        _check("prompts: wire row", [(r["style"], r["prompt"], r["deleted"]) for r in rows],
+               [("polish", "Своя инструкция 2.", False)])
+        prompts.set_local("polish", "")
+        rows = prompts.changes_since("")
+        _check("prompts: reset leaves a tombstone",
+               [(r["style"], r["prompt"], r["deleted"]) for r in rows], [("polish", "", True)])
+        _check("prompts: reset clears the override", settings.rewrite_config()
+               .system_prompt_overrides["polish"], "")
+        _check("prompts: reset of an empty override is not a change",
+               (prompts.set_local("official", ""), prompts.changes_since("9999")), (False, []))
+
+        # An edit from before sync existed (no stamp) is stamped on the first pass.
+        legacy = _style_settings(work, "legacy")
+        legacy.update_runtime({"rewrite_system_prompt_official_v1": "Старая правка"})
+        legacy_prompts = PromptOverrides(legacy)
+        _check("prompts: unstamped edit is stamped and uploaded",
+               [(r["style"], r["deleted"]) for r in legacy_prompts.changes_since("")],
+               [("official", False)])
+        _check("prompts: the stamp is kept", legacy_prompts.stamp("official") != "1970-01-01T00:00:00Z", True)
+
+        # Over-long prompts are not pushed.
+        long_settings = _style_settings(work, "long")
+        long_prompts = PromptOverrides(long_settings)
+        long_prompts.set_local("official", "x" * (MAX_PROMPT + 1))
+        _check("prompts: over 16000 characters is not pushed", long_prompts.changes_since(""), [])
+        long_prompts.set_local("official", "x" * MAX_PROMPT)
+        _check("prompts: exactly 16000 is pushed", len(long_prompts.changes_since("")), 1)
+
+        # -- merge ----------------------------------------------------------------
+        m_settings = _style_settings(work, "m")
+        m = PromptOverrides(m_settings)
+        seen: list = []
+        m.add_listener(seen.append)
+        m.set_local("polish", "Локальная")
+        local_stamp = m.stamp("polish")
+        seen.clear()
+        _check("merge: older remote is ignored",
+               (m.apply_remote([{"style": "polish", "prompt": "Старая", "deleted": False,
+                                 "updated_at": "2000-01-01T00:00:00Z"}]), m.get("polish")), (0, "Локальная"))
+        _check("merge: newer remote wins, silently",
+               (m.apply_remote([{"style": "polish", "prompt": " Удалённая ", "deleted": False,
+                                 "updated_at": "2999-01-01T00:00:00Z", "revision": 5}]),
+                m.get("polish"), m.stamp("polish"), seen), (1, "Удалённая", "2999-01-01T00:00:00Z", ["sync"]))
+        _check("merge: the tie goes to the server",
+               (m.apply_remote([{"style": "polish", "prompt": "Ничья", "deleted": False,
+                                 "updated_at": "2999-01-01T00:00:00Z"}]), m.get("polish")), (1, "Ничья"))
+        seen.clear()
+        _check("merge: the same row again changes nothing",
+               (m.apply_remote([{"style": "polish", "prompt": "Ничья", "deleted": False,
+                                 "updated_at": "2999-01-01T00:00:00Z"}]), seen), (0, []))
+        _check("merge: a remote tombstone clears the override",
+               (m.apply_remote([{"style": "polish", "prompt": "", "deleted": True,
+                                 "updated_at": "2999-06-01T00:00:00Z"}]), m.get("polish")), (1, ""))
+        _check("merge: an older live row does not revive it",
+               (m.apply_remote([{"style": "polish", "prompt": "Зомби", "deleted": False,
+                                 "updated_at": "2999-03-01T00:00:00Z"}]), m.get("polish")), (0, ""))
+        _check("merge: a newer local reset beats an older remote edit",
+               (m.set_local("official", "Раз"), m.set_local("official", ""),
+                m.apply_remote([{"style": "official", "prompt": "Старше", "deleted": False,
+                                 "updated_at": "2000-01-01T00:00:00Z"}]), m.get("official")),
+               (True, True, 0, ""))
+        before = (m.get("polish"), m.get("structured_task"))
+        m.apply_remote([{"style": "nonsense", "prompt": "x", "deleted": False, "updated_at": "2999-01-01T00:00:00Z"},
+                        {"style": "polish", "prompt": "", "deleted": False, "updated_at": "2999-09-01T00:00:00Z"},
+                        {"style": "polish", "prompt": "y" * (MAX_PROMPT + 1), "deleted": False,
+                         "updated_at": "2999-09-01T00:00:00Z"}, "junk", {"style": "polish"}])
+        _check("merge: malformed rows are ignored", (m.get("polish"), m.get("structured_task")), before)
+        # A remote tombstone for a never-set style records its stamp, so an older edit cannot win later.
+        m.apply_remote([{"style": "structured_task", "prompt": "", "deleted": True,
+                         "updated_at": "2999-01-01T00:00:00Z"}])
+        m.apply_remote([{"style": "structured_task", "prompt": "Позже пришло, но старше", "deleted": False,
+                         "updated_at": "2998-01-01T00:00:00Z"}])
+        _check("merge: a recorded tombstone outranks an older row", m.get("structured_task"), "")
+        # The settings file survives a reload.
+        m_settings.save()
+        again = PromptOverrides(_style_settings(work, "m"))
+        _check("merge: persisted", (again.get("polish"), again.stamp("polish")),
+               (m.get("polish"), m.stamp("polish")))
+
+        # A draft apply never touches the prompt keys (no rollback by a stale draft).
+        m.set_local("official", "Новая")
+        m_settings.apply({"rewrite_system_prompt_official_v1": "stale draft",
+                          "rewrite_system_prompt_sync_v1": {}})
+        _check("merge: a stale draft cannot roll a prompt back", m.get("official"), "Новая")
+
+        # -- the wire: two machines, then an old server ----------------------------
+        def machine(name):
+            st = _style_settings(work, name)
+            st.update_runtime({"vocabulary_sync_server_url": server.url,
+                               "vocabulary_sync_enabled": True,
+                               "vocabulary_sync_email": "u@example.com"})
+            tokens = vs.MemoryTokenStore()
+            tokens.save("tok")
+            vocab = VocabularyStore(str(work / f"{name}.sqlite"))
+            stores.append(vocab)
+            po = PromptOverrides(st)
+            return st, po, vs.VocabularySync(vocab, st, tokens=tokens, prompts=po)
+
+        a_settings, a_prompts, a = machine("wa")
+        b_settings, b_prompts, b = machine("wb")
+        a_prompts.set_local("official", "Строго по форме.")
+        server.with_prompts = False
+        a.sync_now()
+        body = server.requests[-1]
+        _check("wire: prompts go out in the push",
+               [(r["style"], r["prompt"], r["deleted"]) for r in body["prompts"]],
+               [("official", "Строго по форме.", False)])
+        _check("wire: an old server's missing field is noticed (cursor kept)",
+               a_settings.vocabulary_sync_last_pushed_local_stamp, "")
+        _check("wire: the override stays local after an old server", a_prompts.get("official"),
+               "Строго по форме.")
+        server.with_prompts = True
+        a.sync_now()
+        _check("wire: after the upgrade the cursor moves",
+               a_settings.vocabulary_sync_last_pushed_local_stamp != "", True)
+        b.sync_now()
+        _check("wire: the prompt reaches the other machine",
+               b_settings.rewrite_config().system_prompt_overrides["official"], "Строго по форме.")
+        b_prompts.set_local("official", "")
+        b.sync_now()
+        a.sync_now()
+        _check("wire: the reset reaches A",
+               (a_prompts.get("official"), a_settings.rewrite_config().system_prompt_overrides["official"]), ("", ""))
+        _check("wire: the server holds a tombstone", server.prompts["official"][0]["deleted"], True)
+        revision = server.revision
+        a.sync_now()
+        a.sync_now()
+        _check("wire: repeated passes do not change the server (idempotent)",
+               server.revision, revision)
+
+        # Applying the server's rows never schedules a pass; a local edit does.
+        due = []
+        b.request_sync = lambda delay=0.0: due.append(delay)
+        b._thread = object()
+        b_prompts.apply_remote([{"style": "polish", "prompt": "r", "deleted": False,
+                                 "updated_at": "2999-01-01T00:00:00Z"}])
+        _check("wire: a remote prompt does not trigger a pass", due, [])
+        b_prompts.set_local("official", "локально")
+        _check("wire: a local prompt edit does", due, [vs.DEBOUNCE_SECONDS])
+        b._thread = None
+    finally:
+        server.close()
+        for store in stores:
+            try:
+                store.close()
+            except Exception:
+                pass
+
+
+def test_prompt_overrides_window() -> None:
+    """The settings window hands PromptOverrides only the prompts the user changed."""
+    from PySide6.QtWidgets import QApplication, QPlainTextEdit
+
+    from .ui.settings_window import SettingsWindow
+    from .vocabulary import VocabularyStore
+
+    QApplication.instance() or QApplication([])
+    work = Path(tempfile.mkdtemp(prefix="sd-prompts-win-selftest-"))
+    store = VocabularyStore(str(work / "v.sqlite"))
+    try:
+        settings = _style_settings(work, "w")
+        saved: list = []
+        controller = _FakeController(settings, saved)
+        controller.prompts.set_local("official", "Исходный")
+        window = SettingsWindow(settings, store, controller)
+        # A sync lands while the window is open: polish changes, official is not edited here.
+        controller.prompts.apply_remote([
+            {"style": "polish", "prompt": "Из синхронизации", "deleted": False,
+             "updated_at": "2999-01-01T00:00:00Z"},
+            {"style": "official", "prompt": "Удалённый", "deleted": False,
+             "updated_at": "2999-01-01T00:00:00Z"}])
+        editors = {e.toPlainText(): e for e in window.findChildren(QPlainTextEdit)}
+        _check("window: the editor shows the stored override", "Исходный" in editors, True)
+        local_stamp_before = controller.prompts.stamp("structured_task")
+        editors["Исходный"].setPlainText("Правка в окне")
+        window._save()
+        _check("window: an unedited prompt is not rolled back by the stale draft",
+               controller.prompts.get("polish"), "Из синхронизации")
+        _check("window: the edited prompt is saved and stamped later than the sync row",
+               (controller.prompts.get("official"), controller.prompts.stamp("official") > "2999-01-01T00:00:00Z"),
+               ("Правка в окне", True))
+        _check("window: an untouched style gets no stamp", controller.prompts.stamp("structured_task"),
+               local_stamp_before)
+        window2 = SettingsWindow(settings, store, controller)
+        editors2 = {e.toPlainText(): e for e in window2.findChildren(QPlainTextEdit)}
+        editors2["Правка в окне"].setPlainText("")
+        window2._save()
+        _check("window: clearing the editor is a reset with a tombstone",
+               (controller.prompts.get("official"),
+                [r["deleted"] for r in controller.prompts.changes_since("") if r["style"] == "official"]),
+               ("", [True]))
+    finally:
+        store.close()
+
+
 TESTS = [
     test_custom_hotwords_store,
     test_custom_hotwords_window,
@@ -1720,6 +1956,8 @@ TESTS = [
     test_custom_styles_sync_merge,
     test_usage_stats_sync,
     test_styles_and_usage_wire_sync,
+    test_prompt_overrides_sync,
+    test_prompt_overrides_window,
     test_style_hotkeys_state_machine,
     test_rewrite_style_activation,
 ]
