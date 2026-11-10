@@ -7,7 +7,12 @@ for the account and sync model.
 - API: `POST /v1/auth` (sign in; the first sign-in with a new e-mail creates
   the account), `DELETE /v1/auth`, `GET /v1/vocabulary?since=N`,
   `POST /v1/vocabulary`, `GET /healthz`.
-- Every accepted change is appended to the `events` table (training data;
+- Besides `changes`/`hotwords`, the same payload carries optional `styles`
+  (custom rewrite modes, tombstones, cap `VOCAB_SYNC_MAX_STYLES`=500) and
+  `usage` (per-device per-day dictation statistics, absolute values, LWW).
+  They share the account revision, are `[]` for old clients, and are never
+  written to `events`.
+- Every accepted correction change is appended to the `events` table (training data;
   the apps tell the user before sign-in).
 - Deployed on octopusreborn at `/home/shohart/services/superdictate-sync`
   (`docker compose up -d --build`), published on `10.77.77.2:8095` only;

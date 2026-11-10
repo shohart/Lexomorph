@@ -19,6 +19,21 @@ push/pull payload: table `hotword_entries`, same key rule, same last-writer-
 wins and tombstones, the same account revision. Old clients that send and
 read only `changes`/`entries` are unaffected.
 
+Two more collections ride in the same payload and share the same revision:
+
+* `styles` — user rewrite modes (table `style_entries`, key `id` = "c-<uuid>"):
+  name, #RRGGBB colour, instruction. Last writer wins on `updated_at` (a tie
+  goes to the server copy), deletions are tombstones, live rows are capped by
+  VOCAB_SYNC_MAX_STYLES. Hotkeys and the active mode are local to a device
+  and never travel.
+* `usage` — dictation statistics (table `usage_days`, key (day, device)).
+  Every device writes only its own rows as absolute per-day values, so a
+  re-push is idempotent and nothing is double counted; LWW on `updated_at`.
+  The server keeps all days; clients sum rows across devices.
+
+Both are optional in the request and default to `[]` in the response, so old
+clients are unaffected. Neither is appended to `events`.
+
 Every accepted correction change is also appended to `events`, an append-only log kept
 to improve the speech model later (the apps say so before the user signs
 in).
@@ -28,6 +43,7 @@ Storage: one SQLite file (WAL). Runs behind Caddy, which terminates TLS.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import hmac
 import os
@@ -42,7 +58,7 @@ from typing import Iterator, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 DB_PATH = os.environ.get("VOCAB_SYNC_DB", "/data/vocab-sync.sqlite")
 MAX_ENTRIES = int(os.environ.get("VOCAB_SYNC_MAX_ENTRIES", "5000"))
@@ -50,7 +66,18 @@ MAX_ENTRIES = int(os.environ.get("VOCAB_SYNC_MAX_ENTRIES", "5000"))
 # ASR exposure cap on the clients: storage never drops user data just because
 # it is not currently sent to ASR.
 MAX_HOTWORD_ENTRIES = int(os.environ.get("VOCAB_SYNC_MAX_HOTWORD_ENTRIES", "5000"))
+# Custom rewrite styles sync cap (live rows).
+MAX_STYLES = int(os.environ.get("VOCAB_SYNC_MAX_STYLES", "500"))
 MAX_CHANGES_PER_PUSH = 1000
+STYLE_ID_RE = re.compile(r"^c-[A-Za-z0-9-]{1,62}$")
+STYLE_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+USAGE_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MAX_STYLE_NAME = 40
+MAX_STYLE_INSTRUCTION = 4000
+# Sanity ceilings for one device-day of usage (reject garbage, not heavy users).
+MAX_USAGE_COUNT = 1_000_000
+MAX_USAGE_CHARACTERS = 100_000_000
+MAX_USAGE_SECONDS = 10_000_000.0
 MAX_FIELD = 200
 MIN_PASSWORD = 8
 # Failed sign-ins tolerated per address and per client IP inside the window.
@@ -114,6 +141,32 @@ CREATE TABLE IF NOT EXISTS hotword_entries (
     PRIMARY KEY (account_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_hotword_entries_revision ON hotword_entries (account_id, revision);
+CREATE TABLE IF NOT EXISTS style_entries (
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    PRIMARY KEY (account_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_style_entries_revision ON style_entries (account_id, revision);
+CREATE TABLE IF NOT EXISTS usage_days (
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    device TEXT NOT NULL,
+    dictations INTEGER NOT NULL DEFAULT 0,
+    characters INTEGER NOT NULL DEFAULT 0,
+    words INTEGER NOT NULL DEFAULT 0,
+    audio_seconds REAL NOT NULL DEFAULT 0,
+    asr_seconds REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    PRIMARY KEY (account_id, day, device)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_days_revision ON usage_days (account_id, revision);
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER NOT NULL,
@@ -249,10 +302,74 @@ class RemoteHotwordEntry(HotwordEntry):
     revision: int
 
 
+def _no_controls(value: str, field: str) -> str:
+    if any(unicodedata.category(c) == "Cc" for c in value):
+        raise ValueError(f"invalid {field}")
+    return value
+
+
+class StyleEntry(BaseModel):
+    id: str = Field(..., max_length=64)
+    name: str = Field("", max_length=MAX_STYLE_NAME)
+    color: str = Field("", max_length=7)
+    instruction: str = Field("", max_length=MAX_STYLE_INSTRUCTION)
+    deleted: bool = False
+    updated_at: str = Field(..., max_length=40)
+
+    @model_validator(mode="after")
+    def _check(self) -> "StyleEntry":
+        if not STYLE_ID_RE.match(self.id):
+            raise ValueError("invalid id")
+        self.name = unicodedata.normalize("NFC", self.name).strip()
+        _no_controls(self.name, "name")
+        if self.deleted:
+            # Tombstones may carry empty payload fields.
+            if self.color and not STYLE_COLOR_RE.match(self.color):
+                raise ValueError("invalid color")
+        else:
+            if not 1 <= len(self.name) <= MAX_STYLE_NAME:
+                raise ValueError("invalid name")
+            if not STYLE_COLOR_RE.match(self.color):
+                raise ValueError("invalid color")
+        return self
+
+
+class RemoteStyleEntry(StyleEntry):
+    revision: int
+
+
+class UsageEntry(BaseModel):
+    day: str = Field(..., max_length=10)
+    device: str = Field(..., min_length=1, max_length=64)
+    dictations: int = Field(0, ge=0, le=MAX_USAGE_COUNT)
+    characters: int = Field(0, ge=0, le=MAX_USAGE_CHARACTERS)
+    words: int = Field(0, ge=0, le=MAX_USAGE_CHARACTERS)
+    audio_seconds: float = Field(0, ge=0, le=MAX_USAGE_SECONDS)
+    asr_seconds: float = Field(0, ge=0, le=MAX_USAGE_SECONDS)
+    updated_at: str = Field(..., max_length=40)
+
+    @model_validator(mode="after")
+    def _check(self) -> "UsageEntry":
+        if not USAGE_DAY_RE.match(self.day):
+            raise ValueError("invalid day")
+        try:
+            datetime.date.fromisoformat(self.day)
+        except ValueError:
+            raise ValueError("invalid day")
+        _no_controls(self.device, "device")
+        return self
+
+
+class RemoteUsageEntry(UsageEntry):
+    revision: int
+
+
 class PushRequest(BaseModel):
     since: int = 0
     changes: List[Entry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
     hotwords: List[HotwordEntry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
+    styles: List[StyleEntry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
+    usage: List[UsageEntry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
     client: ClientInfo = ClientInfo()
 
 
@@ -260,6 +377,8 @@ class SyncResponse(BaseModel):
     revision: int
     entries: List[RemoteEntry]
     hotwords: List[RemoteHotwordEntry] = Field(default_factory=list)
+    styles: List[RemoteStyleEntry] = Field(default_factory=list)
+    usage: List[RemoteUsageEntry] = Field(default_factory=list)
 
 
 # --- auth --------------------------------------------------------------------
@@ -351,7 +470,23 @@ def _changes_since(conn: sqlite3.Connection, account_id: int, since: int) -> Syn
     hotwords = [RemoteHotwordEntry(phrase=r["phrase"], enabled=bool(r["enabled"]), deleted=bool(r["deleted"]),
                                    updated_at=r["updated_at"], revision=r["revision"])
                 for r in hotword_rows]
-    return SyncResponse(revision=revision, entries=entries, hotwords=hotwords)
+    style_rows = conn.execute(
+        "SELECT id, name, color, instruction, deleted, updated_at, revision FROM style_entries"
+        " WHERE account_id = ? AND revision > ? ORDER BY revision", (account_id, since)).fetchall()
+    styles = [RemoteStyleEntry.model_construct(
+                  id=r["id"], name=r["name"], color=r["color"], instruction=r["instruction"],
+                  deleted=bool(r["deleted"]), updated_at=r["updated_at"], revision=r["revision"])
+              for r in style_rows]
+    usage_rows = conn.execute(
+        "SELECT day, device, dictations, characters, words, audio_seconds, asr_seconds, updated_at, revision"
+        " FROM usage_days WHERE account_id = ? AND revision > ? ORDER BY revision",
+        (account_id, since)).fetchall()
+    usage = [RemoteUsageEntry.model_construct(
+                 day=r["day"], device=r["device"], dictations=r["dictations"], characters=r["characters"],
+                 words=r["words"], audio_seconds=r["audio_seconds"], asr_seconds=r["asr_seconds"],
+                 updated_at=r["updated_at"], revision=r["revision"])
+             for r in usage_rows]
+    return SyncResponse(revision=revision, entries=entries, hotwords=hotwords, styles=styles, usage=usage)
 
 
 @app.get("/v1/vocabulary", response_model=SyncResponse)
@@ -423,6 +558,48 @@ def push(body: PushRequest, account_id: int = Depends(current_account)) -> SyncR
                 " enabled = excluded.enabled, deleted = excluded.deleted, updated_at = excluded.updated_at,"
                 " revision = excluded.revision",
                 (account_id, key, phrase, int(change.enabled), int(change.deleted), change.updated_at, revision))
+        # Rewrite styles: same LWW (server wins ties), tombstones, live cap;
+        # not appended to `events`.
+        live_styles = conn.execute("SELECT COUNT(*) FROM style_entries WHERE account_id = ? AND deleted = 0",
+                                   (account_id,)).fetchone()[0]
+        for change in body.styles:
+            existing = conn.execute("SELECT updated_at, deleted FROM style_entries"
+                                    " WHERE account_id = ? AND id = ?", (account_id, change.id)).fetchone()
+            if existing is not None and existing["updated_at"] >= change.updated_at:
+                continue
+            if not change.deleted and (existing is None or existing["deleted"]):
+                if live_styles >= MAX_STYLES:
+                    continue
+                live_styles += 1
+            elif change.deleted and existing is not None and not existing["deleted"]:
+                live_styles -= 1
+            revision += 1
+            conn.execute(
+                "INSERT INTO style_entries (account_id, id, name, color, instruction, deleted, updated_at,"
+                " revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (account_id, id) DO UPDATE SET name = excluded.name, color = excluded.color,"
+                " instruction = excluded.instruction, deleted = excluded.deleted,"
+                " updated_at = excluded.updated_at, revision = excluded.revision",
+                (account_id, change.id, change.name, change.color, change.instruction, int(change.deleted),
+                 change.updated_at, revision))
+        # Usage: one row per (day, device), absolute values, LWW on updated_at;
+        # not appended to `events`.
+        for change in body.usage:
+            existing = conn.execute("SELECT updated_at FROM usage_days"
+                                    " WHERE account_id = ? AND day = ? AND device = ?",
+                                    (account_id, change.day, change.device)).fetchone()
+            if existing is not None and existing["updated_at"] >= change.updated_at:
+                continue
+            revision += 1
+            conn.execute(
+                "INSERT INTO usage_days (account_id, day, device, dictations, characters, words, audio_seconds,"
+                " asr_seconds, updated_at, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (account_id, day, device) DO UPDATE SET dictations = excluded.dictations,"
+                " characters = excluded.characters, words = excluded.words,"
+                " audio_seconds = excluded.audio_seconds, asr_seconds = excluded.asr_seconds,"
+                " updated_at = excluded.updated_at, revision = excluded.revision",
+                (account_id, change.day, change.device, change.dictations, change.characters, change.words,
+                 change.audio_seconds, change.asr_seconds, change.updated_at, revision))
         conn.execute("UPDATE accounts SET revision = ? WHERE id = ?", (revision, account_id))
         return _changes_since(conn, account_id, max(0, body.since))
 
