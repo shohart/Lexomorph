@@ -35,7 +35,7 @@ manifest_sha256="$(plutil -extract sha256 raw -o - update.json)"
 # The legacy SuperDictate/Parakey names live only in the migration code, the
 # install/uninstall scripts, tests and deliberately kept infrastructure.
 legacy_hits="$(grep -rIn -i -E 'superdictate|parakey' swift/Sources/Lexomorph swift/Package.swift \
-    | grep -v -E 'Migration\.swift|SelfTest\.swift|SuperDictate-Next|bykovlegal|shlgd/|superdictate_|based on Parakey|Parakey by|formerly SuperDictate|HOMEBREW_CASK_INSTALLED_TOKEN|superdictate-corrections|CorrectionsTransfer\.swift|main\.swift' || true)"
+    | grep -v -E 'Migration\.swift|SelfTest\.swift|SuperDictate-Next|bykovlegal|shlgd/|superdictate_|based on Parakey|Parakey by|[Ff]ormerly SuperDictate|HOMEBREW_CASK_INSTALLED_TOKEN|superdictate-corrections|CorrectionsTransfer\.swift|main\.swift' || true)"
 [[ -z "$legacy_hits" ]] || {
     printf 'Legacy names outside the migration code:\n%s\n' "$legacy_hits" >&2
     exit 1
