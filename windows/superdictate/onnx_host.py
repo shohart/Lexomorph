@@ -1,4 +1,4 @@
-"""Client for ``SuperDictateOnnxHost``, the native speech-recognition host.
+"""Client for ``LexomorphOnnxHost``, the native speech-recognition host.
 
 Port of ``OnnxAsrEngine.swift``. The app never loads ONNX Runtime itself
 (docs/specs/cross-platform-onnx-asr-spec.md §3): one helper process holds one
@@ -33,6 +33,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
+from . import paths
 from .logging_setup import get as get_logger
 
 log = get_logger("onnx_host")
@@ -162,7 +163,7 @@ def _assign_kill_on_close_job(process: subprocess.Popen) -> object:
 
 
 class OnnxHost:
-    """One running ``SuperDictateOnnxHost`` with one loaded model."""
+    """One running ``LexomorphOnnxHost`` with one loaded model."""
 
     def __init__(self, command: Sequence[str], *, cwd: Optional[Path] = None,
                  stderr_path: Optional[Path] = None) -> None:
@@ -210,7 +211,7 @@ class OnnxHost:
         self.create_with(config, timeout=120.0)
 
     def create_with(self, config: dict, *, timeout: float) -> None:
-        """CREATE with a host-specific config (``SuperDictateOvHost`` takes its own)."""
+        """CREATE with a host-specific config (``LexomorphOvHost`` takes its own)."""
         started = time.monotonic()
         status, _ = self._round_trip(TYPE_CREATE, config, b"", timeout=timeout)
         self.load_seconds = time.monotonic() - started
@@ -223,7 +224,7 @@ class OnnxHost:
             self.window_seconds = 0.0
 
     def refresh_status(self, timeout: float = 5.0) -> None:
-        """Ask the host where it runs now (SuperDictateOvHost moves a model
+        """Ask the host where it runs now (LexomorphOvHost moves a model
         from the CPU to the NPU when its background compile finishes)."""
         status, _ = self._round_trip(TYPE_STATUS, {}, b"", timeout=timeout)
         provider = status.get("provider_actual")
@@ -280,7 +281,7 @@ class OnnxHost:
         text = result.get("text")
         if not isinstance(text, str):
             raise InvalidResponse("missing text")
-        # SuperDictateOvHost reports its device on every response: a model
+        # LexomorphOvHost reports its device on every response: a model
         # that started on the CPU moves to the NPU once its compile is done.
         provider = result.get("provider_actual")
         if isinstance(provider, str) and provider:
@@ -330,7 +331,7 @@ class OnnxHost:
                     timeout: float) -> tuple[dict, bytes]:
         with self._request_lock:
             if not self.is_alive:
-                raise HostExited("SuperDictateOnnxHost is not running")
+                raise HostExited("LexomorphOnnxHost is not running")
             request_id = self._take_id()
             cancel_id = self._take_id()
             body = json.dumps(options).encode("utf-8")
@@ -338,7 +339,7 @@ class OnnxHost:
                 self._write(_request_frame(kind, request_id, body, pcm))
             except OSError as exc:
                 self.is_alive = False
-                raise HostExited(f"SuperDictateOnnxHost exited ({self._process.poll()})") from exc
+                raise HostExited(f"LexomorphOnnxHost exited ({self._process.poll()})") from exc
 
             timed_out = threading.Event()
             finished = threading.Event()
@@ -411,7 +412,7 @@ class OnnxHost:
         while remaining:
             chunk = stdout.read(remaining)
             if not chunk:
-                raise HostExited(f"SuperDictateOnnxHost exited ({self._process.poll()})")
+                raise HostExited(f"LexomorphOnnxHost exited ({self._process.poll()})")
             chunks.append(chunk)
             remaining -= len(chunk)
         return b"".join(chunks)
@@ -452,12 +453,12 @@ def resolved_thread_count(physical_cores: Optional[int] = None,
 
     The encoder is matmul-bound, so hyper-threads do not help; nothing else
     needs the CPU while a dictation is transcribed, because the LLM runs on
-    the GPU. ``SUPERDICTATE_ASR_THREADS`` (1..32) overrides it for
+    the GPU. ``LEXOMORPH_ASR_THREADS`` (1..32) overrides it for
     diagnostics; anything else in it is ignored.
     """
     cores = physical_core_count() if physical_cores is None else physical_cores
     default = max(2, min(16, cores - 2))
-    raw = os.environ.get("SUPERDICTATE_ASR_THREADS") if override is None else override
+    raw = paths.env("ASR_THREADS") if override is None else override
     try:
         parsed = int(raw) if raw is not None else None
     except ValueError:

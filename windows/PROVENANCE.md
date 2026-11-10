@@ -60,7 +60,7 @@ Earlier revisions of the port ran Parakeet TDT v3 through the Python
 `onnx-asr` package, or through whisper.cpp's in-tree Parakeet with a
 different GGUF container than the macOS build. Both are gone. Since the
 macOS 0.7.0 switch to ONNX, both platforms run the same native host,
-`SuperDictateOnnxHost` (`native/asr-runtime`, C++ over ONNX Runtime
+`LexomorphOnnxHost` (`native/asr-runtime`, C++ over ONNX Runtime
 1.23.2), with the same models from the same pinned catalog
 (`native/asr-runtime/catalog/onnx-models.json`) and the same CPU-only
 policy. The Python side only speaks the host's framed IPC

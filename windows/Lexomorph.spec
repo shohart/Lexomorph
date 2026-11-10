@@ -6,7 +6,7 @@ are large native DLLs, and a one-file build would unpack them to a
 temporary directory on every launch, adding seconds to a hotkey-driven app that is meant to sit in the
 tray from login.
 
-Speech recognition runs in SuperDictateOnnxHost.exe, the native host
+Speech recognition runs in LexomorphOnnxHost.exe, the native host
 shared with the macOS build. tools\build-onnx-host.ps1 stages it with
 onnxruntime.dll, the pinned model catalog and the bundled feature graphs
 into onnx-asr\, which travels into the build as is. The app itself never
@@ -17,7 +17,7 @@ separately, and the app already downloads it on first run with a progress
 bar into %LOCALAPPDATA%\\SuperDictate\\Models\\onnx.
 
 Recognition on the Intel NPU runs in a second executable,
-SuperDictateOvHost.exe (ov_host_main.py): OpenVINO and the NPU builds of
+LexomorphOvHost.exe (ov_host_main.py): OpenVINO and the NPU builds of
 the models (assets/openvino-models.json, downloaded into Models\\openvino).
 It is a console program because it speaks binary frames on stdin/stdout;
 the app starts it with CREATE_NO_WINDOW. Both executables share one folder.
@@ -28,11 +28,11 @@ import os
 from PyInstaller.utils.hooks import (collect_data_files, collect_dynamic_libs,  # noqa: F401
                                      copy_metadata)
 
-if not os.path.isfile(os.path.join("onnx-asr", "SuperDictateOnnxHost.exe")):
+if not os.path.isfile(os.path.join("onnx-asr", "LexomorphOnnxHost.exe")):
     raise SystemExit("onnx-asr\\ is not staged: run tools\\build-onnx-host.ps1 first")
 
 # Version resource of the executables (Explorer "Details" tab). Product name
-# is Lexomorph; the file names themselves stay SuperDictate*.exe.
+# is Lexomorph; the executables are Lexomorph.exe, LexomorphOvHost.exe.
 import re as _re
 _version = _re.search(r'VERSION = "([\d.]+)"',
                       open(os.path.join("superdictate", "version.py"), encoding="utf-8").read()).group(1)
@@ -63,14 +63,14 @@ datas = []
 # The tray icon is drawn from the product mark at runtime, so the PNG has
 # to travel with the build; the .ico only covers the window/taskbar icon
 # that Windows reads from the executable itself.
-datas += [("assets/SuperDictate.png", "assets")]
+datas += [("assets/Lexomorph.png", "assets")]
 # The recording cues are played straight off disk by winsound.
 datas += [("assets/record-start.wav", "assets"),
           ("assets/record-stop.wav", "assets")]
 datas += [("onnx-asr", "onnx-asr")]
 # The pinned catalog of the NPU models (onnx_models.openvino_catalog_path).
 datas += [("assets/openvino-models.json", "assets")]
-# silero-vad.dll and superdictate-llm-host.exe (CPU + Vulkan), built by
+# silero-vad.dll and lexomorph-llm-host.exe (CPU + Vulkan), built by
 # tools/build-engines.ps1 from the vendored macOS sources. Optional: without
 # the VAD, seams fall back to mel energy; without the host, post-processing
 # goes through an OpenAI-compatible API only.
@@ -78,7 +78,7 @@ if os.path.isdir("engines"):
     datas += [("engines", "engines")]
 else:
     print("WARNING: engines\\ is missing; the build has no Silero VAD")
-if os.path.isfile(os.path.join("engines", "superdictate-llm-host.exe")):
+if os.path.isfile(os.path.join("engines", "lexomorph-llm-host.exe")):
     # The correction LoRA belongs to the bundled host (llm/models.py).
     datas += [("assets/models/gec-lora-adapter.gguf", "assets/models"),
               ("assets/models/chat-template-lfm25.jinja", "assets/models")]
@@ -114,7 +114,7 @@ a = Analysis(
         "PySide6.QtDataVisualization", "PySide6.QtPdf", "PySide6.QtSql",
         "PySide6.QtTest", "PySide6.QtDesigner",
         "tkinter", "unittest", "pydoc_data",
-        # OpenVINO belongs to SuperDictateOvHost alone; the app only starts it.
+        # OpenVINO belongs to LexomorphOvHost alone; the app only starts it.
         "openvino", "openvino_telemetry",
     ],
     noarchive=False,
@@ -122,7 +122,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-# -- SuperDictateOvHost.exe ----------------------------------------------
+# -- LexomorphOvHost.exe ----------------------------------------------
 #
 # OpenVINO finds its plugins next to openvino.dll, so its libraries keep
 # their openvino\libs layout. Only what the NPU path loads is kept: the
@@ -165,15 +165,15 @@ ov_exe = EXE(
     ov.scripts,
     [],
     exclude_binaries=True,
-    name="SuperDictateOvHost",
+    name="LexomorphOvHost",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
     console=True,           # real stdin/stdout for the IPC frames
     disable_windowed_traceback=False,
-    icon="assets/SuperDictate.ico",
-    version=_version_info("Lexomorph NPU speech host", "SuperDictateOvHost"),
+    icon="assets/Lexomorph.ico",
+    version=_version_info("Lexomorph NPU speech host", "LexomorphOvHost"),
 )
 
 exe = EXE(
@@ -181,15 +181,15 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="SuperDictate",
+    name="Lexomorph",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
     console=False,          # tray app: a console window would flash on login
     disable_windowed_traceback=False,
-    icon="assets/SuperDictate.ico",
-    version=_version_info("Lexomorph", "SuperDictate"),
+    icon="assets/Lexomorph.ico",
+    version=_version_info("Lexomorph", "Lexomorph"),
 )
 
 coll = COLLECT(
@@ -201,5 +201,5 @@ coll = COLLECT(
     ov.datas,
     strip=False,
     upx=False,
-    name="SuperDictate",
+    name="Lexomorph",
 )

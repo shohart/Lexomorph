@@ -32,6 +32,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import paths
+
 FAILURES: list[str] = []
 
 
@@ -628,9 +630,9 @@ def _server_directory() -> Path | None:
 
 
 def _server_python() -> str | None:
-    """An interpreter with FastAPI and uvicorn: ``SUPERDICTATE_SYNC_TEST_PYTHON``
+    """An interpreter with FastAPI and uvicorn: ``LEXOMORPH_SYNC_TEST_PYTHON``
     or this one."""
-    python = os.environ.get("SUPERDICTATE_SYNC_TEST_PYTHON") or sys.executable
+    python = paths.env("SYNC_TEST_PYTHON") or sys.executable
     try:
         probe = subprocess.run([python, "-c", "import fastapi, uvicorn"],
                                capture_output=True, timeout=60)

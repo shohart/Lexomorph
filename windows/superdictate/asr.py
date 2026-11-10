@@ -1,6 +1,6 @@
 """Speech recognition.
 
-Same engine as the macOS build since 0.7.0: ``SuperDictateOnnxHost``, the
+Same engine as the macOS build since 0.7.0: ``LexomorphOnnxHost``, the
 native C++ core in ``native/asr-runtime``, running ONNX Runtime 1.23.2 on
 the CPU in a helper process (:mod:`superdictate.onnx_host`). Same models
 from the same pinned catalog (:mod:`superdictate.onnx_models`):
@@ -17,7 +17,7 @@ both was always wrong for one of them.
 
 **Intel NPU** (Windows only, ``speech_compute_backend = "npu"``): the same
 two profiles run as OpenVINO builds — Parakeet TDT 0.6B v3 and the
-NPU-calibrated GigaAM v3 — in ``SuperDictateOvHost``
+NPU-calibrated GigaAM v3 — in ``LexomorphOvHost``
 (:mod:`superdictate.openvino_host`), which speaks the same IPC as the ONNX
 host. The choice is offered only where OpenVINO sees an NPU (:func:`npu_info`).
 If the NPU host cannot be brought up at all, the model loads on the CPU
@@ -318,7 +318,7 @@ class SpeechModel:
             return
         executable = onnx_models.host_executable()
         if executable is None:
-            raise RuntimeError("SuperDictateOnnxHost.exe is missing from the installation")
+            raise RuntimeError("LexomorphOnnxHost.exe is missing from the installation")
         if self._host is not None:
             self._host.shutdown()
             self._host = None
@@ -342,7 +342,7 @@ class SpeechModel:
     def _start_openvino_host(self) -> None:
         command = onnx_models.openvino_host_command()
         if command is None:
-            raise RuntimeError("SuperDictateOvHost is missing from the installation")
+            raise RuntimeError("LexomorphOvHost is missing from the installation")
         if self._host is not None:
             self._host.shutdown()
             self._host = None
@@ -423,7 +423,7 @@ class SpeechModel:
             log.warning("ASR hotwords disabled by the host: %s", result.hotwords_disabled_reason)
         elif result.hotwords_used is None:
             log.info("ASR hotwords sent (%d), but this host does not report them "
-                     "(an older SuperDictateOnnxHost ignores them)", len(configuration.phrases))
+                     "(an older LexomorphOnnxHost ignores them)", len(configuration.phrases))
         else:
             log.info("ASR hotwords: %d of %d phrase(s) in use, score %.1f%s",
                      result.hotwords_used, len(configuration.phrases), configuration.score,

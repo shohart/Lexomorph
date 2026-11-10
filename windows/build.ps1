@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Build SuperDictate into dist\SuperDictate\SuperDictate.exe.
+    Build Lexomorph into dist\Lexomorph\Lexomorph.exe.
 
 .DESCRIPTION
     Regenerates the icon, runs the self-tests (a failing port should never
-    reach a build), builds and stages SuperDictateOnnxHost
+    reach a build), builds and stages LexomorphOnnxHost
     (tools\build-onnx-host.ps1) and Silero VAD (tools\build-engines.ps1),
     then packages with PyInstaller. The LLM host (CPU + Vulkan) runs
     correction and rewrite locally; -SkipEngines leaves it and the VAD out,
@@ -61,18 +61,18 @@ if (-not $SkipEngines) {
 
 # comtypes writes its UI Automation wrappers into comtypes.gen the first
 # time they are asked for. A frozen app cannot write there, so they are
-# generated now and bundled (SuperDictate.spec lists them).
+# generated now and bundled (Lexomorph.spec lists them).
 & $python -c "import comtypes.client; comtypes.client.GetModule('UIAutomationCore.dll')"
 if ($LASTEXITCODE -ne 0) { throw "Could not generate the UI Automation wrappers." }
 
 Write-Host "Packaging with PyInstaller..." -ForegroundColor Cyan
-& $python -m PyInstaller --noconfirm SuperDictate.spec
+& $python -m PyInstaller --noconfirm Lexomorph.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
 
-$exe = "dist\SuperDictate\SuperDictate.exe"
+$exe = "dist\Lexomorph\Lexomorph.exe"
 if (-not (Test-Path $exe)) { throw "Expected $exe, but it was not produced." }
 
-$size = [math]::Round((Get-ChildItem dist\SuperDictate -Recurse |
+$size = [math]::Round((Get-ChildItem dist\Lexomorph -Recurse |
                        Measure-Object -Property Length -Sum).Sum / 1MB, 1)
 Write-Host ""
 Write-Host "Built $exe ($size MB folder)" -ForegroundColor Green

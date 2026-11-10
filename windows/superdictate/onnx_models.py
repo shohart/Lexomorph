@@ -8,7 +8,7 @@ model that downloads is byte-for-byte the model the parity tests ran on.
 
 An install is a directory ``Models\\onnx\\<model_id>\\`` holding the files
 and a ``manifest.json``. The manifest is written last, after every file has
-been verified, and ``SuperDictateOnnxHost`` refuses a directory without one,
+been verified, and ``LexomorphOnnxHost`` refuses a directory without one,
 so a download interrupted at any point leaves nothing the host will load.
 
 The OpenVINO models for the NPU (``assets/openvino-models.json``, Windows
@@ -116,15 +116,18 @@ def assets_directory() -> Path:
 
 
 def host_executable() -> Optional[Path]:
-    """``SuperDictateOnnxHost.exe``: packaged first, then the CMake build tree."""
-    name = "SuperDictateOnnxHost.exe" if sys.platform == "win32" else "SuperDictateOnnxHost"
+    """``LexomorphOnnxHost.exe``: packaged first, then the CMake build tree."""
+    name = "LexomorphOnnxHost.exe" if sys.platform == "win32" else "LexomorphOnnxHost"
     candidates = [runtime_directory() / name]
-    override = os.environ.get("SUPERDICTATE_ONNX_HOST")
+    override = paths.env("ONNX_HOST")
     if override:
         # Absolute: the host is spawned with its own directory as cwd.
         candidates.insert(0, Path(override).resolve())
     build = _source_tree_root() / "native" / "asr-runtime" / "build"
-    candidates += [build / name, build / "Release" / name]
+    # The CMake target keeps its macOS-shared name; only the staged copy is renamed.
+    cmake_name = "SuperDictateOnnxHost.exe" if sys.platform == "win32" else "SuperDictateOnnxHost"
+    candidates += [build / name, build / "Release" / name,
+                   build / cmake_name, build / "Release" / cmake_name]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
@@ -132,11 +135,11 @@ def host_executable() -> Optional[Path]:
 
 
 def openvino_host_command() -> Optional[list[str]]:
-    """How to start ``SuperDictateOvHost``: the packaged helper beside the app,
+    """How to start ``LexomorphOvHost``: the packaged helper beside the app,
     or this interpreter running ``main.py --openvino-host`` in a checkout
     (which then needs ``openvino`` in its environment)."""
     if getattr(sys, "frozen", False):
-        packaged = Path(sys.executable).resolve().parent / "SuperDictateOvHost.exe"
+        packaged = Path(sys.executable).resolve().parent / "LexomorphOvHost.exe"
         return [str(packaged)] if packaged.is_file() else None
     try:
         import importlib.util
@@ -344,7 +347,7 @@ def install(model_id: str, on_progress: Optional[ProgressCallback] = None,
         log.info("Downloading %s (%d bytes)", item.url, item.size)
         digest = hashlib.sha256()
         received = 0
-        request = urllib.request.Request(item.url, headers={"User-Agent": "SuperDictate"})
+        request = urllib.request.Request(item.url, headers={"User-Agent": "Lexomorph"})
         try:
             with urllib.request.urlopen(request, timeout=60) as response, \
                     open(partial, "wb") as handle:

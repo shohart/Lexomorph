@@ -697,7 +697,7 @@ class HotkeyListener:
         self._thread_id = kernel32.GetCurrentThreadId()
         # The callback has to answer within LowLevelHooksTimeout or Windows
         # removes the hook, silently and for good. When every core is busy
-        # (a background NPU compile in SuperDictateOvHost takes minutes) a
+        # (a background NPU compile in LexomorphOvHost takes minutes) a
         # normal-priority thread can miss that deadline, after which the
         # shortcut is dead until the app restarts. So the hook thread runs
         # at high priority -- it only ever wakes for a keystroke -- and...

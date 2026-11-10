@@ -328,6 +328,8 @@ class SettingsWindow(QDialog):
         self._corrections = corrections
         self._controller = controller
         self._draft: dict[str, Any] = settings.snapshot()
+        # "auto" (never chosen) shows as the language actually in use.
+        self._draft["interface_language"] = settings.interface_language
         self._palette = palette()
         self.setStyleSheet(stylesheet(self._palette))
 
@@ -493,7 +495,7 @@ class SettingsWindow(QDialog):
         general = Section(i18n.tr("settings_tab_appearance"))
         self._interface_language = self._combo(
             general, "settings_interface_language", "interface_language",
-            [("ru", "Русский"), ("en", "English")],
+            [("en", "English"), ("ru", "Русский")],
         )
         self._waveform = self._checkbox(
             general, "settings_waveform", "show_recording_waveform")

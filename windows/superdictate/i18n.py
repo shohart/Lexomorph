@@ -8,7 +8,12 @@ because nothing caches the resolved string.
 
 from __future__ import annotations
 
-_LANGUAGE = "ru"
+import locale
+import sys
+from typing import Optional
+
+# English is the base language; Russian is the translation.
+_LANGUAGE = "en"
 
 _STRINGS: dict[str, tuple[str, str]] = {
     # -- status ------------------------------------------------------
@@ -41,7 +46,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
                              "{count} rule(s) added"),
     "corrections_imported_partial": (
         "Добавлено правил: {count}, пропущено непригодных: {skipped}",
-        "{count} rule(s) added, {skipped} unusable entr(ies) skipped"),
+        "{count} rule(s) added, {skipped} unusable entries skipped"),
     "corrections_export_failed": ("Не удалось сохранить файл: {error}",
                                   "Could not save the file: {error}"),
     "corrections_import_failed": ("Не удалось прочитать файл: {error}",
@@ -117,7 +122,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "Режим со своей инструкцией для модели, цветом и хоткеем. "
         "Режимы синхронизируются через аккаунт; хоткей и выбранный режим "
         "остаются на этом компьютере.",
-        "A mode with its own model instruction, colour and hotkey. Modes sync "
+        "A mode with its own model instruction, color and hotkey. Modes sync "
         "through the account; the hotkey and the selected mode stay on this PC."),
     "settings_rewrite_custom_empty": (
         "Своих режимов пока нет.", "No custom modes yet."),
@@ -133,7 +138,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "style_name": ("Имя режима", "Mode name"),
     "style_name_placeholder": ("Например: Задача для ассистента",
                                "e.g. Task for my assistant"),
-    "style_color": ("Цвет уведомления", "Notification colour"),
+    "style_color": ("Цвет уведомления", "Notification color"),
     "style_color_other": ("Другой…", "Other…"),
     "style_instruction": ("Инструкция для модели (что делать с текстом)",
                           "Model instruction (what to do with the text)"),
@@ -253,7 +258,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "settings_tab_appearance": ("Вид", "Appearance"),
     "settings_tab_corrections": ("Замены", "Replacements"),
     "settings_tab_advanced": ("Дополнительно", "Advanced"),
-    "settings_section_behaviour": ("Поведение", "Behaviour"),
+    "settings_section_behaviour": ("Поведение", "Behavior"),
     "settings_section_recognition": ("Распознавание", "Recognition"),
     "settings_section_capture": ("Запись", "Capture"),
     "settings_primary_hotkey": ("Основное сочетание", "Primary shortcut"),
@@ -320,7 +325,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "settings_text_style_formal_hint": (
         "Текст вставляется ровно таким, каким его распознала модель: "
         "с заглавной буквы и с точкой в конце.",
-        "The text is inserted exactly as recognised: leading capital, "
+        "The text is inserted exactly as recognized: leading capital, "
         "full stop at the end.",
     ),
     "settings_text_style_standard_hint": (
@@ -403,7 +408,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "записи.",
         "A second, smaller capsule above the first, transcribing as you "
         "speak. Words can be rewritten as more audio arrives, and the final "
-        "text is recognised again once recording stops. Costs CPU for the "
+        "text is recognized again once recording stops. Costs CPU for the "
         "whole recording.",
     ),
     "settings_hud_size": ("Размер капсулы", "Capsule size"),
@@ -417,7 +422,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "Пока ИИ исправляет или переписывает текст, полоски перетекают из "
         "цвета расшифровки в этот цвет.",
         "While the AI corrects or rewrites the text, the bars flow from the "
-        "transcribing colour into this one.",
+        "transcribing color into this one.",
     ),
     "settings_hud_background": ("Фон капсулы", "Capsule background"),
     "settings_hud_background_system": ("Как в системе", "System"),
@@ -435,7 +440,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "settings_color_hint": (
         "Нажмите на цвет, чтобы выбрать любой другой. С градиентом "
         "капсула заливается переходом между двумя цветами.",
-        "Click a colour to pick any other. With a gradient the capsule is "
+        "Click a color to pick any other. With a gradient the capsule is "
         "filled with a ramp between the two.",
     ),
     "settings_history_limit": ("Быстрая история", "Quick history"),
@@ -678,9 +683,37 @@ _STRINGS: dict[str, tuple[str, str]] = {
 }
 
 
+def language_for_locale(name: Optional[str]) -> str:
+    """"ru" for a Russian locale name (``ru``, ``ru-RU``, ``ru_RU.UTF-8``),
+    "en" for everything else, including no name at all."""
+    return "ru" if str(name or "").strip().lower().replace("_", "-").startswith("ru") else "en"
+
+
+def system_language() -> str:
+    """The interface language the system asks for: the Windows display
+    language first, then the C library's locale."""
+    name: Optional[str] = None
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            buffer = ctypes.create_unicode_buffer(85)
+            if ctypes.windll.kernel32.GetUserDefaultLocaleName(buffer, len(buffer)):
+                name = buffer.value
+        except Exception:
+            name = None
+    if not name:
+        try:
+            name = locale.getlocale()[0]
+        except Exception:
+            name = None
+    return language_for_locale(name)
+
+
 def set_language(language: str) -> None:
+    """"ru" or "en"; anything else ("auto", unknown) follows the system."""
     global _LANGUAGE
-    _LANGUAGE = "en" if language == "en" else "ru"
+    _LANGUAGE = language if language in ("ru", "en") else system_language()
 
 
 def language() -> str:

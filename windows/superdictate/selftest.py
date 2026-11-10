@@ -8,6 +8,7 @@ headless runner.
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -1310,10 +1311,10 @@ def test_llm_backend_without_bundled_host() -> None:
 
     from .llm.host import HostSpec, host_command
     templated = HostSpec(model_path=r"C:\m\LFM.gguf", chat_template_path=r"C:\t\lfm.jinja")
-    argv, _, _ = host_command(r"C:\x\engines\superdictate-llm-host.exe", templated, 5000)
+    argv, _, _ = host_command(r"C:\x\engines\lexomorph-llm-host.exe", templated, 5000)
     _check("own host: the chat-template override is passed",
            argv[argv.index("--chat-template-file") + 1], r"C:\t\lfm.jinja")
-    lora = r"C:\Program Files\SuperDictate\_internal\assets\models\gec-lora-adapter.gguf"
+    lora = r"C:\Program Files\Lexomorph\_internal\assets\models\gec-lora-adapter.gguf"
     gpu = HostSpec(model_path=r"C:\m\Qwen.gguf", lora_path=lora, lora_scale=4.0, gpu_layers=99)
     argv, cwd, env = host_command(r"C:\x\engines\llama\llama-server.exe", gpu, 5000)
     _check("llama-server: the LoRA goes by bare name, with its scale",
@@ -1329,14 +1330,14 @@ def test_llm_backend_without_bundled_host() -> None:
     _check("llama-server on the CPU: no GPU device at all",
            (argv[argv.index("--device") + 1], "--ctx-checkpoints" in argv, env), ("none", False, {}))
     from .llm.host import LLM_MAX_THREADS, llm_thread_count
-    own, own_cwd, own_env = host_command(r"C:\x\engines\superdictate-llm-host.exe", gpu, 5000)
+    own, own_cwd, own_env = host_command(r"C:\x\engines\lexomorph-llm-host.exe", gpu, 5000)
     _check("our host keeps the macOS flags",
            own[own.index("--lora-scale") + 1], "4.0")
     _check("our host gets an explicit thread count",
            own[own.index("--threads") + 1], str(llm_thread_count()))
     _check("our host on the GPU: no cooperative-matrix shaders either",
            own_env.get("GGML_VK_DISABLE_COOPMAT"), "1")
-    _, _, own_cpu_env = host_command(r"C:\x\engines\superdictate-llm-host.exe", cpu, 5000)
+    _, _, own_cpu_env = host_command(r"C:\x\engines\lexomorph-llm-host.exe", cpu, 5000)
     _check("our host on the CPU: no Vulkan environment", own_cpu_env, {})
     _check("threads: a 14-core hybrid laptop leaves cores free (8, not 14)",
            llm_thread_count(14), LLM_MAX_THREADS)
@@ -1367,7 +1368,7 @@ def test_punctuation_settings() -> None:
 
 
 def test_punctuation_real() -> None:
-    """The real model through SuperDictateOnnxHost, when one is installed."""
+    """The real model through LexomorphOnnxHost, when one is installed."""
     from . import onnx_models, punctuation
 
     model = next((m for m in ("base", "small") if punctuation.is_installed(m)), None)
@@ -1769,7 +1770,7 @@ sys.exit(openvino_host.main([]))
 
 
 def test_openvino_host_ipc() -> None:
-    """SuperDictateOvHost through the app's own client: the same framing v1."""
+    """LexomorphOvHost through the app's own client: the same framing v1."""
     import sys
     import tempfile
 
@@ -2297,6 +2298,243 @@ def test_vocabulary_transfer() -> None:
            _raises(lambda: decode("not json at all"), TransferError), True)
 
 
+# -- rename: data migration, environment, interface language ----------------
+
+
+def test_data_migration_from_superdictate() -> None:
+    """First launch under the new name copies the old tree, once, and never
+    touches the original."""
+    import json
+
+    from . import paths
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        old = root / "SuperDictate"
+        (old / "Models" / "onnx").mkdir(parents=True)
+        (old / "Logs").mkdir()
+        (old / "Cache").mkdir()
+        weights = old / "Models" / "onnx" / "model.int8.onnx"
+        weights.write_bytes(b"w" * (2 << 20))
+        (old / "Logs" / "SuperDictate.log").write_text("old log", encoding="utf-8")
+        (old / "OutputMuted.flag").write_text("1", encoding="utf-8")
+        (old / "History.json").write_text('["one"]', encoding="utf-8")
+        (old / "VocabularySync.token").write_bytes(b"token-blob")
+        settings = {"interface_language": "en", "hotkey": {"vk": 163, "modifiers": 0},
+                    "vocabulary_sync_server_url": "https://superdictate.bykovlegal.ru"}
+        settings_text = json.dumps(settings, ensure_ascii=False)
+        (old / "Settings.json").write_text(settings_text, encoding="utf-8")
+        new = root / "Lexomorph"
+
+        _check("migration: runs when only the old tree exists",
+               paths.migrate_legacy_directory(new, (old,)), True)
+        _check("migration: Settings.json byte for byte",
+               (new / "Settings.json").read_text(encoding="utf-8"), settings_text)
+        _check("migration: the chosen language travels with it",
+               json.loads((new / "Settings.json").read_text(encoding="utf-8"))["interface_language"], "en")
+        _check("migration: history copied", (new / "History.json").read_text(encoding="utf-8"), '["one"]')
+        _check("migration: sync token copied", (new / "VocabularySync.token").read_bytes(), b"token-blob")
+        _check("migration: model weights present",
+               (new / "Models" / "onnx" / "model.int8.onnx").stat().st_size, 2 << 20)
+        _check("migration: old logs are not carried over", (new / "Logs").exists(), False)
+        _check("migration: the mute flag is not carried over", (new / "OutputMuted.flag").exists(), False)
+        marker = json.loads((new / paths.MIGRATION_MARKER).read_text(encoding="utf-8"))
+        _check("migration: marker says complete", marker["status"], "complete")
+
+        # Non-destructive: the original is the way back.
+        _check("migration: original Settings.json stays",
+               (old / "Settings.json").read_text(encoding="utf-8"), settings_text)
+        _check("migration: original weights stay", weights.exists(), True)
+        _check("migration: original logs stay", (old / "Logs" / "SuperDictate.log").exists(), True)
+
+        # Idempotent: a second launch does nothing, and later edits survive.
+        (new / "History.json").write_text('["two"]', encoding="utf-8")
+        (old / "Usage.json").write_text("{}", encoding="utf-8")
+        _check("migration: second run does nothing", paths.migrate_legacy_directory(new, (old,)), False)
+        _check("migration: later edits are not overwritten",
+               (new / "History.json").read_text(encoding="utf-8"), '["two"]')
+        _check("migration: nothing new is pulled in after the marker",
+               (new / "Usage.json").exists(), False)
+
+        # Editing the copy leaves the original alone, links or not.
+        # Downloads land in a .part file and are renamed over the target,
+        # which also breaks a hard link; this is that.
+        copy = new / "Models" / "onnx" / "model.int8.onnx"
+        replacement = copy.with_name(copy.name + ".part")
+        replacement.write_bytes(b"x")
+        os.replace(replacement, copy)
+        _check("migration: original weights untouched by a replaced download",
+               weights.stat().st_size, 2 << 20)
+
+
+def test_data_migration_edge_cases() -> None:
+    import json
+    from unittest import mock
+
+    from . import paths
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        old = root / "SuperDictate"
+        old.mkdir()
+        (old / "Settings.json").write_text('{"text_style": "casual"}', encoding="utf-8")
+
+        # Somebody who already started fresh under the new name keeps that.
+        fresh = root / "Fresh"
+        fresh.mkdir()
+        (fresh / "Settings.json").write_text('{"text_style": "formal"}', encoding="utf-8")
+        _check("migration: a tree with its own settings is left alone",
+               paths.migrate_legacy_directory(fresh, (old,)), False)
+        _check("migration: ...and unchanged",
+               (fresh / "Settings.json").read_text(encoding="utf-8"), '{"text_style": "formal"}')
+
+        # Scaffolding (a Cache folder) is not data.
+        scaffold = root / "Scaffold"
+        (scaffold / "Cache").mkdir(parents=True)
+        _check("migration: empty scaffolding gives way",
+               paths.migrate_legacy_directory(scaffold, (old,)), True)
+        _check("migration: ...settings arrive",
+               (scaffold / "Settings.json").exists(), True)
+
+        # No old tree: nothing to do, and no marker invented.
+        empty = root / "Empty"
+        _check("migration: no old tree, no migration",
+               paths.migrate_legacy_directory(empty, (root / "Nope",)), False)
+        _check("migration: ...and no directory created", empty.exists(), False)
+
+        # A file that cannot be copied does not block the start; the next
+        # launch resumes where this one stopped.
+        (old / "History.json").write_text("[1]", encoding="utf-8")
+        flaky = root / "Flaky"
+        real_copy = paths._copy_file
+
+        def broken(source, target, allow_link):
+            if source.name == "History.json":
+                raise OSError("locked")
+            real_copy(source, target, allow_link)
+
+        with mock.patch.object(paths, "_copy_file", broken):
+            _check("migration: a failing file is not fatal",
+                   paths.migrate_legacy_directory(flaky, (old,)), True)
+        marker = json.loads((flaky / paths.MIGRATION_MARKER).read_text(encoding="utf-8"))
+        _check("migration: marker says incomplete", marker["status"], "incomplete")
+        _check("migration: settings still arrived", (flaky / "Settings.json").exists(), True)
+        _check("migration: the next run finishes the job",
+               paths.migrate_legacy_directory(flaky, (old,)), True)
+        _check("migration: ...history now present", (flaky / "History.json").exists(), True)
+        marker = json.loads((flaky / paths.MIGRATION_MARKER).read_text(encoding="utf-8"))
+        _check("migration: ...and the marker is complete", marker["status"], "complete")
+        _check("migration: ...then it stops", paths.migrate_legacy_directory(flaky, (old,)), False)
+
+        # A broken source never raises.
+        with mock.patch.object(paths.Path, "iterdir", side_effect=OSError("denied")):
+            ok = True
+            try:
+                paths.migrate_legacy_directory(root / "Denied", (old,))
+            except Exception:
+                ok = False
+        _check("migration: errors never escape", ok, True)
+
+        # Newest previous name wins.
+        older = root / "Dictation"
+        older.mkdir()
+        (older / "Settings.json").write_text('{"text_style": "informal"}', encoding="utf-8")
+        both = root / "Both"
+        paths.migrate_legacy_directory(both, (old, older))
+        _check("migration: the newest previous name wins",
+               json.loads((both / "Settings.json").read_text(encoding="utf-8"))["text_style"], "casual")
+
+
+def test_lexomorph_environment_names() -> None:
+    import os
+    from unittest import mock
+
+    from . import paths
+
+    with mock.patch.dict(os.environ, {}, clear=False):
+        for name in ("LEXOMORPH_ASR_THREADS", "SUPERDICTATE_ASR_THREADS"):
+            os.environ.pop(name, None)
+        _check("env: unset", paths.env("ASR_THREADS"), None)
+        os.environ["SUPERDICTATE_ASR_THREADS"] = "3"
+        _check("env: the old name is still read", paths.env("ASR_THREADS"), "3")
+        os.environ["LEXOMORPH_ASR_THREADS"] = "5"
+        _check("env: the new name wins", paths.env("ASR_THREADS"), "5")
+    _check("identifiers: data directory name", paths.APP_NAME, "Lexomorph")
+    _check("identifiers: old data directory is a migration source",
+           "SuperDictate" in paths.LEGACY_APP_NAMES, True)
+    from . import system
+
+    _check("identifiers: autostart value", system._RUN_VALUE, "Lexomorph")
+    _check("identifiers: the old autostart value is cleaned up",
+           "SuperDictate" in system._LEGACY_RUN_VALUES, True)
+    _check("identifiers: the new one is never deleted as legacy",
+           system._RUN_VALUE in system._LEGACY_RUN_VALUES, False)
+
+
+def test_interface_language_default() -> None:
+    """English is the base; a Russian system gets Russian; a saved choice wins."""
+    from unittest import mock
+
+    from . import i18n
+    from .settings import Settings
+
+    _check("language: ru-RU", i18n.language_for_locale("ru-RU"), "ru")
+    _check("language: ru_RU.UTF-8", i18n.language_for_locale("ru_RU.UTF-8"), "ru")
+    _check("language: en-US", i18n.language_for_locale("en-US"), "en")
+    _check("language: German falls back to English", i18n.language_for_locale("de-DE"), "en")
+    _check("language: no locale falls back to English", i18n.language_for_locale(None), "en")
+
+    previous = i18n.language()
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Settings.json"
+            with mock.patch.object(i18n, "system_language", return_value="ru"):
+                _check("language: unset follows a Russian system", Settings(path).interface_language, "ru")
+            with mock.patch.object(i18n, "system_language", return_value="en"):
+                _check("language: unset follows an English system", Settings(path).interface_language, "en")
+                Settings(path).apply({"interface_language": "ru"})
+                _check("language: a saved Russian choice beats the system",
+                       Settings(path).interface_language, "ru")
+            with mock.patch.object(i18n, "system_language", return_value="ru"):
+                Settings(path).apply({"interface_language": "en"})
+                _check("language: a saved English choice beats the system",
+                       Settings(path).interface_language, "en")
+        with mock.patch.object(i18n, "system_language", return_value="ru"):
+            i18n.set_language("auto")
+            _check("language: set_language(auto) follows the system", i18n.language(), "ru")
+        i18n.set_language("en")
+        _check("language: explicit English", i18n.tr("tray_quit"), "Quit")
+        i18n.set_language("ru")
+        _check("language: explicit Russian", i18n.tr("tray_quit"), "Выйти")
+        # Every string has a real English variant; the Russian one is the translation.
+        import re
+
+        cyrillic = re.compile("[А-Яа-яЁё]")
+        bad = [key for key, (ru, en) in i18n._STRINGS.items()
+               if not en.strip() or cyrillic.search(en)]
+        _check("language: no Russian or empty text in the English column", bad, [])
+        _check("language: the Russian column is not empty",
+               [key for key, (ru, en) in i18n._STRINGS.items() if not ru.strip()], [])
+    finally:
+        i18n.set_language(previous)
+
+
+def test_sync_token_survives_the_rename() -> None:
+    """The token file is copied; on Windows it is re-protected under the new
+    DPAPI entropy, elsewhere it is plain text and just keeps working."""
+    from . import vocabulary_sync as sync
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "VocabularySync.token"
+        store = sync.DpapiTokenStore(path)
+        store.save("secret")
+        _check("token: round trip", store.load(), "secret")
+        _check("token: migrate_legacy is a no-op on a current token", store.migrate_legacy() is False, True)
+    _check("token: new entropy", sync._DPAPI_ENTROPY, b"com.lexomorph.vocab-sync")
+    _check("token: old entropy still readable", sync._LEGACY_DPAPI_ENTROPY,
+           b"com.local.superdictate.vocab-sync")
+
+
 _TESTS = [
     test_toggle_starts_and_stops,
     test_toggle_does_not_flip_when_busy,
@@ -2367,6 +2605,11 @@ _TESTS = [
     test_incremental_transcription_matches_batch,
     test_segment_limits_follow_the_model_window,
     test_vocabulary_transfer,
+    test_data_migration_from_superdictate,
+    test_data_migration_edge_cases,
+    test_lexomorph_environment_names,
+    test_interface_language_default,
+    test_sync_token_survives_the_rename,
 ]
 
 
@@ -2393,6 +2636,11 @@ _TESTS += _vocabulary_suite()
 
 
 def run_all() -> bool:
+    from . import i18n
+
+    # The interface language now follows the system by default; the tests
+    # that read Russian toasts expect the Russian table.
+    i18n.set_language("ru")
     _failures.clear()
     errored = 0
     for test in _TESTS:

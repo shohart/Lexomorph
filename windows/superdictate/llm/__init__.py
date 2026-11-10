@@ -1,6 +1,6 @@
 """Local LLM post-processing for dictated text.
 
-Correction and rewrite, both served by the same ``superdictate-llm-host.exe``
+Correction and rewrite, both served by the same ``lexomorph-llm-host.exe``
 subprocess over loopback HTTP — the identical arrangement the macOS build
 uses, down to the prompts and the model weights.
 

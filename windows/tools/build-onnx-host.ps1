@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Build SuperDictateOnnxHost.exe (native\asr-runtime) and stage it, with
+    Build LexomorphOnnxHost.exe (native\asr-runtime) and stage it, with
     ONNX Runtime and the speech-model resources, into windows\onnx-asr\.
 
 .DESCRIPTION
     The Windows counterpart of scripts/build-onnx-host.sh. The staged tree is
     flat, like the macOS bundle's Resources/onnx-asr/:
 
-        onnx-asr\SuperDictateOnnxHost.exe   static MSVC runtime (/MT)
+        onnx-asr\LexomorphOnnxHost.exe   static MSVC runtime (/MT)
         onnx-asr\onnxruntime.dll            ONNX Runtime 1.23.2, pinned
         onnx-asr\onnx-models.json           pinned model catalog
         onnx-asr\nemo128.onnx               bundled feature graph (Parakeet)
@@ -16,7 +16,7 @@
         onnx-asr\ThirdPartyNotices.txt, onnxruntime-LICENSE.txt, onnx-asr-LICENSE.txt
 
     The app finds it there both when run from source and inside the
-    PyInstaller folder (SuperDictate.spec copies it as is).
+    PyInstaller folder (Lexomorph.spec copies it as is).
 
     Needs CMake 3.20+ and Visual Studio 2022 (or Build Tools) with the C++
     workload; run from any shell, the VS generator finds the compiler.
@@ -66,10 +66,12 @@ Write-Host "Configuring native\asr-runtime..." -ForegroundColor Cyan
     "-DSD_ASR_BUILD_TESTS=$(if ($Test) { 'ON' } else { 'OFF' })" | Out-Host
 if ($LASTEXITCODE) { throw "CMake configure failed" }
 
-Write-Host "Building SuperDictateOnnxHost..." -ForegroundColor Cyan
+Write-Host "Building the ONNX host..." -ForegroundColor Cyan
 & $cmakeExe --build $BuildDir --config Release --parallel | Out-Host
 if ($LASTEXITCODE) { throw "CMake build failed" }
 
+# The CMake target is shared with the macOS build and keeps its name there;
+# only the staged Windows copy is called LexomorphOnnxHost.exe.
 $Host_ = Join-Path $BuildDir "Release\SuperDictateOnnxHost.exe"
 if (-not (Test-Path $Host_)) { throw "the build did not produce $Host_" }
 
@@ -81,7 +83,7 @@ if ($Test) {
 
 if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
 New-Item -ItemType Directory -Path $Stage | Out-Null
-Copy-Item $Host_ $Stage
+Copy-Item $Host_ (Join-Path $Stage "LexomorphOnnxHost.exe")
 Copy-Item (Join-Path $OrtRoot "lib\onnxruntime.dll") $Stage
 Copy-Item (Join-Path $RuntimeDir "catalog\onnx-models.json") $Stage
 Copy-Item (Join-Path $RuntimeDir "assets\nemo128.onnx") $Stage
@@ -100,14 +102,14 @@ if ($vs) {
     $dumpbin = Get-ChildItem (Join-Path $vs "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe") -ErrorAction SilentlyContinue | Select-Object -First 1
 }
 if (-not $dumpbin) {
-    Write-Warning "dumpbin not found: skipping the import check of SuperDictateOnnxHost.exe"
+    Write-Warning "dumpbin not found: skipping the import check of LexomorphOnnxHost.exe"
 } else {
-    $deps = & $dumpbin.FullName /nologo /dependents (Join-Path $Stage "SuperDictateOnnxHost.exe") |
+    $deps = & $dumpbin.FullName /nologo /dependents (Join-Path $Stage "LexomorphOnnxHost.exe") |
         Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
-    Write-Host ("SuperDictateOnnxHost.exe imports: " + ($deps -join ", ")) -ForegroundColor DarkGray
+    Write-Host ("LexomorphOnnxHost.exe imports: " + ($deps -join ", ")) -ForegroundColor DarkGray
     $crt = $deps | Where-Object { $_ -match '^(vcruntime|msvcp)' }
-    if ($crt) { throw "SuperDictateOnnxHost.exe depends on the VC runtime: $($crt -join ', ')" }
-    if ($deps -notcontains "onnxruntime.dll") { throw "SuperDictateOnnxHost.exe does not import onnxruntime.dll" }
+    if ($crt) { throw "LexomorphOnnxHost.exe depends on the VC runtime: $($crt -join ', ')" }
+    if ($deps -notcontains "onnxruntime.dll") { throw "LexomorphOnnxHost.exe does not import onnxruntime.dll" }
 }
 
-Write-Host "Staged SuperDictateOnnxHost and ONNX Runtime into $Stage" -ForegroundColor Green
+Write-Host "Staged LexomorphOnnxHost and ONNX Runtime into $Stage" -ForegroundColor Green

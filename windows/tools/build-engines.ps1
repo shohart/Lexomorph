@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Build the engines\ directory: silero-vad.dll (pause detection for long
-    dictation) and, experimentally, superdictate-llm-host.exe.
+    dictation) and, experimentally, lexomorph-llm-host.exe.
 
 .DESCRIPTION
     Both come from the vendored sources the macOS app is built from
@@ -13,7 +13,7 @@
 
     and with -ExperimentalLlmHost also
 
-        engines\superdictate-llm-host.exe   local LLM post-processing
+        engines\lexomorph-llm-host.exe   local LLM post-processing
         engines\vulkan-shaders\*.spv        with -Vulkan only
 
     Release builds leave the LLM host out: on Windows, correction and
@@ -22,7 +22,7 @@
 
     Needs Visual Studio 2022 (or Build Tools) with the C++ workload and
     CMake 3.20+; -Vulkan also needs the Vulkan SDK (build time only: at run
-    time the host uses the GPU driver's vulkan-1.dll). SuperDictate.spec
+    time the host uses the GPU driver's vulkan-1.dll). Lexomorph.spec
     copies engines\ as is.
 
 .EXAMPLE
@@ -87,8 +87,8 @@ Copy-Item (Join-Path $Vad "upstream\LICENSE-ggml.txt") $Stage
 Copy-Item (Join-Path $Vad "upstream-vad\LICENSE-whisper-cpp.txt") $Stage
 Copy-Item (Join-Path $Vad "upstream-vad\LICENSE-silero-vad.txt") $Stage
 if ($ExperimentalLlmHost) {
-    $binaries += "superdictate-llm-host.exe"
-    Copy-Item (Join-Path $BuildDir "Release\superdictate-llm-host.exe") $Stage
+    $binaries += "lexomorph-llm-host.exe"
+    Copy-Item (Join-Path $BuildDir "Release\lexomorph-llm-host.exe") $Stage
     Copy-Item (Join-Path $Llama "LICENSE-llama-cpp.txt") $Stage
     if ($Vulkan) {
         Copy-Item (Join-Path $Llama "ggml-vulkan\vulkan-shaders") (Join-Path $Stage "vulkan-shaders") -Recurse
@@ -114,6 +114,6 @@ if (-not $dumpbin) {
 }
 
 if ($Vulkan) {
-    & (Join-Path $Stage "superdictate-llm-host.exe") --list-devices | Out-Host
+    & (Join-Path $Stage "lexomorph-llm-host.exe") --list-devices | Out-Host
 }
 Write-Host "Staged engines into $Stage" -ForegroundColor Green

@@ -9,7 +9,7 @@ Python + PySide6 вместо Swift + AppKit, но поведение и име�
 общие, чтобы одинаковое означало одинаковое на обеих платформах.
 
 Имена внутренних частей (каталог данных `%LOCALAPPDATA%\SuperDictate`,
-`SuperDictate.exe`, хосты `SuperDictate*Host`, пакет `superdictate`) сохранены
+`Lexomorph.exe`, хосты `SuperDictate*Host`, пакет `superdictate`) сохранены
 намеренно ради совместимости с установленными копиями.
 
 Происхождение и что взято за основу — в [PROVENANCE.md](PROVENANCE.md),
@@ -21,7 +21,7 @@ Python + PySide6 вместо Swift + AppKit, но поведение и име�
 ## Что уже работает
 
 **Распознавание речи** — тот же движок и те же модели, что в macOS-версии
-с 0.7.0: нативный хост `SuperDictateOnnxHost` (C++-ядро из
+с 0.7.0: нативный хост `LexomorphOnnxHost` (C++-ядро из
 [`native/asr-runtime`](../native/asr-runtime), ONNX Runtime 1.23.2) в
 отдельном процессе, только на процессоре. Модели качаются по общему
 закреплённому каталогу с проверкой SHA-256:
@@ -37,7 +37,7 @@ Python + PySide6 вместо Swift + AppKit, но поведение и име�
 **Нейропроцессор Intel (NPU).** На ноутбуках с Intel Core Ultra
 («Intel AI Boost») в «Настройки → Дополнительно → Где распознавать»
 появляется пункт «Нейропроцессор». Там работают те же два профиля, но в
-сборках OpenVINO, во втором хосте `SuperDictateOvHost.exe`
+сборках OpenVINO, во втором хосте `LexomorphOvHost.exe`
 (`superdictate/openvino_host.py`, тот же IPC v1). Модели ставятся в
 `Models\openvino\` по своему закреплённому каталогу
 (`assets/openvino-models.json`):
@@ -206,7 +206,7 @@ Silero VAD собирается в `engines\` отдельным скрипто�
 ```
 
 Локальные коррекция и рерайт идут через тот же хост, что на macOS
-(`superdictate-llm-host.exe`, вендоренный llama.cpp с CPU и Vulkan). Его
+(`lexomorph-llm-host.exe`, вендоренный llama.cpp с CPU и Vulkan). Его
 собирает `build.ps1` через `tools\build-engines.ps1 -ExperimentalLlmHost
 -Vulkan`, для сборки нужен Vulkan SDK. Хост держит снимок общего начала
 промпта коррекции (системный промпт и примеры, ~276 из ~295 токенов) и

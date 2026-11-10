@@ -5,7 +5,7 @@
 ; nothing and would break installing on a locked-down work machine.
 ;
 ; Compile after `build.ps1` has produced dist\SuperDictate\:
-;   & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\SuperDictate.iss
+;   & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\Lexomorph.iss
 
 ; AppDirName is the identifier behind the install directory, the Start-menu
 ; group of earlier releases and the autostart value: it must stay
@@ -16,7 +16,7 @@
 #define AppVersion     "0.9.7"
 #define AppPublisher   "Lexomorph (formerly SuperDictate Next)"
 #define AppURL         "https://github.com/shohart/SuperDictate-Next"
-#define AppExeName     "SuperDictate.exe"
+#define AppExeName     "Lexomorph.exe"
 ; Must match superdictate.system.APP_USER_MODEL_ID, or the taskbar treats a
 ; pinned shortcut and the running window as two different applications.
 #define AppUserModelID "local.SuperDictate"
@@ -49,7 +49,7 @@ UsePreviousGroup=no
 LicenseFile=..\LICENSE
 OutputDir=..\dist
 OutputBaseFilename=SuperDictate-{#AppVersion}-setup
-SetupIconFile=..\assets\SuperDictate.ico
+SetupIconFile=..\assets\Lexomorph.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 Compression=lzma2/max
 SolidCompression=yes
@@ -93,7 +93,7 @@ Type: files; Name: "{app}\D1CT.exe"
 Type: files; Name: "{group}\D1CT.lnk"
 Type: files; Name: "{autodesktop}\D1CT.lnk"
 ; 0.8.3 shipped llama.cpp's llama-server here; from 0.8.3.1 the local LLM
-; host is engines\superdictate-llm-host.exe, so the old 83 MB goes.
+; host is engines\lexomorph-llm-host.exe, so the old 83 MB goes.
 Type: filesandordirs; Name: "{app}\_internal\engines\llama"
 ; The desktop shortcut was named SuperDictate until the product became
 ; Lexomorph (the old Start-menu folder is removed in CurStepChanged).

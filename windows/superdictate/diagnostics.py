@@ -9,7 +9,7 @@ on the plain and the segmented path, print text and timings.
     python main.py --benchmark-transcribe gigaam_v3_onnx a.wav
 
 WAV files must be 16 kHz mono 16-bit PCM (what the recorder captures).
-``SUPERDICTATE_ASR_THREADS`` overrides the thread count, as on macOS.
+``LEXOMORPH_ASR_THREADS`` overrides the thread count, as on macOS.
 """
 
 from __future__ import annotations

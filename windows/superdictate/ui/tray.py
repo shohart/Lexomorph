@@ -4,7 +4,7 @@ This is the Windows counterpart of the macOS menu bar item, and it is
 what keeps the app alive: closing every window leaves the tray icon, the
 keyboard hook and the loaded model in place.
 
-The glyph is the product artwork (assets/SuperDictate.png), so the tray, the
+The glyph is the product artwork (assets/Lexomorph.png), so the tray, the
 taskbar, the window frames and the installer all show the same thing.
 State is signalled by a small dot in the corner instead of by recolouring
 the artwork: the mark is a gradient, and tinting it red or blue would turn
@@ -36,7 +36,7 @@ _STATE_COLORS: dict[AppState, str | None] = {
 
 @lru_cache(maxsize=8)
 def _artwork(size: int) -> QPixmap:
-    source = QPixmap(str(paths.resource_path("assets", "SuperDictate.png")))
+    source = QPixmap(str(paths.resource_path("assets", "Lexomorph.png")))
     if source.isNull():
         return QPixmap()
     return source.scaled(

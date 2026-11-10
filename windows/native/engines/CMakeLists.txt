@@ -7,7 +7,7 @@
 #   silero-vad.dll             swift/Sources/silero_vad/upstream{,-vad}
 #                              (whisper.cpp's Silero VAD over a CPU-only
 #                              ggml v0.13.0, whisper_vad_* exported)
-#   superdictate-llm-host.exe  swift/Sources/llama_cpp_host (llama.cpp
+#   lexomorph-llm-host.exe  swift/Sources/llama_cpp_host (llama.cpp
 #                              d59d455, statically linked). Experimental,
 #                              not in release builds (SD_LLM_HOST): Windows
 #                              post-processing goes through an
@@ -22,7 +22,7 @@
 # and CMake 3.20+.
 
 cmake_minimum_required(VERSION 3.20)
-project(superdictate_engines LANGUAGES C CXX)
+project(lexomorph_engines LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "engines/ is the Windows x64 build")
@@ -47,7 +47,7 @@ set(SD_COMMON_DEFINITIONS
   _CRT_SECURE_NO_WARNINGS _USE_MATH_DEFINES NOMINMAX WIN32_LEAN_AND_MEAN
   GGML_USE_CPU GGML_USE_LLAMAFILE)
 
-# -- superdictate-llm-host.exe ---------------------------------------------
+# -- lexomorph-llm-host.exe ---------------------------------------------
 
 if(SD_LLM_HOST)
 file(GLOB_RECURSE SD_LLAMA_SOURCES CONFIGURE_DEPENDS
@@ -60,9 +60,9 @@ if(NOT SD_LLM_VULKAN)
   list(FILTER SD_LLAMA_SOURCES EXCLUDE REGEX "/ggml-vulkan/")
 endif()
 
-add_executable(superdictate-llm-host ${SD_LLAMA_SOURCES})
-target_compile_options(superdictate-llm-host PRIVATE ${SD_COMMON_OPTIONS})
-target_compile_definitions(superdictate-llm-host PRIVATE
+add_executable(lexomorph-llm-host ${SD_LLAMA_SOURCES})
+target_compile_options(lexomorph-llm-host PRIVATE ${SD_COMMON_OPTIONS})
+target_compile_definitions(lexomorph-llm-host PRIVATE
   ${SD_COMMON_DEFINITIONS}
   LLAMA_VERSION="d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd"
   LLAMA_COMMIT="d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd"
@@ -70,7 +70,7 @@ target_compile_definitions(superdictate-llm-host PRIVATE
   GGML_COMMIT="d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd")
 # Order matters, as in Package.swift: common/ before src/, because both
 # vendor a different unicode.h and common/jinja/ resolves it by search path.
-target_include_directories(superdictate-llm-host PRIVATE
+target_include_directories(lexomorph-llm-host PRIVATE
   "${SD_LLAMA}/upstream"
   "${SD_LLAMA}/upstream/include"
   "${SD_LLAMA}/upstream/common"
@@ -79,11 +79,11 @@ target_include_directories(superdictate-llm-host PRIVATE
   "${SD_LLAMA}/upstream/ggml-vulkan"
   "${SD_LLAMA}/upstream/vendor"
   "${SD_LLAMA}/upstream/vendor/cpp-httplib")
-target_link_libraries(superdictate-llm-host PRIVATE ws2_32 crypt32)
+target_link_libraries(lexomorph-llm-host PRIVATE ws2_32 crypt32)
 if(SD_LLM_VULKAN)
   find_package(Vulkan REQUIRED)
-  target_compile_definitions(superdictate-llm-host PRIVATE GGML_USE_VULKAN)
-  target_link_libraries(superdictate-llm-host PRIVATE Vulkan::Vulkan)
+  target_compile_definitions(lexomorph-llm-host PRIVATE GGML_USE_VULKAN)
+  target_link_libraries(lexomorph-llm-host PRIVATE Vulkan::Vulkan)
 endif()
 endif()
 

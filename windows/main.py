@@ -20,7 +20,7 @@ import sys
 
 if __name__ == "__main__" and "--openvino-host" in sys.argv:
     # The NPU speech host (superdictate.openvino_host) when running from a
-    # checkout; packaged builds ship it as SuperDictateOvHost.exe. Before
+    # checkout; packaged builds ship it as LexomorphOvHost.exe. Before
     # the Qt imports: a helper process has no use for them.
     from superdictate.openvino_host import main as _openvino_host_main
 
@@ -61,7 +61,7 @@ def main(argv: list[str]) -> int:
 
     paths.ensure_directories()
     log = configure(verbose="--verbose" in argv)
-    log.info("SuperDictate %s starting", VERSION)
+    log.info("Lexomorph %s starting", VERSION)
 
     # Before QApplication: the identity has to be in place before the first
     # window is created, or the taskbar has already decided what to show.
@@ -74,8 +74,8 @@ def main(argv: list[str]) -> int:
         return 0
 
     app = QApplication(argv)
-    app.setApplicationName("SuperDictate")
-    # No display name: Qt would append " - SuperDictate" to every window
+    app.setApplicationName("Lexomorph")
+    # No display name: Qt would append " - Lexomorph" to every window
     # title, and the control panel already carries the name and version.
     app.setWindowIcon(build_icon())
     # One stylesheet for every window, so dialogs opened later inherit the

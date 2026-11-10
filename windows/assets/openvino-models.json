@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "comment": "OpenVINO IR speech models for the Intel NPU (SuperDictateOvHost). Same rules as onnx-models.json: pinned revisions, sizes and SHA-256; nothing resolved at run time.",
+  "comment": "OpenVINO IR speech models for the Intel NPU (LexomorphOvHost). Same rules as onnx-models.json: pinned revisions, sizes and SHA-256; nothing resolved at run time.",
   "models": [
     {
       "model_id": "parakeet-tdt-0.6b-v3-ov",

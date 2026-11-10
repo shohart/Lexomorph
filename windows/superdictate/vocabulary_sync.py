@@ -52,7 +52,9 @@ BATCH_SIZE = 1000
 REQUEST_TIMEOUT_SECONDS = 30.0
 #: The server refuses a whole push for one field over this (server/vocab-sync).
 MAX_FIELD = 200
-_DPAPI_ENTROPY = b"com.local.superdictate.vocab-sync"
+_DPAPI_ENTROPY = b"com.lexomorph.vocab-sync"
+#: What 0.9.x protected the token with; still readable so a copied token works.
+_LEGACY_DPAPI_ENTROPY = b"com.local.superdictate.vocab-sync"
 
 # Error kinds, for the settings to word.
 ERROR_NETWORK = "network"
@@ -106,22 +108,47 @@ class DpapiTokenStore:
             return None
         try:
             if sys.platform == "win32":
-                import win32crypt
-
-                _, data = win32crypt.CryptUnprotectData(blob, _DPAPI_ENTROPY, None, None, 0)
-                blob = bytes(data)
+                blob = self._unprotect(blob)
             token = blob.decode("utf-8").strip()
         except Exception as exc:
             log.warning("The sync token could not be read (%s); signing in again is needed", exc)
             return None
         return token or None
 
+    @staticmethod
+    def _unprotect(blob: bytes) -> bytes:
+        import win32crypt
+
+        try:
+            _, data = win32crypt.CryptUnprotectData(blob, _DPAPI_ENTROPY, None, None, 0)
+        except Exception:
+            _, data = win32crypt.CryptUnprotectData(blob, _LEGACY_DPAPI_ENTROPY, None, None, 0)
+        return bytes(data)
+
+    def migrate_legacy(self) -> bool:
+        """Re-save a token protected the pre-0.10 way under the new entropy."""
+        if sys.platform != "win32" or not self._path.exists():
+            return False
+        import win32crypt
+
+        blob = self._path.read_bytes()
+        try:
+            win32crypt.CryptUnprotectData(blob, _DPAPI_ENTROPY, None, None, 0)
+            return False  # already the new kind
+        except Exception:
+            pass
+        token = self.load()  # falls back to the legacy entropy
+        if token:
+            self.save(token)
+            return True
+        return False
+
     def save(self, token: str) -> None:
         data = token.encode("utf-8")
         if sys.platform == "win32":
             import win32crypt
 
-            data = win32crypt.CryptProtectData(data, "SuperDictate vocabulary sync",
+            data = win32crypt.CryptProtectData(data, "Lexomorph vocabulary sync",
                                                _DPAPI_ENTROPY, None, None, 0)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         temp = self._path.with_suffix(".tmp")
@@ -271,7 +298,7 @@ class VocabularySync:
         request = urllib.request.Request(url, data=data, method=method, headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": f"SuperDictate/{VERSION} (Windows)",
+            "User-Agent": f"Lexomorph/{VERSION} (Windows)",
         })
         if token:
             request.add_header("Authorization", f"Bearer {token}")

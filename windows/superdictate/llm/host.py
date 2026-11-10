@@ -1,6 +1,6 @@
 """The local LLM host process, and the OpenAI-compatible client for it.
 
-Builds ship ``superdictate-llm-host.exe``, the hand-written C++ host the
+Builds ship ``lexomorph-llm-host.exe``, the hand-written C++ host the
 macOS build spawns (``swift/Sources/llama_cpp_host/bridge/``, built with
 CPU and Vulkan backends by ``tools/build-engines.ps1``); llama.cpp's own
 ``llama-server`` (``tools/fetch-llama.ps1``, ``engines\\llama``) is the
@@ -140,7 +140,7 @@ def llama_server_executable() -> "os.PathLike[str]":
 
 def own_host_executable() -> "os.PathLike[str]":
     """The hand-written host shared with macOS (tools/build-engines.ps1)."""
-    return paths.resource_path("engines", "superdictate-llm-host.exe")
+    return paths.resource_path("engines", "lexomorph-llm-host.exe")
 
 
 def host_executable() -> "os.PathLike[str]":
@@ -169,7 +169,7 @@ LLM_MAX_THREADS = 8
 
 
 def llm_thread_count(physical_cores: Optional[int] = None) -> int:
-    override = os.environ.get("SUPERDICTATE_LLM_THREADS", "")
+    override = (paths.env("LLM_THREADS") or "")
     if override.isdigit() and 1 <= int(override) <= 64:
         return int(override)
     if physical_cores is None:
@@ -408,7 +408,7 @@ def chat_completion(base_url: str, messages: Sequence[Message], *,
                     max_tokens: int = 512,
                     temperature: Optional[float] = None,
                     api_key: str = "",
-                    model: str = "superdictate-llm-host",
+                    model: str = "lexomorph-llm-host",
                     use_system_proxy: bool = True,
                     timeout: float = REQUEST_TIMEOUT_SECONDS) -> str:
     """POST ``/v1/chat/completions`` and return the assistant's content.

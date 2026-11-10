@@ -1,4 +1,4 @@
-"""``SuperDictateOvHost``: the NPU speech-recognition host.
+"""``LexomorphOvHost``: the NPU speech-recognition host.
 
 The OpenVINO twin of ``native/asr-runtime/host/onnx_host_main.cpp``: one
 helper process, one model, framed IPC v1 on stdin/stdout, so the app talks
@@ -13,7 +13,7 @@ loaded on the CPU instead, and the status says so (``provider_actual`` and
 ``provider_fallback_reason``), the way the ONNX host reports a provider it
 could not get.
 
-Entry points: ``SuperDictateOvHost.exe`` in a packaged build
+Entry points: ``LexomorphOvHost.exe`` in a packaged build
 (``ov_host_main.py``), ``python main.py --openvino-host`` from a checkout.
 """
 
@@ -64,7 +64,7 @@ _STATUS_NAMES = {
 
 def _log(message: str) -> None:
     try:
-        sys.stderr.write(f"SuperDictateOvHost: {message}\n")
+        sys.stderr.write(f"LexomorphOvHost: {message}\n")
         sys.stderr.flush()
     except (OSError, ValueError, AttributeError):
         pass

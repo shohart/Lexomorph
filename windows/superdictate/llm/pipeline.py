@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional
 
+from .. import i18n
 from ..logging_setup import get as get_logger
 from . import guardrail, prompts
 from .download import is_present
@@ -408,7 +409,7 @@ class LLMPostprocessor:
         )
         cold = not self._pool_has(spec)
         if cold and self.on_load_stage is not None:
-            self._notify(self.on_load_stage, "Загружается модель…")
+            self._notify(self.on_load_stage, i18n.tr("toast_loading_model"))
         try:
             host = self._pool.get(spec)
         finally:

@@ -269,7 +269,9 @@ _DEFAULTS: dict[str, Any] = {
     "alternate_completion_enabled": True,
     "primary_completion_behavior": CompletionBehavior.INSERT.value,
     "text_style": TextStyle.FORMAL.value,
-    "interface_language": "ru",
+    # "auto": never chosen, follow the system language (Russian locale -> ru,
+    # anything else -> en). A saved "ru"/"en" is a choice and is respected.
+    "interface_language": "auto",
     "trigger_mode": TriggerMode.TOGGLE.value,
     "paste_suffix": PasteSuffix.SPACE.value,
     "enter_delay_milliseconds": 120,
@@ -305,7 +307,7 @@ _DEFAULTS: dict[str, Any] = {
     # is its own setting.
     "speech_model_profile": "parakeet_ultra_onnx",  # parakeet_ultra_onnx | gigaam_v3_onnx
     # Where recognition runs, Windows only: cpu (ONNX Runtime in
-    # SuperDictateOnnxHost) | npu (OpenVINO in SuperDictateOvHost, offered
+    # LexomorphOnnxHost) | npu (OpenVINO in LexomorphOvHost, offered
     # only on machines with an Intel NPU). Same profile either way; the NPU
     # runs its own OpenVINO build of that model.
     "speech_compute_backend": "cpu",
@@ -514,7 +516,11 @@ class Settings:
     @property
     def interface_language(self) -> str:
         value = self._get("interface_language")
-        return value if value in ("ru", "en") else "ru"
+        if value in ("ru", "en"):
+            return value
+        from . import i18n
+
+        return i18n.system_language()
 
     @property
     def trigger_mode(self) -> TriggerMode:

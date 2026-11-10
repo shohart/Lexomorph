@@ -57,7 +57,7 @@ for _i in range(1, 25):  # F1..F24
     _NAMES[0x6F + _i] = (f"F{_i}", f"F{_i}")
 
 
-def key_name(vk: int, language: str = "ru") -> str:
+def key_name(vk: int, language: str = "en") -> str:
     pair = _NAMES.get(vk)
     if pair is not None:
         return pair[0] if language == "ru" else pair[1]
@@ -86,7 +86,7 @@ _MOD_LABELS: list[tuple[int, str, str]] = [
 ]
 
 
-def hotkey_name(choice: HotkeyChoice, language: str = "ru") -> str:
+def hotkey_name(choice: HotkeyChoice, language: str = "en") -> str:
     parts = [
         (ru if language == "ru" else en)
         for flag, ru, en in _MOD_LABELS

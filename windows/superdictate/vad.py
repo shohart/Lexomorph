@@ -84,7 +84,7 @@ def ensure_model() -> bool:
     os.makedirs(os.path.dirname(target), exist_ok=True)
     partial = target + ".part"
     try:
-        request = urllib.request.Request(VAD_MODEL_URL, headers={"User-Agent": "SuperDictate"})
+        request = urllib.request.Request(VAD_MODEL_URL, headers={"User-Agent": "Lexomorph"})
         with urllib.request.urlopen(request, timeout=60) as response:
             data = response.read(VAD_MODEL_SIZE + 1)
         if len(data) != VAD_MODEL_SIZE:

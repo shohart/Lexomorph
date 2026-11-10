@@ -381,8 +381,8 @@ class Sounds:
 # -- autostart -----------------------------------------------------------
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_RUN_VALUE = "SuperDictate"
-# The app was called D1CT before 1.8.0 (and SuperDictate before 1.5.0).
+_RUN_VALUE = "Lexomorph"
+# The app was called D1CT, then Dictation, then SuperDictate (until 0.10.0).
 # Its autostart entry names an executable that is no longer installed, so
 # it is cleared whenever this one is written or removed; left alone it
 # would fail silently at every login.
@@ -533,11 +533,11 @@ class SingleInstance:
             self._handle = None
 
 
-SHOW_PANEL_MESSAGE = "SuperDictate.ShowControlPanel"
+SHOW_PANEL_MESSAGE = "Lexomorph.ShowControlPanel"
 
 # The identity Windows groups taskbar buttons and pinned shortcuts by. The
 # installer stamps the same string onto the shortcuts it creates.
-APP_USER_MODEL_ID = "local.SuperDictate"
+APP_USER_MODEL_ID = "local.Lexomorph"
 
 
 def set_app_user_model_id(app_id: str = APP_USER_MODEL_ID) -> None:

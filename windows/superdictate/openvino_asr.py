@@ -1,9 +1,9 @@
 """Speech recognition on the Intel NPU, through OpenVINO.
 
-The NPU models are OpenVINO IR, not ONNX, so ``SuperDictateOnnxHost``
+The NPU models are OpenVINO IR, not ONNX, so ``LexomorphOnnxHost``
 cannot load them; this module is their counterpart of
 ``native/asr-runtime/src/families``. It runs only inside
-``SuperDictateOvHost`` (:mod:`superdictate.openvino_host`), never in the app
+``LexomorphOvHost`` (:mod:`superdictate.openvino_host`), never in the app
 process, for the same reason the ONNX runtime lives in a helper: graph
 compilation is seconds to minutes of native work the panel must not wait on.
 

@@ -141,7 +141,7 @@ def download(pin: ModelPin, *,
         have = 0
 
     request = urllib.request.Request(pin.url, headers={
-        "User-Agent": "SuperDictate-Windows",
+        "User-Agent": "Lexomorph-Windows",
     })
     if have:
         request.add_header("Range", f"bytes={have}-")

@@ -2,7 +2,7 @@
 
 A ModernBERT token classifier (Horizon-Labs/punctuation-restoration Small or
 Base, Apache-2.0) predicts a mark after every word. It runs on the CPU in its
-own ``SuperDictateOnnxHost`` process, the same native runtime as on macOS
+own ``LexomorphOnnxHost`` process, the same native runtime as on macOS
 (native/asr-runtime/src/families/modernbert_punct.cpp; the merge with the
 marks earlier stages set is in punct_text.cpp). Spec:
 docs/specs/punctuation-restoration-spec.md.
@@ -99,7 +99,7 @@ class PunctuationRestorer:
             return None
         executable = onnx_models.host_executable()
         if executable is None:
-            log.warning("Punctuation: SuperDictateOnnxHost.exe is missing")
+            log.warning("Punctuation: LexomorphOnnxHost.exe is missing")
             return None
         started = time.monotonic()
         host = OnnxHost([str(executable)], cwd=executable.parent,

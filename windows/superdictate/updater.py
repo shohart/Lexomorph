@@ -87,7 +87,7 @@ def check_latest(timeout: int = REQUEST_TIMEOUT) -> Optional[UpdateInfo]:
         RELEASES_URL,
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": f"SuperDictate-Windows/{VERSION}",
+            "User-Agent": f"Lexomorph-Windows/{VERSION}",
         },
     )
     try:
