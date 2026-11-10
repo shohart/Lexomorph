@@ -68,6 +68,7 @@ from ..textproc import PRESET_FILLERS
 from ..updater import PeriodicChecker
 from . import icons
 from .recorder import ShortcutRecorderDialog
+from .style_editor import CustomStylesBlock
 from .rows import (HINT_NONE, HINT_OFF, HINT_ON, HINT_ROLE, PRIMARY_ROLE, SECONDARY_ROLE,
                    CorrectionRowDelegate)
 from .theme import Palette, palette, stylesheet
@@ -1063,11 +1064,18 @@ class SettingsWindow(QDialog):
                           i18n.tr("settings_rewrite_hint"))
         self._rewrite_enabled = self._checkbox(
             rewrite, "settings_rewrite_enabled", "rewrite_enabled_v1")
-        self._rewrite_style = self._combo(
-            rewrite, "settings_rewrite_style", "rewrite_style_v1",
-            [(style.value, i18n.tr(f"rewrite_style_{style.value}"))
-             for style in RewriteStyle],
-        )
+        # Built-in modes plus the user's own, in one list. Two settings
+        # behind it: a built-in is ``rewrite_style_v1``, a custom mode is
+        # ``rewrite_custom_style_id_v1`` (see ``_select_rewrite_style``).
+        self._rewrite_style = QComboBox()
+        self._reload_style_combo()
+        self._rewrite_style.currentIndexChanged.connect(self._select_rewrite_style)
+        rewrite.add_row(i18n.tr("settings_rewrite_style"), self._rewrite_style)
+        self._custom_styles = CustomStylesBlock(
+            self._controller.styles, self._settings, self._controller,
+            self._palette, self._reload_style_combo)
+        rewrite.add_row(None, self._custom_styles)
+        self._controller.custom_styles_changed.connect(self._on_styles_changed)
         if bundled:
             self._combo(rewrite, "settings_llm_engine", "rewrite_engine_backend_v1", engines)
             self._rewrite_model = self._combo(
@@ -1113,6 +1121,46 @@ class SettingsWindow(QDialog):
             self._model_rows[model] = self._model_row(models, model, PROFILES[model])
 
         return _page(correction, rewrite, punctuation, network, device, models)
+
+    def _reload_style_combo(self) -> None:
+        """Rebuild the mode list from the store, keeping the selection.
+
+        A selected custom mode that is gone (deleted here, or on another
+        machine) falls back to «Причесать», as the store does for the saved
+        setting.
+        """
+        from ..llm import RewriteStyle
+
+        combo = self._rewrite_style
+        custom = self._controller.styles.all()
+        wanted = (str(self._draft.get("rewrite_custom_style_id_v1") or "")
+                  or str(self._draft.get("rewrite_style_v1") or ""))
+        known = {style.id for style in custom} | {style.value for style in RewriteStyle}
+        if wanted not in known:
+            wanted = "polish"
+        combo.blockSignals(True)
+        combo.clear()
+        for style in RewriteStyle:
+            combo.addItem(i18n.tr(f"rewrite_style_{style.value}"), style.value)
+        for style in custom:
+            combo.addItem(style.name, style.id)
+            combo.setItemIcon(combo.count() - 1, icons.swatch(style.color, 13))
+        combo.setCurrentIndex(max(0, combo.findData(wanted)))
+        combo.blockSignals(False)
+        self._select_rewrite_style()
+
+    def _select_rewrite_style(self, _index: int = 0) -> None:
+        value = str(self._rewrite_style.currentData() or "polish")
+        if value.startswith("c-"):
+            self._draft["rewrite_custom_style_id_v1"] = value
+        else:
+            self._draft["rewrite_custom_style_id_v1"] = ""
+            self._draft["rewrite_style_v1"] = value
+
+    def _on_styles_changed(self, _kind: str = "") -> None:
+        """The account sync changed the modes while this window is open."""
+        self._reload_style_combo()
+        self._custom_styles.reload()
 
     def _endpoint_fields(self, section: "Section", prefix: str) -> None:
         """Base URL, API key and model name of one stage's endpoint."""

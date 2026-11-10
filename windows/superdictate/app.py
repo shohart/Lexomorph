@@ -34,10 +34,11 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from . import (asr, audio, dictation_trace, edit_watch, focus_target, i18n, incremental, inject, system,
                textproc, transcription, vocabulary_hygiene)
 from .history import History, HistoryEntry, UsageStats
-from .hotkeys import Action, HotkeyListener
+from .hotkeys import STYLE_ACTION_PREFIX, Action, HotkeyListener
 from .llm import LLMPostprocessor
 from .punctuation import PunctuationRestorer
 from .vocabulary import LearnCandidate, VocabularyStore, migrate_json_if_needed
+from .rewrite_styles import StyleStore
 from .vocabulary_sync import VocabularySync
 from .logging_setup import get as get_logger
 from .settings import CompletionBehavior, Settings
@@ -141,6 +142,9 @@ class DictationController(QObject):
     # The dictionary changed: "local" (a write here) or "sync" (applied
     # from the account). Open vocabulary lists reload.
     vocabulary_changed = Signal(str)
+    # The custom rewrite modes changed ("local" or "sync"): open lists
+    # reload and the hotkey listener learns the new shortcuts.
+    custom_styles_changed = Signal(str)
     # Account sync status (vocabulary_sync.SyncStatus), for the settings.
     vocabulary_sync_status = Signal(object)
 
@@ -159,8 +163,14 @@ class DictationController(QObject):
         self.corrections.add_listener(self.vocabulary_changed.emit)
         # Account sync (vocabulary-hygiene-and-sync spec §4); idle until
         # the user signs in from the settings.
+        # The custom rewrite modes and the usage statistics ride the same
+        # pass (modes-and-usage-sync spec).
+        self.styles = StyleStore(settings)
+        self.styles.add_listener(self.custom_styles_changed.emit)
+        self.custom_styles_changed.connect(self._on_custom_styles_changed)
         self.vocabulary_sync = VocabularySync(
-            self.corrections, settings, on_status=self.vocabulary_sync_status.emit)
+            self.corrections, settings, on_status=self.vocabulary_sync_status.emit,
+            styles=self.styles, usage=self.usage)
         # Post-processing hosts are started lazily, on the first dictation
         # that actually needs one — a multi-GB model must not be loaded at
         # launch for a feature the user may never turn on.
@@ -418,9 +428,18 @@ class DictationController(QObject):
         self.listener.correction_hotkey = self.settings.correction_hotkey
         self.listener.rewrite_hotkey = self.settings.rewrite_hotkey
         self.listener.rewrite_style_hotkey = self.settings.rewrite_style_hotkey
+        self._apply_style_hotkeys()
         self.listener.enter_hotkey = (self.settings.enter_hotkey
                                       if self.settings.alternate_completion_enabled else None)
         self.listener.trigger_mode = self.settings.trigger_mode
+        self.listener.reset_state()
+
+    def _apply_style_hotkeys(self) -> None:
+        self.listener.style_hotkeys = {
+            style.id: style.hotkey for style in self.styles.all() if style.hotkey}
+
+    def _on_custom_styles_changed(self, _kind: str) -> None:
+        self._apply_style_hotkeys()
         self.listener.reset_state()
 
     def reload_model(self) -> None:
@@ -434,10 +453,14 @@ class DictationController(QObject):
     # -- hotkey plumbing ----------------------------------------------
 
     def _on_hotkey_actions(self, actions) -> None:
-        self._action_bridge.actions.emit([action.value for action in actions])
+        self._action_bridge.actions.emit(
+            [getattr(action, "value", action) for action in actions])
 
     def _handle_actions(self, action_values: list[str]) -> None:
         for value in action_values:
+            if value.startswith(STYLE_ACTION_PREFIX):
+                self.activate_rewrite_style(value[len(STYLE_ACTION_PREFIX):])
+                continue
             action = Action(value)
             if action is Action.PRESS:
                 self.begin_recording()
@@ -491,34 +514,60 @@ class DictationController(QObject):
                  "enabled" if enabled else "disabled")
         self._after_postprocessing_toggle(enabled)
         if enabled:
-            style = self.settings.rewrite_config().style
-            self.state_toast_requested.emit(
-                i18n.tr("toast_rewrite_on",
-                        style=i18n.tr(f"rewrite_style_{style.value}")),
-                style.value)
+            config = self.settings.rewrite_config()
+            custom = self.styles.get(config.custom_style_id) \
+                if config.custom_style_id else None
+            if custom is not None:
+                self.state_toast_requested.emit(
+                    i18n.tr("toast_rewrite_on", style=custom.name), custom.color)
+            else:
+                self.state_toast_requested.emit(
+                    i18n.tr("toast_rewrite_on",
+                            style=i18n.tr(f"rewrite_style_{config.style.value}")),
+                    config.style.value)
         else:
             self.state_toast_requested.emit(i18n.tr("toast_rewrite_off"), "off")
 
     def cycle_rewrite_style(self) -> None:
-        """Step to the next built-in style, turning rewrite on if it was off.
+        """Step to the next style, turning rewrite on if it was off.
 
-        Pressing a style shortcut is asking for that style, so it would be
-        obtuse to change the setting and leave the stage disabled.
+        Built-ins first, then the user's own modes in creation order, as on
+        macOS. Pressing a style shortcut is asking for that style, so it
+        would be obtuse to change the setting and leave the stage disabled.
         """
         from .llm import RewriteStyle
 
-        styles = list(RewriteStyle)
-        current = self.settings.rewrite_config().style
-        following = styles[(styles.index(current) + 1) % len(styles)]
-        self.settings.set_rewrite_style(following)
+        order = [style.value for style in RewriteStyle] + [
+            style.id for style in self.styles.all()]
+        config = self.settings.rewrite_config()
+        current = config.custom_style_id or config.style.value
+        index = order.index(current) if current in order else len(order) - 1
+        self.activate_rewrite_style(order[(index + 1) % len(order)])
+
+    def activate_rewrite_style(self, style_id: str) -> None:
+        """Select a built-in style (by value) or a custom mode (by id) and
+        turn rewrite on; the toast carries the mode's own colour."""
+        from .llm import RewriteStyle
+
+        custom = self.styles.get(style_id)
+        if custom is not None:
+            self.settings.update_runtime({"rewrite_custom_style_id_v1": custom.id})
+            name, tone = custom.name, custom.color
+        else:
+            try:
+                builtin = RewriteStyle(style_id)
+            except ValueError:
+                log.info("rewrite style hotkey: unknown style %r; ignoring", style_id)
+                return
+            self.settings.update_runtime({"rewrite_custom_style_id_v1": ""})
+            self.settings.set_rewrite_style(builtin)
+            name, tone = i18n.tr(f"rewrite_style_{builtin.value}"), builtin.value
         if not self.settings.rewrite_enabled:
             self.settings.set_rewrite_enabled(True)
             self.postprocessor.cancel_scheduled_unload()
-        log.info("text rewrite style: %s via hotkey", following.value)
-        self.state_toast_requested.emit(
-            i18n.tr("toast_rewrite_style",
-                    style=i18n.tr(f"rewrite_style_{following.value}")),
-            following.value)
+        log.info("text rewrite style: %s via hotkey", style_id)
+        self.state_toast_requested.emit(i18n.tr("toast_rewrite_style", style=name), tone)
+        self.settings_applied.emit()
 
     def _watch_npu_compile(self, model) -> None:
         """Until the background NPU compile ends, ask the host every

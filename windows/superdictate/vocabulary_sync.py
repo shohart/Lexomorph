@@ -162,7 +162,7 @@ class SyncStatus:
 # -- helpers ---------------------------------------------------------------
 
 def _timestamp() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())  # UTC, like updated_at
 
 
 def _sendable(text: str) -> bool:
@@ -211,8 +211,13 @@ class VocabularySync:
 
     def __init__(self, store, settings, *, tokens=None,
                  on_status: Optional[Callable[[SyncStatus], None]] = None,
-                 platform: str = "windows", version: str = VERSION) -> None:
+                 platform: str = "windows", version: str = VERSION,
+                 styles=None, usage=None) -> None:
         self._store = store
+        #: rewrite_styles.StyleStore / history.UsageStats, both optional:
+        #: without them the pass is the vocabulary's alone.
+        self._styles = styles
+        self._usage = usage
         self._settings = settings
         self._tokens = tokens if tokens is not None else DpapiTokenStore()
         self._on_status = on_status
@@ -225,6 +230,8 @@ class VocabularySync:
         self._due_lock = threading.Lock()
         self._status = self._initial_status()
         store.add_listener(self._on_store_change)
+        if styles is not None:
+            styles.add_listener(self._on_store_change)
 
     # -- status ----------------------------------------------------------
 
@@ -315,6 +322,9 @@ class VocabularySync:
         if not token:
             raise SyncError(ERROR_SERVER, "no token in the response")
         self._tokens.save(token)
+        # Another account's other devices must not stay in the totals.
+        if self._usage is not None:
+            self._usage.forget_remote()
         account = str(response.get("email") or email)
         # A new device, or another account: merge everything, both ways.
         self._settings.update_runtime({
@@ -341,6 +351,8 @@ class VocabularySync:
             except SyncError as exc:
                 log.info("Vocabulary sync: sign-out request failed (%s); token dropped anyway", exc)
         self._tokens.clear()
+        if self._usage is not None:
+            self._usage.forget_remote()
         self._settings.update_runtime({
             "vocabulary_sync_enabled": False,
             "vocabulary_sync_last_server_revision": 0,
@@ -401,15 +413,29 @@ class VocabularySync:
 
         hotwords = _hotword_changes(*self._store.hotword_changes_since(stamp))
 
+        styles = self._styles.changes_since(stamp) if self._styles is not None else []
+        usage = self._usage.own_rows_since(stamp) if self._usage is not None else []
+
         applied = 0
         hotwords_dropped = False
+        styles_dropped = False
+        usage_dropped = False
         start = 0
         while True:
             batch = changes[start:start + BATCH_SIZE]
             hotword_batch = hotwords[start:start + BATCH_SIZE]
-            response = self._request("POST", "/v1/vocabulary", {
-                "since": since, "changes": batch, "hotwords": hotword_batch,
-                "client": self._client}, token=token)
+            style_batch = styles[start:start + BATCH_SIZE]
+            usage_batch = usage[start:start + BATCH_SIZE]
+            body = {"since": since, "changes": batch, "hotwords": hotword_batch,
+                    "client": self._client}
+            # Only sent when there is something: a server that predates
+            # the collections would ignore them, and an old one must not
+            # be handed fields it never asked for.
+            if style_batch:
+                body["styles"] = style_batch
+            if usage_batch:
+                body["usage"] = usage_batch
+            response = self._request("POST", "/v1/vocabulary", body, token=token)
             entries = response.get("entries")
             applied += self._store.apply_remote(entries if isinstance(entries, list) else [])
             remote_hotwords = response.get("hotwords")
@@ -419,19 +445,40 @@ class VocabularySync:
                 # A server that predates hotwords dropped them: keep the
                 # cursor so they go out again once it is upgraded.
                 hotwords_dropped = True
+            remote_styles = response.get("styles")
+            if isinstance(remote_styles, list):
+                # No "local" notification: applying the server's styles must
+                # not start another pass.
+                if self._styles is not None:
+                    applied += self._styles.apply_remote(remote_styles)
+            elif style_batch:
+                styles_dropped = True
+            remote_usage = response.get("usage")
+            if isinstance(remote_usage, list):
+                if self._usage is not None:
+                    applied += self._usage.apply_remote(remote_usage)
+            elif usage_batch:
+                usage_dropped = True
             try:
                 since = max(since, int(response.get("revision", since)))
             except (TypeError, ValueError):
                 raise SyncError(ERROR_SERVER, "bad revision in the response")
             self._settings.update_runtime({"vocabulary_sync_last_server_revision": since})
             start += BATCH_SIZE
-            if start >= len(changes) and start >= len(hotwords):
+            if (start >= len(changes) and start >= len(hotwords)
+                    and start >= len(styles) and start >= len(usage)):
                 break
-        if hotwords_dropped:
-            log.info("Vocabulary sync: the server does not store hotwords yet; will push them again")
+        if hotwords_dropped or styles_dropped or usage_dropped:
+            # The cursor stays, so the dropped collections go out again once
+            # the server is upgraded (the vocabulary is re-sent with them,
+            # which is idempotent).
+            log.info("Vocabulary sync: the server does not store %s yet; will push again",
+                     ", ".join(name for name, dropped in (
+                         ("hotwords", hotwords_dropped), ("styles", styles_dropped),
+                         ("usage", usage_dropped)) if dropped))
         else:
             self._settings.update_runtime({"vocabulary_sync_last_pushed_local_stamp": started})
-        return applied, len(changes) + len(hotwords)
+        return applied, len(changes) + len(hotwords) + len(styles) + len(usage)
 
     # -- triggers ------------------------------------------------------------
 

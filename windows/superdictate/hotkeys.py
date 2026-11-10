@@ -184,6 +184,12 @@ class Action(str, Enum):
     LEARN_CANCEL = "learn_cancel"
 
 
+#: A custom rewrite mode's own shortcut: the action is this prefix plus the
+#: style id (a plain string next to the :class:`Action` values, because the
+#: set of styles is the user's, not the enum's).
+STYLE_ACTION_PREFIX = "activate_style:"
+
+
 class _Edge(str, Enum):
     PRESS = "press"
     RELEASE = "release"
@@ -325,6 +331,7 @@ class HotkeyStateMachine:
         self._rewrite = _ShortcutState()
         self._rewrite_style = _ShortcutState()
         self._enter = _ShortcutState()
+        self._styles: dict[str, _ShortcutState] = {}
         self._toggle_active = False
         self._suppress_escape_up = False
         self._suppress_return_up = False
@@ -338,6 +345,7 @@ class HotkeyStateMachine:
         self._rewrite.reset()
         self._rewrite_style.reset()
         self._enter.reset()
+        self._styles.clear()
         self._toggle_active = False
         self._suppress_escape_up = False
         self._suppress_return_up = False
@@ -361,6 +369,7 @@ class HotkeyStateMachine:
         rewrite_style_hotkey: HotkeyChoice = DEFAULT_REWRITE_STYLE_HOTKEY,
         enter_hotkey: Optional[HotkeyChoice] = None,
         learn_pending: bool = False,
+        style_hotkeys: Optional[dict] = None,
     ) -> _Result:
         # Recording-start edge (macOS adoptPrimaryModifierDown): an
         # alternate finish built on the dictation key itself has that key
@@ -404,6 +413,24 @@ class HotkeyStateMachine:
                 state, event, is_recording, shortcut, action)
             if handled is not None:
                 return handled
+
+        # The custom modes' own chords, after the built-in ones. More
+        # modifiers first, as with the style cycle above: a chord that is
+        # another's prefix must not answer for it.
+        if style_hotkeys:
+            self._styles = {key: state for key, state in self._styles.items()
+                            if key in style_hotkeys}
+            for style_id, shortcut in sorted(
+                    style_hotkeys.items(),
+                    key=lambda item: -bin(item[1].modifiers).count("1")):
+                state = self._styles.setdefault(style_id, _ShortcutState())
+                handled = self._transition_chord(
+                    state, event, is_recording, shortcut,
+                    STYLE_ACTION_PREFIX + style_id)
+                if handled is not None:
+                    return handled
+        elif self._styles:
+            self._styles.clear()
 
         consumed = self._standard.consume(event, hotkey)
         if consumed.edge == _Edge.PASS:
@@ -615,6 +642,8 @@ class HotkeyListener:
         self.correction_hotkey = DEFAULT_CORRECTION_HOTKEY
         self.rewrite_hotkey = DEFAULT_REWRITE_HOTKEY
         self.rewrite_style_hotkey = DEFAULT_REWRITE_STYLE_HOTKEY
+        #: Custom rewrite modes' shortcuts, ``{style id: HotkeyChoice}``.
+        self.style_hotkeys: dict[str, HotkeyChoice] = {}
         #: None turns the alternate finish off.
         self.enter_hotkey: Optional[HotkeyChoice] = DEFAULT_ENTER_HOTKEY
         self.trigger_mode = TriggerMode.TOGGLE
@@ -777,6 +806,7 @@ class HotkeyListener:
                     is_recording=self.is_recording_active(),
                     can_start_recording=self.can_start_recording(),
                     learn_pending=self.is_learn_pending(),
+                    style_hotkeys=self.style_hotkeys,
                 )
             except Exception:  # a raising hook is an evicted hook
                 return user32.CallNextHookEx(None, code, wparam, lparam)

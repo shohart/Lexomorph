@@ -915,6 +915,145 @@ def test_custom_hotwords_store() -> None:
         store.close()
 
 
+def _FakeController(settings, saved: list):
+    """The slice of the app controller the settings window touches."""
+    from PySide6.QtCore import QObject, Signal
+
+    from .rewrite_styles import StyleStore
+
+    class Listener:
+        paused = False
+
+        def reset_state(self) -> None:
+            pass
+
+    class Controller(QObject):
+        custom_styles_changed = Signal(str)
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.styles = StyleStore(settings)
+            self.styles.add_listener(self.custom_styles_changed.emit)
+            self.listener = Listener()
+
+        def apply_settings(self) -> None:
+            saved.append(True)
+
+        def reload_model(self) -> None:
+            saved.append(True)
+
+    return Controller()
+
+
+def test_custom_styles_window() -> None:
+    """The mode list, the editor dialog and the stats caption, by their widgets."""
+    from PySide6.QtWidgets import QApplication
+
+    from .hotkeys import HotkeyChoice
+    from .settings import Settings
+    from .ui.settings_window import SettingsWindow
+    from .ui.stats import StatsPanel
+    from .ui.style_editor import StyleEditorDialog
+    from .vocabulary import VocabularyStore
+
+    app = QApplication.instance() or QApplication([])
+    work = Path(tempfile.mkdtemp(prefix="sd-styles-ui-"))
+    store = VocabularyStore(str(work / "d.sqlite"))
+    settings = Settings(path=work / "s.json")
+    controller = _FakeController(settings, [])
+    window = SettingsWindow(settings, store, controller)
+    combo = window._rewrite_style
+    try:
+        _check("modes UI: the built-ins are listed",
+               [combo.itemData(i) for i in range(combo.count())],
+               ["polish", "structured_task", "official"])
+        dialog = StyleEditorDialog(controller.styles, settings, controller, None, window)
+        dialog._name.setText("Мой режим")
+        dialog._instruction.setPlainText("Сделай коротко.")
+        dialog._pick("#bf5af2")
+        dialog._hotkey = HotkeyChoice(0x31, 0x3)
+        dialog._accept()
+        created = dialog.result_style
+        _check("modes UI: the dialog creates the mode",
+               (created.name, created.color, created.hotkey, created.id.startswith("c-")),
+               ("Мой режим", "#BF5AF2", HotkeyChoice(0x31, 0x3), True))
+        app.processEvents()
+        _check("modes UI: the drop-down lists built-ins + custom",
+               [combo.itemData(i) for i in range(combo.count())][-2:], ["official", created.id])
+        from PySide6.QtWidgets import QLabel, QPushButton
+
+        shown = [w.text() for w in window._custom_styles.findChildren(QLabel)]
+        _check("modes UI: the block shows the mode and its hotkey",
+               ("Мой режим" in shown, "Ctrl + Alt + 1" in shown or any("1" in t for t in shown)),
+               (True, True))
+        _check("modes UI: Edit, Delete and New buttons are there",
+               sorted(w.text() for w in window._custom_styles.findChildren(QPushButton)),
+               sorted(["＋ Новый режим", "Изменить", "Удалить"]))
+
+        combo.setCurrentIndex(combo.findData(created.id))
+        _check("modes UI: choosing a custom mode fills the draft",
+               window._draft["rewrite_custom_style_id_v1"], created.id)
+        combo.setCurrentIndex(combo.findData("official"))
+        _check("modes UI: choosing a built-in clears it",
+               (window._draft["rewrite_custom_style_id_v1"], window._draft["rewrite_style_v1"]),
+               ("", "official"))
+
+        # A clash with another shortcut is explained, nothing is saved.
+        other = StyleEditorDialog(controller.styles, settings, controller, None, window)
+        other._name.setText("Второй")
+        other._instruction.setPlainText("x")
+        other._hotkey = HotkeyChoice(0x31, 0x3)
+        other._accept()
+        _check("modes UI: a taken hotkey is refused",
+               (other.result_style, other._error.isHidden(), len(controller.styles.all())),
+               (None, False, 1))
+        other._hotkey = settings.rewrite_style_hotkey
+        other._accept()
+        _check("modes UI: a built-in shortcut is refused too",
+               (other.result_style, len(controller.styles.all())), (None, 1))
+        other._name.setText("")
+        other._hotkey = None
+        other._accept()
+        _check("modes UI: an empty name is refused", len(controller.styles.all()), 1)
+
+        # Deleting the selected mode (here or from the sync) falls back to polish.
+        combo.setCurrentIndex(combo.findData(created.id))
+        controller.styles.delete(created.id)
+        app.processEvents()
+        _check("modes UI: the deleted mode leaves the drop-down",
+               combo.findData(created.id), -1)
+        _check("modes UI: ...and the selection falls back to polish",
+               (combo.currentData(), window._draft["rewrite_custom_style_id_v1"],
+                window._draft["rewrite_style_v1"]), ("polish", "", "polish"))
+        controller.styles.apply_remote([{
+            "id": "c-remote", "name": "С сервера", "color": "#00C7BE", "instruction": "i",
+            "deleted": False, "updated_at": "2099-01-01T00:00:00Z"}])
+        app.processEvents()
+        _check("modes UI: a synced mode appears in the open window",
+               combo.findData("c-remote") >= 0, True)
+
+        # The statistics say which scope they show.
+        from . import history, paths
+
+        saved = (paths.USAGE_FILE, paths.ensure_directories)
+        try:
+            usage = _usage_stats(work, "ui")
+            on = [False]
+            panel = StatsPanel(usage, lambda: on[0])
+            panel.show()
+            _check("stats UI: no caption without sync", panel._scope.isVisible(), False)
+            on[0] = True
+            panel.refresh()
+            _check("stats UI: the all-devices caption with sync", panel._scope.isVisible(), True)
+            panel.close()
+        finally:
+            paths.USAGE_FILE, paths.ensure_directories = saved
+    finally:
+        window.hide()
+        window.deleteLater()
+        store.close()
+
+
 def test_custom_hotwords_window() -> None:
     """The «ASR-термины» section of the real settings window, by its widgets."""
     from PySide6.QtCore import Qt
@@ -930,14 +1069,9 @@ def test_custom_hotwords_window() -> None:
     store = VocabularyStore(str(work / "d.sqlite"))
     saved: list[bool] = []
 
-    class Controller:
-        def apply_settings(self) -> None:
-            saved.append(True)
-
-        def reload_model(self) -> None:
-            saved.append(True)
-
-    window = SettingsWindow(Settings(path=work / "s.json"), store, Controller())
+    settings = Settings(path=work / "s.json")
+    controller = _FakeController(settings, saved)
+    window = SettingsWindow(settings, store, controller)
     messages: list[str] = []
     window._warn = messages.append
     field, listing = window._custom_hotword_field, window._custom_hotwords_list
@@ -1025,9 +1159,551 @@ def test_sync_settings_and_token() -> None:
     _check("token: cleared", (tokens.load(), path.exists()), (None, False))
 
 
+
+# -- custom rewrite modes and usage statistics (modes-and-usage-sync spec) ----
+
+def _style_settings(work: Path, name: str = "s"):
+    from .settings import Settings
+
+    return Settings(path=work / f"{name}.json")
+
+
+def test_custom_styles_store() -> None:
+    """Create / edit / delete, the saved shape, the fallback, the draft rule."""
+    from .hotkeys import HotkeyChoice
+    from .rewrite_styles import MAX_INSTRUCTION, MAX_NAME, StyleStore, valid_id
+
+    work = Path(tempfile.mkdtemp(prefix="sd-styles-selftest-"))
+    settings = _style_settings(work)
+    store = StyleStore(settings)
+    kinds: list[str] = []
+    store.add_listener(kinds.append)
+
+    key = HotkeyChoice(0x31, 0x2 | 0x1)  # Ctrl+Alt+1 (modifier values do not matter here)
+    first = store.create("  Деловой   тон ", "Перепиши строго.", "#ff8800", key)
+    _check("styles: id is c-<uuid>", (valid_id(first.id), first.id.startswith("c-"), len(first.id)),
+           (True, True, 38))
+    _check("styles: name is trimmed and squeezed", first.name, "Деловой тон")
+    _check("styles: colour is normalised", first.color, "#FF8800")
+    _check("styles: updated_at is ISO UTC",
+           bool(__import__("re").match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$", first.updated_at)), True)
+    _check("styles: a local create notifies as local", kinds, ["local"])
+
+    for bad, which in (("", "name"), ("x" * (MAX_NAME + 1), "name")):
+        try:
+            store.create(bad, "ok")
+            outcome = "accepted"
+        except ValueError as exc:
+            outcome = str(exc)
+        _check(f"styles: name {bad[:5]!r} refused", outcome, which)
+    for bad in ("", "   ", "y" * (MAX_INSTRUCTION + 1)):
+        try:
+            store.create("ok", bad)
+            outcome = "accepted"
+        except ValueError as exc:
+            outcome = str(exc)
+        _check("styles: instruction refused", outcome, "instruction")
+    _check("styles: a refused create leaves the list alone", len(store.all()), 1)
+
+    # Persisted, hotkey included, and visible to the rewrite pipeline.
+    reloaded = StyleStore(_style_settings(work))
+    _check("styles: the list survives a restart",
+           [(s.name, s.hotkey) for s in reloaded.all()], [("Деловой тон", key)])
+    config = settings.rewrite_config()
+    _check("styles: the pipeline sees the mode",
+           config.custom_styles[first.id]["instruction"], "Перепиши строго.")
+
+    # Unlimited count.
+    many = [store.create(f"m{i}", "i").id for i in range(60)]
+    _check("styles: no cap on the number", len(store.all()), 61)
+    for style_id in many:
+        store.delete(style_id)
+
+    # Edit keeps the id, moves updated_at forward even within a second.
+    before = first.updated_at
+    edited = store.update(first.id, "Деловой 2", "Новая инструкция", "#34C759", None)
+    _check("styles: edit keeps the id", edited.id, first.id)
+    _check("styles: edit moves updated_at forward", edited.updated_at > before, True)
+    _check("styles: edit can clear the hotkey", store.get(first.id).hotkey, None)
+    same = store.update(first.id, "Деловой 2", "Новая инструкция", "#34C759", key)
+    _check("styles: a hotkey-only edit is local and keeps updated_at",
+           same.updated_at, edited.updated_at)
+    _check("styles: hotkey clash is found",
+           store.hotkey_taken(key).id, first.id)
+    _check("styles: ...but not for the owner", store.hotkey_taken(key, except_id=first.id), None)
+
+    # The selected mode is local to the device, and deleting it falls back to polish.
+    settings.update_runtime({"rewrite_custom_style_id_v1": first.id, "rewrite_style_v1": "official"})
+    _check("styles: selected", settings.rewrite_config().custom_style_id, first.id)
+    _check("styles: delete reports success", store.delete(first.id), True)
+    _check("styles: delete of an unknown id", store.delete(first.id), False)
+    config = settings.rewrite_config()
+    _check("styles: deleting the selected mode falls back to polish",
+           (config.custom_style_id, config.style.value), ("", "polish"))
+    _check("styles: the delete leaves a tombstone",
+           [t.id for t in store.tombstones()].count(first.id), 1)
+    _check("styles: tombstone is after the last edit",
+           store.tombstones()[-1].deleted_at > edited.updated_at, True)
+    _check("styles: the list is empty again", store.all(), [])
+
+    # A dangling selection (deleted elsewhere) is no selection.
+    settings.update_runtime({"rewrite_custom_style_id_v1": "c-gone"})
+    _check("styles: a dangling selection is ignored",
+           settings.rewrite_config().custom_style_id, "")
+
+    # The settings window's stale draft must not roll the list back.
+    keep = store.create("Keep", "k")
+    stale = settings.snapshot()
+    stale["rewrite_custom_styles_v1"] = []
+    stale["rewrite_custom_style_tombstones_v1"] = [{"id": "c-x", "deleted_at": "2030-01-01T00:00:00Z"}]
+    settings.apply(stale)
+    _check("styles: Settings.apply() never rolls the list back",
+           [s.id for s in store.all()], [keep.id])
+
+
+def test_custom_styles_sync_merge() -> None:
+    """Last write wins, tombstones, local fields kept, applying is silent."""
+    from .hotkeys import HotkeyChoice
+    from .rewrite_styles import StyleStore
+
+    work = Path(tempfile.mkdtemp(prefix="sd-styles-merge-"))
+    settings = _style_settings(work)
+    store = StyleStore(settings)
+    kinds: list[str] = []
+    store.add_listener(kinds.append)
+
+    def row(style_id, name="N", stamp="2026-11-10T12:00:00Z", deleted=False,
+            color="#112233", instruction="I"):
+        return {"id": style_id, "name": name, "color": color, "instruction": instruction,
+                "deleted": deleted, "updated_at": stamp}
+
+    _check("merge: a new style is applied", store.apply_remote([row("c-1", "Один")]), 1)
+    _check("merge: applying does not look like a local change", kinds, ["sync"])
+    _check("merge: it has no hotkey of its own", store.get("c-1").hotkey, None)
+    _check("merge: wire fields land", (store.get("c-1").color, store.get("c-1").updated_at),
+           ("#112233", "2026-11-10T12:00:00Z"))
+
+    key = HotkeyChoice(0x32, 0x3)
+    store.set_hotkey("c-1", key)
+    kinds.clear()
+    _check("merge: an older copy is ignored",
+           store.apply_remote([row("c-1", "Старый", "2026-11-10T11:00:00Z")]), 0)
+    _check("merge: nothing notified", kinds, [])
+    _check("merge: a newer copy wins", store.apply_remote([row("c-1", "Новый", "2026-11-10T13:00:00Z")]), 1)
+    _check("merge: ...and the local hotkey survives it", store.get("c-1").hotkey, key)
+    _check("merge: the echo of an identical row changes nothing",
+           store.apply_remote([row("c-1", "Новый", "2026-11-10T13:00:00Z")]), 0)
+    _check("merge: a tie goes to the server",
+           store.apply_remote([row("c-1", "Сервер", "2026-11-10T13:00:00Z")]), 1)
+    _check("merge: tie result", store.get("c-1").name, "Сервер")
+
+    # Malformed rows are skipped, not fatal.
+    junk = [row("x-1"), row("c-2", name=""), row("c-3", name="n" * 41), row("c-4", color="red"),
+            row("c-5", instruction="i" * 4001), {"id": "c-6"}, "nope", row("c-" + "9" * 70)]
+    _check("merge: malformed rows are ignored", store.apply_remote(junk), 0)
+    _check("merge: and add nothing", [s.id for s in store.all()], ["c-1"])
+
+    # A remote delete of the selected mode: tombstone, fallback to polish.
+    settings.update_runtime({"rewrite_custom_style_id_v1": "c-1", "rewrite_style_v1": "official"})
+    kinds.clear()
+    _check("merge: an older delete does not remove a newer edit",
+           store.apply_remote([row("c-1", deleted=True, stamp="2026-11-10T12:30:00Z")]), 0)
+    _check("merge: a newer delete removes it",
+           store.apply_remote([row("c-1", deleted=True, stamp="2026-11-10T14:00:00Z")]), 1)
+    config = settings.rewrite_config()
+    _check("merge: the selected mode fell back to polish",
+           (config.custom_style_id, config.style.value), ("", "polish"))
+    _check("merge: removed", store.get("c-1"), None)
+    _check("merge: remembered as a tombstone",
+           [(t.id, t.deleted_at) for t in store.tombstones()], [("c-1", "2026-11-10T14:00:00Z")])
+    _check("merge: a delete is not a local change", kinds, ["sync"])
+
+    # The tombstone beats an older copy, loses to a newer one.
+    _check("merge: an older live copy stays dead",
+           store.apply_remote([row("c-1", stamp="2026-11-10T13:59:00Z")]), 0)
+    _check("merge: a newer live copy resurrects it",
+           store.apply_remote([row("c-1", "Снова", "2026-11-10T15:00:00Z")]), 1)
+    _check("merge: tombstone cleared", store.tombstones(), [])
+
+    # A delete of something never seen here is still remembered.
+    store.apply_remote([row("c-77", deleted=True, stamp="2026-11-10T16:00:00Z")])
+    _check("merge: a delete of an unknown id is remembered",
+           [t.id for t in store.tombstones()], ["c-77"])
+
+    # What goes out: live rows and tombstones, filtered by the stamp.
+    local = store.create("Локальный", "L")
+    wire = store.changes_since("")
+    _check("push: live + deleted rows",
+           sorted(("local" if r["id"] == local.id else r["id"], r["deleted"]) for r in wire),
+           sorted([("local", False), ("c-1", False), ("c-77", True)]))
+    _check("push: the rows carry no hotkey",
+           any("hotkey" in r for r in wire), False)
+    _check("push: only changes since the stamp",
+           [r["id"] for r in store.changes_since("2026-11-10T15:30:00Z")
+            if r["id"] != local.id], ["c-77"])
+    _check("push: the stamp second itself is included",
+           "c-77" in [r["id"] for r in store.changes_since("2026-11-10T16:00:00Z")], True)
+
+
+def _usage_stats(work: Path, name: str):
+    """A UsageStats on private files (the module paths are global)."""
+    from . import history, paths
+
+    paths.USAGE_FILE = work / f"{name}-usage.json"
+    paths.ensure_directories = lambda: None
+    return history.UsageStats(sync_path=work / f"{name}-sync.json")
+
+
+def test_usage_stats_sync() -> None:
+    """Own row = absolute values; others kept apart; the sum; no double count."""
+    from datetime import datetime
+
+    from . import history, paths
+
+    saved = (paths.USAGE_FILE, paths.ensure_directories)
+    work = Path(tempfile.mkdtemp(prefix="sd-usage-selftest-"))
+    try:
+        usage = _usage_stats(work, "a")
+        day = datetime.now().date().isoformat()
+        usage.record("привет мир", 2.0)
+        usage.record("ещё одна фраза тут", 3.0)
+        rows = usage.own_rows_since("")
+        device = usage.device_id()
+        _check("usage: the device id is a uuid, kept", (len(device), usage.device_id()), (36, device))
+        _check("usage: own row is absolute for the day",
+               [(r["day"], r["device"], r["dictations"], r["characters"], r["words"], r["audio_seconds"])
+                for r in rows],
+               [(day, device, 2, 28, 6, 5.0)])
+        _check("usage: asr_seconds is sent as 0", rows[0]["asr_seconds"], 0.0)
+        before = usage.own_rows_since("")
+        _check("usage: sending again is the same absolute row", usage.own_rows_since("") == before, True)
+
+        # The echo of our own row never doubles the count.
+        _check("usage: the server's echo of our own row is ignored", usage.apply_remote(rows), 0)
+        _check("usage: totals unchanged", usage.totals().dictations, 2)
+
+        other = [{"day": day, "device": "other-device", "dictations": 10, "characters": 300,
+                  "words": 50, "audio_seconds": 100.0, "asr_seconds": 4.0,
+                  "updated_at": "2026-11-10T12:00:00Z"},
+                 {"day": "2026-01-01", "device": "other-device", "dictations": 4, "characters": 80,
+                  "words": 0, "audio_seconds": 20.0, "asr_seconds": 0.0,
+                  "updated_at": "2026-01-01T09:00:00Z"}]
+        _check("usage: another device's rows are kept", usage.apply_remote(other), 2)
+        _check("usage: the same rows again change nothing", usage.apply_remote(other), 0)
+        _check("usage: the sum over devices (today)",
+               (usage.today().dictations, usage.today().characters, usage.today().words,
+                usage.today().audio_seconds), (12, 328, 56, 105.0))
+        _check("usage: the sum over devices (all time)",
+               (usage.totals().dictations, usage.totals().audio_seconds), (16, 125.0))
+        _check("usage: days are merged, not duplicated",
+               sorted(d.day for d in usage.all_days()), sorted({day, "2026-01-01"}))
+        _check("usage: the other device's row is not sent back",
+               [r["device"] for r in usage.own_rows_since("")], [device])
+
+        # An older row from that device loses; a newer one replaces (not adds).
+        usage.apply_remote([{**other[0], "dictations": 1, "updated_at": "2026-11-10T11:00:00Z"}])
+        _check("usage: an older row is ignored", usage.today().dictations, 12)
+        usage.apply_remote([{**other[0], "dictations": 11, "updated_at": "2026-11-10T13:00:00Z"}])
+        _check("usage: a newer row replaces the old one", usage.today().dictations, 13)
+
+        # It persists, apart from the local counter.
+        again = history.UsageStats(sync_path=work / "a-sync.json")
+        _check("usage: remote rows and device id survive a restart",
+               (again.device_id(), again.totals().dictations), (device, 17))
+        local_file = json.loads((work / "a-usage.json").read_text(encoding="utf-8"))
+        _check("usage: the local file holds only this device's days",
+               sum(item["dictations"] for item in local_file), 2)
+
+        # Only days changed since the cursor go out.
+        _check("usage: nothing newer than the cursor goes out",
+               usage.own_rows_since("2999-01-01T00:00:00Z"), [])
+
+        # Signing out / another account drops the other devices from the sum.
+        usage.forget_remote()
+        _check("usage: forgetting the other devices", (usage.has_remote(), usage.totals().dictations), (False, 2))
+
+        # Days counted before the sync existed become rows of this device.
+        (work / "old-usage.json").write_text(json.dumps(
+            [{"day": "2025-05-05", "dictations": 7, "audio_seconds": 70.0,
+              "characters": 700, "words": 70}]), encoding="utf-8")
+        paths.USAGE_FILE = work / "old-usage.json"
+        legacy = history.UsageStats(sync_path=work / "old-sync.json")
+        rows = legacy.own_rows_since("")
+        _check("usage: history before the sync is sent too",
+               [(r["day"], r["dictations"], r["updated_at"]) for r in rows],
+               [("2025-05-05", 7, "2025-05-05T00:00:00Z")])
+    finally:
+        paths.USAGE_FILE, paths.ensure_directories = saved
+
+
+class _FakeVocabServer:
+    """An in-process stand-in for ``server/vocab-sync``'s ``/v1/vocabulary``.
+
+    ``modern=False`` is a server that predates styles and usage: it ignores
+    both request fields and leaves both out of its answer.
+    """
+
+    def __init__(self, modern: bool = True) -> None:
+        import http.server
+        import threading
+
+        self.modern = modern
+        self.revision = 0
+        self.styles: dict = {}
+        self.usage: dict = {}
+        self.requests: list[dict] = []
+        outer = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):  # silence
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                outer.requests.append(body)
+                since = int(body.get("since", 0))
+                if outer.modern:
+                    for row in body.get("styles") or []:
+                        known = outer.styles.get(row["id"])
+                        if known is None or row["updated_at"] > known[0]["updated_at"]:
+                            outer.revision += 1
+                            outer.styles[row["id"]] = (dict(row), outer.revision)
+                    for row in body.get("usage") or []:
+                        key = (row["day"], row["device"])
+                        known = outer.usage.get(key)
+                        if known is None or row["updated_at"] > known[0]["updated_at"]:
+                            outer.revision += 1
+                            outer.usage[key] = (dict(row), outer.revision)
+                answer = {"revision": outer.revision, "entries": [], "hotwords": []}
+                if outer.modern:
+                    answer["styles"] = [r for r, rev in outer.styles.values() if rev > since]
+                    answer["usage"] = [r for r, rev in outer.usage.values() if rev > since]
+                data = json.dumps(answer).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self._server.server_address[1]}"
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+def test_styles_and_usage_wire_sync() -> None:
+    """Two machines through the wire: styles, tombstones, usage, old servers."""
+    from datetime import datetime
+
+    from . import history, paths
+    from . import vocabulary_sync as vs
+    from .rewrite_styles import StyleStore
+    from .vocabulary import VocabularyStore
+
+    saved = (paths.USAGE_FILE, paths.ensure_directories)
+    work = Path(tempfile.mkdtemp(prefix="sd-wire-selftest-"))
+    server = _FakeVocabServer(modern=False)
+    stores: list = []
+    try:
+        def machine(name):
+            settings = _style_settings(work, name)
+            settings.update_runtime({"vocabulary_sync_server_url": server.url,
+                                     "vocabulary_sync_enabled": True,
+                                     "vocabulary_sync_email": "u@example.com"})
+            tokens = vs.MemoryTokenStore()
+            tokens.save("tok")
+            vocab = VocabularyStore(str(work / f"{name}.sqlite"))
+            stores.append(vocab)
+            styles = StyleStore(settings)
+            usage = _usage_stats(work, name)
+            client = vs.VocabularySync(vocab, settings, tokens=tokens, styles=styles, usage=usage)
+            return settings, styles, usage, client
+
+        a_settings, a_styles, a_usage, a = machine("a")
+        b_settings, b_styles, b_usage, b = machine("b")
+
+        made = a_styles.create("Деловой", "Пиши официально.", "#FF8800")
+        a_usage.record("раз два три", 4.0)
+
+        # -- an old server: the fields are dropped, the cursor stays ------------
+        a.sync_now()
+        body = server.requests[-1]
+        _check("wire: styles and usage go out in the push",
+               (len(body["styles"]), body["styles"][0]["id"], len(body["usage"])),
+               (1, made.id, 1))
+        _check("wire: an old server's missing fields are noticed (cursor kept)",
+               a_settings.vocabulary_sync_last_pushed_local_stamp, "")
+        _check("wire: nothing was applied from the old server", b_styles.all(), [])
+        b.sync_now()
+        _check("wire: the old server leaves the other machine untouched",
+               (b_styles.all(), b_usage.has_remote()), ([], False))
+
+        # An empty pass sends neither field, which keeps old clients' bodies the same.
+        empty_settings, empty_styles, empty_usage, empty = machine("e")
+        empty.sync_now()
+        _check("wire: no styles/usage keys when there is nothing to send",
+               ("styles" in server.requests[-1], "usage" in server.requests[-1]), (False, False))
+
+        # -- the server is upgraded -----------------------------------------------
+        server.modern = True
+        a.sync_now()
+        _check("wire: after the upgrade the cursor moves",
+               a_settings.vocabulary_sync_last_pushed_local_stamp != "", True)
+        b.sync_now()
+        _check("wire: the mode reaches the other machine",
+               [(s.id, s.name, s.color, s.instruction, s.hotkey) for s in b_styles.all()],
+               [(made.id, "Деловой", "#FF8800", "Пиши официально.", None)])
+        day = datetime.now().date().isoformat()
+        b_usage.record("четыре пять", 6.0)
+        _check("wire: A's usage arrived as another device's row", b_usage.has_remote(), True)
+        _check("wire: B shows the sum (A: 1 + B: 1)", b_usage.today().dictations, 2)
+        b.sync_now()
+        a.sync_now()
+        _check("wire: A shows the same sum", a_usage.today().dictations, 2)
+        _check("wire: both agree on audio seconds", (a_usage.today().audio_seconds,
+                                                      b_usage.today().audio_seconds), (10.0, 10.0))
+
+        # Repeated passes never inflate the totals.
+        for _ in range(3):
+            a.sync_now()
+            b.sync_now()
+        _check("wire: repeated passes do not double count",
+               (a_usage.totals().dictations, b_usage.totals().dictations), (2, 2))
+        _check("wire: the local counter is untouched by the sum",
+               sum(1 for _ in a_usage.own_rows_since("")), 1)
+
+        # -- an edit and a delete travel -------------------------------------------
+        a_styles.update(made.id, "Деловой v2", "Ещё строже.", "#34C759", None)
+        a.sync_now()
+        b.sync_now()
+        _check("wire: an edit reaches B", [(s.name, s.color) for s in b_styles.all()],
+               [("Деловой v2", "#34C759")])
+        b_settings.update_runtime({"rewrite_custom_style_id_v1": made.id,
+                                   "rewrite_style_v1": "official"})
+        a_styles.delete(made.id)
+        a.sync_now()
+        b.sync_now()
+        config = b_settings.rewrite_config()
+        _check("wire: the delete reaches B and the active mode falls back to polish",
+               (b_styles.all(), config.custom_style_id, config.style.value), ([], "", "polish"))
+        _check("wire: the tombstone is on the server", server.styles[made.id][0]["deleted"], True)
+
+        # Applying the server's rows never schedules another pass.
+        due = []
+        b.request_sync = lambda delay=0.0: due.append(delay)
+        b._thread = object()  # as if running: a local change would now request a pass
+        b._styles.apply_remote([{"id": "c-zz", "name": "Z", "color": "#000000", "instruction": "i",
+                                 "deleted": False, "updated_at": "2030-01-01T00:00:00Z"}])
+        _check("wire: a remote style does not trigger a pass", due, [])
+        b_styles.create("local", "i")
+        _check("wire: a local style does", due, [vs.DEBOUNCE_SECONDS])
+        b._thread = None
+
+        # Sign-out drops the other devices from the totals.
+        b.sign_out = vs.VocabularySync.sign_out.__get__(b)
+        b._request = lambda *args, **kwargs: {}
+        b.sign_out()
+        _check("wire: sign-out drops other devices' usage", b_usage.has_remote(), False)
+    finally:
+        paths.USAGE_FILE, paths.ensure_directories = saved
+        server.close()
+        for store in stores:
+            try:
+                store.close()
+            except Exception:
+                pass
+
+
+def test_style_hotkeys_state_machine() -> None:
+    """A custom mode's chord activates it; it does not disturb the others."""
+    from . import hotkeys as hk
+
+    machine = hk.HotkeyStateMachine()
+    style_keys = {"c-aaa": hk.HotkeyChoice(0x31, hk.MOD_CTRL | hk.MOD_ALT),
+                  "c-bbb": hk.HotkeyChoice(0x32, hk.MOD_CTRL | hk.MOD_ALT)}
+
+    def press(vk, down, modifiers):
+        return machine.transition(
+            hk._Event(vk=vk, is_down=down, modifiers=modifiers),
+            hotkey=hk.DEFAULT_HOTKEY, trigger_mode=hk.TriggerMode.TOGGLE, is_recording=False,
+            style_hotkeys=style_keys)
+
+    mods = hk.MOD_CTRL | hk.MOD_ALT
+    result = press(0x31, True, mods)
+    _check("hotkey: the mode's chord activates it",
+           ([a for a in result.actions], result.suppress), ([hk.STYLE_ACTION_PREFIX + "c-aaa"], True))
+    press(0x31, False, mods)
+    result = press(0x32, True, mods)
+    _check("hotkey: the second mode has its own chord",
+           result.actions, [hk.STYLE_ACTION_PREFIX + "c-bbb"])
+    press(0x32, False, mods)
+    _check("hotkey: the built-in cycle chord still works",
+           press(hk.VK_S, True, mods).actions, [hk.Action.CYCLE_REWRITE_STYLE])
+    press(hk.VK_S, False, mods)
+    _check("hotkey: the same key without the modifiers is not the chord",
+           press(0x31, True, 0).actions, [])
+    style_keys.pop("c-aaa")
+    press(0x31, False, 0)
+    _check("hotkey: a removed mode's chord is gone",
+           press(0x31, True, mods).actions, [])
+
+
+def test_rewrite_style_activation() -> None:
+    """A mode's hotkey (and the cycle) selects it, turns rewrite on, and the
+    toast carries the mode's own colour. Driven on the controller's real
+    methods with a stand-in ``self``."""
+    from types import SimpleNamespace
+
+    from .app import DictationController as Controller
+    from .rewrite_styles import StyleStore
+
+    work = Path(tempfile.mkdtemp(prefix="sd-activate-selftest-"))
+    settings = _style_settings(work)
+    styles = StyleStore(settings)
+    toasts: list[tuple[str, str]] = []
+    unloads: list[bool] = []
+    fake = SimpleNamespace(
+        settings=settings, styles=styles,
+        postprocessor=SimpleNamespace(cancel_scheduled_unload=lambda: unloads.append(True)),
+        state_toast_requested=SimpleNamespace(emit=lambda text, tone: toasts.append((text, tone))),
+        settings_applied=SimpleNamespace(emit=lambda: None))
+    fake.activate_rewrite_style = lambda style_id: Controller.activate_rewrite_style(fake, style_id)
+
+    mine = styles.create("Протокол", "Оформи как протокол.", "#FF375F")
+    settings.update_runtime({"rewrite_enabled_v1": False})
+    Controller.activate_rewrite_style(fake, mine.id)
+    config = settings.rewrite_config()
+    _check("activate: the mode is selected and rewrite is on",
+           (config.custom_style_id, settings.rewrite_enabled, unloads), (mine.id, True, [True]))
+    _check("activate: the toast carries the mode's colour",
+           toasts[-1], ("Режим · Протокол", "#FF375F"))
+    Controller.activate_rewrite_style(fake, "structured_task")
+    config = settings.rewrite_config()
+    _check("activate: a built-in clears the custom selection",
+           (config.custom_style_id, config.style.value, toasts[-1][1]), ("", "structured_task", "structured_task"))
+    before = len(toasts)
+    Controller.activate_rewrite_style(fake, "c-unknown")
+    _check("activate: an unknown id does nothing", len(toasts), before)
+
+    # The cycle walks built-ins, then custom modes, then wraps.
+    settings.update_runtime({"rewrite_custom_style_id_v1": "", "rewrite_style_v1": "official"})
+    Controller.cycle_rewrite_style(fake)
+    _check("cycle: after the last built-in comes the first custom mode",
+           settings.rewrite_config().custom_style_id, mine.id)
+    Controller.cycle_rewrite_style(fake)
+    config = settings.rewrite_config()
+    _check("cycle: after the last custom mode it wraps to the first built-in",
+           (config.custom_style_id, config.style.value), ("", "polish"))
+
+
+
 TESTS = [
     test_custom_hotwords_store,
     test_custom_hotwords_window,
+    test_custom_styles_window,
     test_asr_hotword_selection,
     test_asr_hint_store,
     test_asr_hotwords_settings_and_ipc,
@@ -1038,6 +1714,12 @@ TESTS = [
     test_vocabulary_edits_and_tombstones,
     test_sync_settings_and_token,
     test_vocabulary_sync_server,
+    test_custom_styles_store,
+    test_custom_styles_sync_merge,
+    test_usage_stats_sync,
+    test_styles_and_usage_wire_sync,
+    test_style_hotkeys_state_machine,
+    test_rewrite_style_activation,
 ]
 
 

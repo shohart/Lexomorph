@@ -340,6 +340,8 @@ _DEFAULTS: dict[str, Any] = {
     "rewrite_style_v1": "official",             # polish | structured_task | official
     "rewrite_custom_styles_v1": [],
     "rewrite_custom_style_id_v1": "",
+    # Local deletions waiting to reach the account (rewrite_styles.py).
+    "rewrite_custom_style_tombstones_v1": [],
     "rewrite_system_prompt_polish_v1": "",
     "rewrite_system_prompt_structured_task_v1": "",
     "rewrite_system_prompt_official_v1": "",
@@ -376,6 +378,10 @@ _RUNTIME_KEYS = frozenset({
     "vocabulary_sync_last_server_revision",
     "vocabulary_sync_last_pushed_local_stamp",
     "vocabulary_sync_last_synced_at",
+    # The list of custom modes is written by its store and by the sync, not
+    # by the settings window's draft (rewrite_styles.StyleStore).
+    "rewrite_custom_styles_v1",
+    "rewrite_custom_style_tombstones_v1",
 })
 
 
@@ -762,6 +768,11 @@ class Settings:
                         "name": str(entry.get("name", "")),
                         "instruction": str(entry.get("instruction", "")),
                     }
+        # A selected mode that no longer exists (deleted on another
+        # machine while a settings draft still named it) is no selection.
+        custom_id = str(self._get("rewrite_custom_style_id_v1") or "")
+        if custom_id not in custom:
+            custom_id = ""
         from .llm.models import REWRITE_MODELS
 
         model = _enum_or(BundledLLMModel, self._get("rewrite_bundled_model_v2"),
@@ -785,7 +796,7 @@ class Settings:
                 for style in ("polish", "structured_task", "official")
             },
             custom_styles=custom,
-            custom_style_id=str(self._get("rewrite_custom_style_id_v1") or ""),
+            custom_style_id=custom_id,
         )
 
     # -- ASR hotwords ---------------------------------------------------

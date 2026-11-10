@@ -139,7 +139,9 @@ class ControlPanel(QMainWindow):
         layout.addWidget(_card_title(i18n.tr("panel_shortcuts")))
         layout.addWidget(self._build_shortcuts_card())
         layout.addWidget(_card_title(i18n.tr("panel_statistics")))
-        self._stats = StatsPanel(controller.usage)
+        self._stats = StatsPanel(
+            controller.usage,
+            lambda: controller.settings.vocabulary_sync_enabled)
         layout.addWidget(self._stats)
         layout.addStretch(1)
 
@@ -153,6 +155,7 @@ class ControlPanel(QMainWindow):
         controller.state_changed.connect(lambda _: self.refresh())
         controller.progress_changed.connect(self._on_progress)
         controller.settings_applied.connect(self.refresh)
+        controller.vocabulary_sync_status.connect(lambda _status: self._stats.refresh())
         controller.device_changed.connect(self.refresh)
         controller.transcript_ready.connect(lambda _: self._stats.refresh())
 

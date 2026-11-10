@@ -153,7 +153,8 @@ class StateToast(QWidget):
         painter.drawPath(path)
 
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(_TONES.get(self._tone, _TONES["on"])))
+        painter.setBrush(QColor(self._tone if self._tone.startswith("#")
+                                else _TONES.get(self._tone, _TONES["on"])))
         centre_y = self.height() / 2.0
         painter.drawEllipse(QRectF(PADDING_X, centre_y - DOT / 2.0, DOT, DOT))
 

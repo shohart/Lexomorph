@@ -112,6 +112,40 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "settings_rewrite_enabled": ("Включить переписывание", "Enable rewrite"),
     "settings_rewrite_style": ("Режим", "Mode"),
     "settings_rewrite_model": ("Модель", "Model"),
+    "settings_rewrite_custom": ("Свои режимы реврайта", "Custom rewrite modes"),
+    "settings_rewrite_custom_hint": (
+        "Режим со своей инструкцией для модели, цветом и хоткеем. "
+        "Режимы синхронизируются через аккаунт; хоткей и выбранный режим "
+        "остаются на этом компьютере.",
+        "A mode with its own model instruction, colour and hotkey. Modes sync "
+        "through the account; the hotkey and the selected mode stay on this PC."),
+    "settings_rewrite_custom_empty": (
+        "Своих режимов пока нет.", "No custom modes yet."),
+    "settings_style_new": ("＋ Новый режим", "＋ New mode"),
+    "settings_style_edit": ("Изменить", "Edit"),
+    "settings_style_delete": ("Удалить", "Delete"),
+    "settings_style_hotkey_none": ("без хоткея", "no hotkey"),
+    "settings_style_delete_confirm": (
+        "Удалить режим «{name}»? Он исчезнет и на других устройствах аккаунта.",
+        "Delete the mode \u201c{name}\u201d? It disappears on the account's other devices too."),
+    "style_dialog_new": ("Новый режим реврайта", "New rewrite mode"),
+    "style_dialog_edit": ("Изменить режим реврайта", "Edit rewrite mode"),
+    "style_name": ("Имя режима", "Mode name"),
+    "style_name_placeholder": ("Например: Задача для ассистента",
+                               "e.g. Task for my assistant"),
+    "style_color": ("Цвет уведомления", "Notification colour"),
+    "style_color_other": ("Другой…", "Other…"),
+    "style_instruction": ("Инструкция для модели (что делать с текстом)",
+                          "Model instruction (what to do with the text)"),
+    "style_hotkey": ("Хоткей активации режима", "Mode activation hotkey"),
+    "style_hotkey_clear": ("Сбросить", "Clear"),
+    "style_save": ("Сохранить режим", "Save mode"),
+    "style_error_name": ("Введите имя режима (до {limit} символов).",
+                         "Enter a mode name (up to {limit} characters)."),
+    "style_error_instruction": ("Введите инструкцию (до {limit} символов).",
+                                "Enter an instruction (up to {limit} characters)."),
+    "style_error_hotkey_taken": ("Это сочетание уже занято: {owner}.",
+                                 "That shortcut is already used by {owner}."),
     "settings_prompt_placeholder": (
         "Пусто — используется встроенный промпт",
         "Empty — the built-in prompt is used"),
@@ -192,6 +226,9 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "panel_statistics": ("Статистика", "Statistics"),
 
     # -- statistics --------------------------------------------------
+    "stats_all_devices": (
+        "Сумма по всем устройствам аккаунта (синхронизация включена).",
+        "Total across all of the account's devices (sync is on)."),
     "stats_today_dictations": ("Сегодня", "Today"),
     "stats_today_words": ("Слова", "Words"),
     "stats_total_dictations": ("Всего", "All time"),

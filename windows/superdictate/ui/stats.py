@@ -255,9 +255,12 @@ class ActivityGrid(QWidget):
 class StatsPanel(QWidget):
     """The whole statistics block: tiles, bars, heatmap."""
 
-    def __init__(self, usage, parent=None) -> None:
+    def __init__(self, usage, all_devices=None, parent=None) -> None:
         super().__init__(parent)
         self._usage = usage
+        #: Whether the account sync is on, so the numbers are the sum over
+        #: this account's devices rather than this PC alone.
+        self._all_devices = all_devices or (lambda: False)
         self._palette: Palette = palette()
 
         layout = QVBoxLayout(self)
@@ -299,9 +302,15 @@ class StatsPanel(QWidget):
         grid_layout.addWidget(self._grid)
         layout.addWidget(grid_card)
 
+        self._scope = QLabel(i18n.tr("stats_all_devices"))
+        self._scope.setObjectName("Caption")
+        self._scope.setWordWrap(True)
+        layout.addWidget(self._scope)
+
         self.refresh()
 
     def refresh(self) -> None:
+        self._scope.setVisible(bool(self._all_devices()))
         today = self._usage.today()
         total = self._usage.totals()
         by_day = {day.day: day.dictations for day in self._usage.all_days()}

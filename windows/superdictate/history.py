@@ -16,7 +16,8 @@ import json
 import os
 import threading
 from dataclasses import dataclass, field
-from datetime import date, datetime
+import uuid
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from . import paths
@@ -146,6 +147,10 @@ class DailyUsage:
     audio_seconds: float = 0.0
     characters: int = 0
     words: int = 0
+    #: Only filled by another device's row (macOS counts it, we do not).
+    asr_seconds: float = 0.0
+    #: ISO-8601 UTC of the last change; the sync's last-write-wins key.
+    updated_at: str = ""
 
     def to_json(self) -> dict:
         return {
@@ -154,42 +159,91 @@ class DailyUsage:
             "audio_seconds": self.audio_seconds,
             "characters": self.characters,
             "words": self.words,
+            "updated_at": self.updated_at,
         }
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_day(item: object) -> Optional[DailyUsage]:
+    if not isinstance(item, dict):
+        return None
+    day = str(item.get("day", ""))
+    if not _valid_day(day):
+        return None
+    try:
+        return DailyUsage(
+            day=day,
+            dictations=max(0, int(item.get("dictations", 0))),
+            audio_seconds=max(0.0, float(item.get("audio_seconds", 0.0))),
+            characters=max(0, int(item.get("characters", 0))),
+            words=max(0, int(item.get("words", 0))),
+            asr_seconds=max(0.0, float(item.get("asr_seconds") or 0.0)),
+            updated_at=str(item.get("updated_at") or ""),
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _valid_day(day: str) -> bool:
+    try:
+        return len(day) == 10 and date.fromisoformat(day).isoformat() == day
+    except ValueError:
+        return False
+
+
 class UsageStats:
-    """Per-day dictation counters, kept for a rolling year."""
+    """Per-day dictation counters, kept for a rolling year.
+
+    With account sync (docs/specs/modes-and-usage-sync-spec.md 3.2) there
+    are two kinds of rows. **This device's** days are counted here and sent
+    as absolute values (``own_rows_since``): re-sending is idempotent, so
+    nothing is ever counted twice. **Other devices'** rows come back from
+    the server and are kept apart (``UsageSync.json``), never mixed into
+    the local counters; ``all_days`` / ``today`` / ``totals`` show the sum
+    over all devices. Our own row is read from the local counter, never
+    from the server's echo.
+    """
 
     MAX_DAYS = 400
 
-    def __init__(self) -> None:
+    def __init__(self, sync_path=None) -> None:
         self._lock = threading.RLock()
         self._days: dict[str, DailyUsage] = {}
+        self._sync_path = sync_path if sync_path is not None else paths.USAGE_SYNC_FILE
+        self._device = ""
+        #: (day, device) -> row, other devices only.
+        self._remote: dict[tuple[str, str], DailyUsage] = {}
         self.load()
 
     def load(self) -> None:
         raw = _read_json(paths.USAGE_FILE, [])
-        if not isinstance(raw, list):
-            return
         days: dict[str, DailyUsage] = {}
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            day = str(item.get("day", ""))
-            if not day:
-                continue
-            try:
-                days[day] = DailyUsage(
-                    day=day,
-                    dictations=int(item.get("dictations", 0)),
-                    audio_seconds=float(item.get("audio_seconds", 0.0)),
-                    characters=int(item.get("characters", 0)),
-                    words=int(item.get("words", 0)),
-                )
-            except (TypeError, ValueError):
-                continue
+        if isinstance(raw, list):
+            for item in raw:
+                usage = _parse_day(item)
+                if usage is None:
+                    continue
+                # Days counted before the sync existed get a stamp that
+                # sorts before any real edit.
+                usage.updated_at = usage.updated_at or f"{usage.day}T00:00:00Z"
+                days[usage.day] = usage
+        sync = _read_json(self._sync_path, {})
+        device = ""
+        remote: dict[tuple[str, str], DailyUsage] = {}
+        if isinstance(sync, dict):
+            device = str(sync.get("device") or "")[:64]
+            for item in sync.get("rows") or []:
+                usage = _parse_day(item)
+                owner = str(item.get("device") or "")[:64] if isinstance(item, dict) else ""
+                if usage is not None and owner and owner != device:
+                    remote[(usage.day, owner)] = usage
         with self._lock:
             self._days = days
+            self._device = device
+            self._remote = remote
 
     def save(self) -> None:
         with self._lock:
@@ -199,6 +253,13 @@ class UsageStats:
             payload = [item.to_json() for item in items]
         _write_json(paths.USAGE_FILE, payload)
 
+    def _save_sync(self) -> None:
+        with self._lock:
+            payload = {"device": self._device, "rows": [
+                {**usage.to_json(), "device": owner, "asr_seconds": usage.asr_seconds}
+                for (_, owner), usage in sorted(self._remote.items())]}
+        _write_json(self._sync_path, payload)
+
     def record(self, text: str, audio_seconds: float, when: Optional[datetime] = None) -> None:
         day = (when or datetime.now()).date().isoformat()
         with self._lock:
@@ -207,16 +268,103 @@ class UsageStats:
             usage.audio_seconds += audio_seconds
             usage.characters += len(text)
             usage.words += len(text.split())
+            usage.updated_at = _utc_now()
         self.save()
+
+    # -- this device -----------------------------------------------------
+
+    def device_id(self) -> str:
+        """This device's random id, made on first use and kept."""
+        with self._lock:
+            if not self._device:
+                self._device = str(uuid.uuid4())
+                created = True
+            else:
+                created = False
+        if created:
+            self._save_sync()
+        return self._device
+
+    def own_rows_since(self, stamp: str) -> list[dict]:
+        """This device's days changed at or after ``stamp``, as wire rows
+        with absolute values (the last ``MAX_DAYS`` days)."""
+        device = self.device_id()
+        with self._lock:
+            days = sorted(self._days.values(), key=lambda d: d.day, reverse=True)[: self.MAX_DAYS]
+            return [{
+                "day": u.day, "device": device, "dictations": u.dictations,
+                "characters": u.characters, "words": u.words,
+                "audio_seconds": float(u.audio_seconds), "asr_seconds": 0.0,
+                "updated_at": u.updated_at,
+            } for u in days if u.updated_at >= stamp and u.dictations > 0]
+
+    # -- other devices ---------------------------------------------------
+
+    def apply_remote(self, rows: list) -> int:
+        """Keep the other devices' rows (last write wins per day and device).
+        Rows of this device are ignored: its counter is the truth."""
+        own = self.device_id()
+        changed = 0
+        with self._lock:
+            for item in rows:
+                usage = _parse_day(item)
+                owner = str(item.get("device") or "")[:64] if isinstance(item, dict) else ""
+                if usage is None or not owner or owner == own or not usage.updated_at:
+                    continue
+                key = (usage.day, owner)
+                known = self._remote.get(key)
+                if known is not None and usage.updated_at < known.updated_at:
+                    continue
+                if known is None or known.to_json() != usage.to_json() \
+                        or known.asr_seconds != usage.asr_seconds:
+                    self._remote[key] = usage
+                    changed += 1
+            if changed:
+                self._trim_remote()
+        if changed:
+            self._save_sync()
+        return changed
+
+    def _trim_remote(self) -> None:
+        by_device: dict[str, list[tuple[str, str]]] = {}
+        for key in self._remote:
+            by_device.setdefault(key[1], []).append(key)
+        for keys in by_device.values():
+            for key in sorted(keys, reverse=True)[self.MAX_DAYS:]:
+                del self._remote[key]
+
+    def forget_remote(self) -> None:
+        """Signed out or another account: the other devices' rows go."""
+        with self._lock:
+            had = bool(self._remote)
+            self._remote = {}
+        if had:
+            self._save_sync()
+
+    def has_remote(self) -> bool:
+        with self._lock:
+            return bool(self._remote)
+
+    # -- the sum over all devices ---------------------------------------
 
     def all_days(self) -> list[DailyUsage]:
         with self._lock:
-            return sorted(self._days.values(), key=lambda d: d.day, reverse=True)
+            merged: dict[str, DailyUsage] = {}
+            for usage in list(self._days.values()) + list(self._remote.values()):
+                total = merged.setdefault(usage.day, DailyUsage(usage.day))
+                total.dictations += usage.dictations
+                total.audio_seconds += usage.audio_seconds
+                total.characters += usage.characters
+                total.words += usage.words
+                total.asr_seconds += usage.asr_seconds
+            return sorted(merged.values(), key=lambda d: d.day, reverse=True)
 
     def today(self) -> DailyUsage:
         day = date.today().isoformat()
-        with self._lock:
-            return self._days.get(day, DailyUsage(day))
+        for usage in self.all_days():
+            if usage.day == day:
+                return usage
+        return DailyUsage(day)
 
     def totals(self) -> DailyUsage:
         total = DailyUsage("all")
@@ -225,6 +373,7 @@ class UsageStats:
             total.audio_seconds += usage.audio_seconds
             total.characters += usage.characters
             total.words += usage.words
+            total.asr_seconds += usage.asr_seconds
         return total
 
 

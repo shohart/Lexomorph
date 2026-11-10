@@ -43,6 +43,8 @@ LEGACY_BASE_DIRS = tuple(_local_app_data() / name for name in LEGACY_APP_NAMES)
 SETTINGS_FILE = BASE_DIR / "Settings.json"
 HISTORY_FILE = BASE_DIR / "History.json"
 USAGE_FILE = BASE_DIR / "Usage.json"
+# Other devices' usage rows and this device's id (account sync).
+USAGE_SYNC_FILE = BASE_DIR / "UsageSync.json"
 CORRECTIONS_FILE = BASE_DIR / "Corrections.json"
 PENDING_DICTATION_FILE = BASE_DIR / "PendingDictation.raw"
 # Present only while the app is holding the system output muted. Left
