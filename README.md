@@ -17,10 +17,10 @@ into text that matches the way you want to write. Hold a hotkey, speak, and
 the text is typed into whatever field is focused.
 
 > **Lexomorph is the new name of SuperDictate Next.** Same project, a broader
-> vision: from speech recognition to adaptive, personal writing. The
-> repository, the releases, the installer and the data on your disk keep their
-> old names on purpose, so that existing installations keep working and
-> updating. See [Compatibility: names that stayed](#compatibility-names-that-stayed).
+> vision: from speech recognition to adaptive, personal writing. Since 0.10.0
+> the app, its files and its data carry the new name; the repository and the
+> sync server address keep the old one for now. Coming from SuperDictate Next?
+> See [Moving from SuperDictate Next](#moving-from-superdictate-next).
 
 **[Читать по-русски](README.ru.md)**
 
@@ -39,6 +39,38 @@ the text is typed into whatever field is focused.
 - **Honest about the network.** [One table](#privacy-and-backends) lists what
   stays on the device and what can leave it.
 - **macOS and Windows,** Apple Silicon and Intel.
+- **English or Russian interface.** English by default; Russian when the system
+  language is Russian, or whenever you pick it in Settings.
+
+## Feature gallery
+
+Concept illustrations, not screenshots of the app. What each feature does and
+where its limits are is described in the sections below.
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/assets/branding/features/adaptive-dictation.png" alt="Adaptive Dictation card" width="100%" />
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/assets/branding/features/personal-vocabulary.png" alt="Personal Vocabulary card" width="100%" />
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/assets/branding/features/correction-learning.png" alt="Correction Learning card" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/assets/branding/features/style-modes.png" alt="Style Modes card" width="100%" />
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/assets/branding/features/cross-device-sync.png" alt="Cross-Device Sync card" width="100%" />
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/assets/branding/features/local-first-privacy.png" alt="Local-First Privacy card" width="100%" />
+    </td>
+  </tr>
+</table>
 
 ## How it works
 
@@ -63,7 +95,7 @@ can use its own backend.
 | Platform | Requirements | How you get it |
 |---|---|---|
 | macOS | macOS 14 or newer, Apple Silicon or Intel. Verified by hand on one Intel machine; CI runs on Apple Silicon only. | One-line installer (below). The published `Lexomorph.zip` is built for **Intel (x86_64)**; on Apple Silicon, build from source with the same installer. |
-| Windows | Windows 10 version 1809 (build 17763) or newer, 64-bit. Per-user install, no administrator rights needed. | `SuperDictate-X.Y.Z-setup.exe` from a `win-v*` entry on the [Releases page](https://github.com/shohart/SuperDictate-Next/releases). There is no Windows CI; Windows builds are checked by hand. |
+| Windows | Windows 10 version 1809 (build 17763) or newer, 64-bit. Per-user install, no administrator rights needed. | `Lexomorph-Setup-X.Y.Z.exe` from a `win-v*` entry on the [Releases page](https://github.com/shohart/SuperDictate-Next/releases). The installer is not Authenticode-signed. There is no Windows CI; Windows builds are checked by hand. |
 
 Linux is not supported. On Intel laptops with an NPU, the Windows version can
 also recognize speech on the NPU (OpenVINO); see [windows/README.md](windows/README.md).
@@ -81,17 +113,16 @@ turn on. Nothing here is "offline by default": the first run downloads models.
 | Local LLM models | the pinned model catalog; the correction adapter is fetched from this repository on GitHub | when you press download | a file request | none | not downloaded |
 | Update check | api.github.com, raw.githubusercontent.com | macOS: when you open the panel, plus a background check if you enable it. Windows: automatic by default | a request for the release list | none | macOS: panel only; Windows: on |
 | LLM correction or rewrite on **your own endpoint** | the URL you enter (the field suggests OpenRouter) | only if you pick the custom endpoint | **the dictated text** and the instruction prompt; no audio | your API key, stored **as plain text** in the settings (macOS UserDefaults, Windows `Settings.json`) | off; the default backend is the local model |
-| Account sync of vocabulary and ASR terms | the sync server run by the project owner (`superdictate.bykovlegal.ru`; source in [server/vocab-sync](server/vocab-sync)) | only after you sign in | replacement rules (source, replacement, origin, ASR-hint flag) and ASR terms; in this branch, also your custom mode names, colors and instructions and per-day usage counters | e-mail and password; the token is kept in the macOS Keychain or Windows DPAPI | off |
+| Account sync of vocabulary and ASR terms | the sync server run by the project owner (`superdictate.bykovlegal.ru`; source in [server/vocab-sync](server/vocab-sync)) | only after you sign in | replacement rules (source, replacement, origin, ASR-hint flag) and ASR terms; since 0.10.0 (unreleased), also your custom mode names, colors and instructions and per-day usage counters | e-mail and password; the token is kept in the macOS Keychain or Windows DPAPI | off |
 | History, settings, diagnostics | your disk only | always | stays on the device | none | on |
 | Analytics and telemetry | none in the code | n/a | n/a | n/a | n/a |
 
-Where the records live (paths keep the old name, see
-[below](#compatibility-names-that-stayed)):
+Where the records live:
 
 - macOS: `~/Library/Application Support/Lexomorph` (history, settings,
   `corrections.sqlite`, models), `~/Library/Logs/Lexomorph-*`, and the
   LaunchAgent `~/Library/LaunchAgents/com.local.lexomorph.agent.plist`.
-- Windows: `%LOCALAPPDATA%\SuperDictate`.
+- Windows: `%LOCALAPPDATA%\Lexomorph` (settings, history, models, `Logs\`).
 - History keeps the dictated text. `DictationTrace.jsonl` records, for the last
   2000 to 4000 dictations, what recognition wrote, the text after the rules and
   the final text. It stays on your computer; delete it if you do not want it.
@@ -137,10 +168,12 @@ commit and verifies it against GitHub.
 
 ### Windows
 
-Download `SuperDictate-X.Y.Z-setup.exe` from the newest `win-v*` entry on the
+Download `Lexomorph-Setup-X.Y.Z.exe` from the newest `win-v*` entry on the
 [Releases page](https://github.com/shohart/SuperDictate-Next/releases) and run
 it. Windows releases are never marked "latest", so the badge above and the
 "latest" link show the macOS release. The app is installed for the current user.
+The installer is not Authenticode-signed, so SmartScreen may warn about an
+unknown publisher. Details: [windows/README.md](windows/README.md).
 
 ### Updating
 
@@ -148,12 +181,13 @@ it. Windows releases are never marked "latest", so the badge above and the
   when it appears. The app downloads the new build, verifies the checksum, bundle
   ID, version and signature, replaces itself and relaunches. The panel
   checks when opened; the automatic background check is **off by default** on
-  macOS and can be enabled in the settings.
+  macOS and can be enabled in the settings. (Copies older than 0.10.0 cannot update into Lexomorph from
+  inside the app; see [Moving from SuperDictate Next](#moving-from-superdictate-next).)
 - **macOS, from Terminal:** run the install command again. It replaces only
   `/Applications/Lexomorph.app`.
 - **Windows:** the app checks for updates by default (can be turned off) and
   opens the release page when a newer `win-v*` exists. It does not download or
-  run anything by itself; you run the new `setup.exe`.
+  run anything by itself; you run the new installer.
 
 ### Uninstalling
 
@@ -162,7 +196,8 @@ curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/unin
 ```
 
 Removes the app and the background service. History, settings and models are
-kept so that a reinstall does not lose data or redownload the model. On Windows,
+kept so that a reinstall does not lose data or redownload the model. Add
+`--legacy` to remove a previous SuperDictate installation as well. On Windows,
 use "Apps and features".
 
 ## Quick start
@@ -199,7 +234,7 @@ updates. The gear opens Settings:
 - **Appearance:** capsule size, colors, indicator mode.
 - **System:** launch at login, privacy information.
 
-`RU / EN` switches the interface language. Changes are a draft until
+`RU / EN` switches the interface language (see [Interface language](#interface-language)). Changes are a draft until
 `Save and Restart`, which restarts only the background service. The panel can be
 closed; the service keeps running and starts after the next login.
 
@@ -223,16 +258,10 @@ adaptation to your voice.
 You can review, edit and delete everything the app remembers in Settings > Text
 (the vocabulary manager).
 
-<p align="center">
-  <img src="docs/assets/branding/features/personal-vocabulary.png" alt="Personal Vocabulary card" width="30%" />
-  <img src="docs/assets/branding/features/correction-learning.png" alt="Correction Learning card" width="30%" />
-  <img src="docs/assets/branding/features/style-modes.png" alt="Style Modes card" width="30%" />
-</p>
-
-*Concept illustrations, not screenshots. In the app, the vocabulary works as
-described above and is a nudge, not a promise of perfect spelling; learning is
-limited to short edits; modes need an LLM (local or your endpoint) and are off by
-default.*
+The feature gallery above shows these mechanisms as concept illustrations. In
+the app, the vocabulary works as described in the table and is a nudge, not a
+promise of perfect spelling; learning is limited to short edits; modes need an
+LLM (local or your endpoint) and are off by default.
 
 ## Writing modes
 
@@ -257,7 +286,7 @@ that server, so they leave the device.
 |---|---|
 | Replacement dictionary and ASR terms between your Macs (one JSON file in a folder you choose, for example iCloud, Dropbox or Syncthing; no account) | released (macOS) |
 | Dictionary and ASR terms between macOS and Windows, through an account (e-mail and password) on the sync server | released: dictionary in 0.9.3, ASR terms in 0.9.5; off until you sign in |
-| Custom writing modes (name, color, instruction) and dictation statistics per day and device | **unreleased: exists only in this branch, no release contains it yet** |
+| Custom writing modes (name, color, instruction) and dictation statistics per day and device | **unreleased: ships with 0.10.0; no published release contains it yet** |
 | Settings, hotkeys, the active mode | not synced (hotkeys and the active mode are intentionally local) |
 | Mobile devices | no client exists |
 
@@ -320,14 +349,16 @@ agent; check that it is running afterwards. Windows: see
   and click `Restart` on the background service. If the app is missing from the
   system list, click `Try Again` next to that permission.
 - **Where do I find the app in macOS Privacy settings?** It is listed as
-  **SuperDictate**, not Lexomorph: macOS takes the name from the app file, which
-  keeps its old name on purpose.
+  **Lexomorph**. A SuperDictate entry left from an older version is harmless and
+  can be removed by hand.
 - **The installer says the build is not for this Mac.** You are on Apple
   Silicon: use the build-from-source command.
 - **A browser-downloaded ZIP shows a Gatekeeper warning.** The build is not
   notarized; use the Terminal installer.
-- **macOS asks for permissions again after an update.** Release builds are
-  signed with a local developer certificate, not notarized; re-grant if prompted.
+- **macOS asks for permissions again.** Expected once when moving from
+  SuperDictate: the bundle ID changed, so macOS sees a new app. Later updates keep
+  the permissions as long as the signing certificate stays the same. Release
+  builds are signed with a developer certificate and are not notarized.
 - **Text is not inserted in some fields.** Protected password fields and apps
   that hide Accessibility data may not expose the caret; that can affect the
   animation position and sometimes insertion.
@@ -338,22 +369,48 @@ agent; check that it is running afterwards. Windows: see
   peaks at about 2.2 GB resident (mapped model pages included); the app process
   stays around 40 to 60 MB.
 
-Logs: `~/Library/Logs/Lexomorph-*` on macOS, `%LOCALAPPDATA%\SuperDictate` on
+Logs: `~/Library/Logs/Lexomorph-*` on macOS, `%LOCALAPPDATA%\Lexomorph\Logs` on
 Windows. Do not paste transcripts or audio into public issues.
 
-## Compatibility: names that stayed
+## Interface language
 
-Since 0.10.0 the macOS identifiers carry the new name too: `/Applications/Lexomorph.app`,
-bundle ID `com.local.lexomorph`, LaunchAgent `com.local.lexomorph.agent`, data and
-log paths, the `Lexomorph.zip` asset, the `LEXOMORPH_*` variables and the SwiftPM
-target `Lexomorph`. Because macOS sees a new app, grant the Microphone,
-Accessibility and Input Monitoring permissions again; on first launch your
-settings, vocabulary and models are carried over, and the old SuperDictate data
-is left untouched for rollback. Still named SuperDictate on purpose: the
-repository `shohart/SuperDictate-Next`, the sync server address, and the
-Windows build (`SuperDictate-X.Y.Z-setup.exe`, `%LOCALAPPDATA%\SuperDictate`).
-Details and reasons: [docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md).
-Brand rules: [docs/branding/BRAND_GUIDELINES.md](docs/branding/BRAND_GUIDELINES.md).
+The interface is in English by default. If the system language is Russian, it
+starts in Russian. A language you pick yourself (`RU / EN` in the macOS
+Settings; Settings on Windows) always wins and is kept across updates and the
+migration. Recognition languages are independent of the interface language:
+Parakeet Ultra covers 25 languages, GigaAM v3 is Russian only.
+
+## Moving from SuperDictate Next
+
+Lexomorph is the same project under a new name. Since 0.10.0 the new name is
+also in the identifiers, so for the system it is a new application:
+
+- **macOS:** `/Applications/Lexomorph.app`, bundle ID `com.local.lexomorph`,
+  LaunchAgent `com.local.lexomorph.agent`, data in
+  `~/Library/Application Support/Lexomorph`, logs `~/Library/Logs/Lexomorph-*`,
+  release asset `Lexomorph.zip`. Run the installer command above: it installs
+  Lexomorph and then retires the old `SuperDictate.app` and its agent. **Grant
+  Microphone, Accessibility and Input Monitoring again**; macOS cannot carry
+  them over to a new bundle ID. On the first launch your settings, vocabulary,
+  models and sync sign-in are copied from the old data; the old data is never
+  modified or deleted and stays as the way back.
+- **Windows:** `Lexomorph-Setup-X.Y.Z.exe` removes an installed SuperDictate
+  (program, shortcuts, autostart entry), and the first launch copies
+  `%LOCALAPPDATA%\SuperDictate` to `%LOCALAPPDATA%\Lexomorph`. The old folder
+  stays as the way back.
+- **Updating:** copies of SuperDictate older than 0.10.0 do not update
+  themselves into Lexomorph, because they only accept the old app name and
+  asset. Install Lexomorph with the installer once; after that, updates work
+  from inside the app.
+- **Environment variables** are now `LEXOMORPH_*` (Windows still reads the old
+  `SUPERDICTATE_*` as a fallback for one release).
+
+Details, rollback and the list of what was renamed:
+[docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md). Brand
+rules: [docs/branding/BRAND_GUIDELINES.md](docs/branding/BRAND_GUIDELINES.md).
+Still named SuperDictate for now, on purpose: the repository
+`shohart/SuperDictate-Next` (GitHub redirects after a rename) and the sync
+server address `superdictate.bykovlegal.ru`.
 
 ## Contributing
 
@@ -375,5 +432,6 @@ Lexomorph (formerly SuperDictate Next, and before that SuperDictate-Intel) is a
 fork of [SuperDictate](https://github.com/shlgd/SuperDictate), which is based on
 the open-source [Parakey](https://github.com/rcourtman/parakey) project by
 Richard Courtman. The name changed from SuperDictate-Intel to SuperDictate Next
-with v0.5.0. The rename to Lexomorph is not part of any release yet (the latest
-release is 0.9.7). Old repository URLs redirect. The brand has not been checked for trademark or domain availability.
+with v0.5.0, and to Lexomorph in 0.10.0, which is not published yet (the latest
+release is 0.9.7). Old repository URLs redirect. The brand has not been checked
+for trademark or domain availability.
