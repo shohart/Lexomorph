@@ -27,7 +27,7 @@ if [[ -z "$identity" ]]; then
         | head -n 1)"
 fi
 if [[ -z "$identity" ]]; then
-    printf 'SuperDictate: no Apple Development signing identity was found.\n' >&2
+    printf 'Lexomorph: no Apple Development signing identity was found.\n' >&2
     printf 'Set SUPERDICTATE_SIGN_IDENTITY explicitly; ad-hoc local installs are disabled because they reset macOS permissions.\n' >&2
     exit 1
 fi
@@ -38,14 +38,14 @@ codesign --verify --deep --strict "$STAGED_APP"
 identifier="$(codesign -d --verbose=4 "$STAGED_APP" 2>&1 \
     | sed -n 's/^Identifier=//p')"
 [[ "$identifier" == "com.local.superdictate" ]] || {
-    printf 'SuperDictate: unexpected bundle identifier: %s\n' "$identifier" >&2
+    printf 'Lexomorph: unexpected bundle identifier: %s\n' "$identifier" >&2
     exit 1
 }
 if [[ -d "$APP_PATH" ]]; then
     installed_requirement="$(codesign -d -r- "$APP_PATH" 2>&1 | tail -n 1)"
     staged_requirement="$(codesign -d -r- "$STAGED_APP" 2>&1 | tail -n 1)"
     [[ "$installed_requirement" == "$staged_requirement" ]] || {
-        printf 'SuperDictate: refusing to change the installed signing identity because that would reset macOS permissions.\n' >&2
+        printf 'Lexomorph: refusing to change the installed signing identity because that would reset macOS permissions.\n' >&2
         exit 1
     }
 fi
@@ -71,4 +71,4 @@ rm -rf "$BACKUP"
 launchctl bootstrap "gui/$uid" "$HOME/Library/LaunchAgents/$AGENT_LABEL.plist" >/dev/null 2>&1 || true
 launchctl kickstart -k "gui/$uid/$AGENT_LABEL"
 
-printf 'SuperDictate: installed one signed app at %s and restarted the background agent.\n' "$APP_PATH"
+printf 'Lexomorph: installed one signed app at %s and restarted the background agent.\n' "$APP_PATH"

@@ -6452,9 +6452,9 @@ enum ParakeySelfTest {
             "CASK_INSTALLED_TOKEN='parakey'",
             "PlistBuddy -c \"Print :CFBundleShortVersionString\"",
             "version_at_least \"$installed\" \"$TARGET_VERSION\"",
-            "state \"preparing\" \"Preparing Homebrew for Parakey v$TARGET_VERSION...\"",
-            "state \"downloading\" \"Downloading Parakey v$TARGET_VERSION...\"",
-            "state \"installing\" \"Installing Parakey v$TARGET_VERSION...\"",
+            "state \"preparing\" \"Preparing Homebrew for Lexomorph v$TARGET_VERSION...\"",
+            "state \"downloading\" \"Downloading Lexomorph v$TARGET_VERSION...\"",
+            "state \"installing\" \"Installing Lexomorph v$TARGET_VERSION...\"",
             "run_brew tap \"$CASK_TAP\"",
             "run_brew update --force",
             "run_brew fetch --cask --force \"$CASK_TOKEN\"",
@@ -6462,7 +6462,7 @@ enum ParakeySelfTest {
             "run_brew reinstall --cask --force --appdir=\"$APP_DIR\" \"$CASK_TOKEN\"",
             "installed_target_version",
             "sleep 2",
-            "state \"complete\" \"Parakey v$TARGET_VERSION is installed.\"",
+            "state \"complete\" \"Lexomorph v$TARGET_VERSION is installed.\"",
             "/usr/bin/open \"$APP_PATH\""
         ] {
             guard script.contains(fragment) else {
@@ -6496,7 +6496,7 @@ enum ParakeySelfTest {
             "/usr/bin/ditto \"$STAGED_APP\" \"$APP_PATH\" || rollback",
             "/usr/bin/codesign --verify --deep --strict \"$APP_PATH\"",
             "if [ -d \"$BACKUP_APP\" ]; then",
-            "state \"complete\" 'SuperDictate Next v9.8.7 is installed.'",
+            "state \"complete\" 'Lexomorph v9.8.7 is installed.'",
         ] {
             guard directScript.contains(fragment) else {
                 throw SelfTestFailure.failed("direct update helper missing fragment: \(fragment)")

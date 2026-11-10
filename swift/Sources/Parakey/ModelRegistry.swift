@@ -47,13 +47,13 @@ func refuseHostileRegistryEnvironmentAndExit() {
     log("refusing to start: registry override env var(s) set: \(names)")
     let alert = NSAlert()
     alert.alertStyle = .critical
-    alert.messageText = "Parakey refused to start"
+    alert.messageText = "Lexomorph refused to start"
     alert.informativeText = """
-        These environment variable(s) are set in Parakey's process: \(names).
+        These environment variable(s) are set in Lexomorph's process: \(names).
 
-        Parakey does not support overriding the speech-model download URL and treats their presence as a sign that the launch environment has been tampered with.
+        Lexomorph does not support overriding the speech-model download URL and treats their presence as a sign that the launch environment has been tampered with.
 
-        Check ~/Library/LaunchAgents/, your shell rc files, and any parent process. Once the variables are gone, launch Parakey again.
+        Check ~/Library/LaunchAgents/, your shell rc files, and any parent process. Once the variables are gone, launch Lexomorph again.
         """
     alert.addButton(withTitle: "Quit")
     alert.runModal()

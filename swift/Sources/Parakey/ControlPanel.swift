@@ -397,7 +397,7 @@ final class SuperDictateControlPanelApp: NSObject, NSApplicationDelegate, NSWind
                               styleMask: [.titled, .closable, .miniaturizable],
                               backing: .buffered,
                               defer: false)
-        window.title = "SuperDictate Next"
+        window.title = "Lexomorph"
         window.contentMinSize = NSSize(width: 520, height: 310)
         window.contentMaxSize = NSSize(width: 520, height: 310)
         window.isReleasedWhenClosed = false
@@ -429,7 +429,7 @@ final class SuperDictateControlPanelApp: NSObject, NSApplicationDelegate, NSWind
         guard force || fingerprint != lastRenderFingerprint else { return }
         lastRenderFingerprint = fingerprint
         resizeCompactPanel(window)
-        window.title = t("SuperDictate Next — панель управления", "SuperDictate Next — Control Panel")
+        window.title = t("Lexomorph — панель управления", "Lexomorph — Control Panel")
         window.contentView = makeContentView()
         if let settingsWindow, settingsWindow.isVisible {
             // Rebuilding the content view mid-edit destroys the very
@@ -454,7 +454,7 @@ final class SuperDictateControlPanelApp: NSObject, NSApplicationDelegate, NSWind
     /// build (CFBundleShortVersionString suffixed "-dev" by
     /// scripts/build-test-app.sh) is unmistakable at a glance.
     private func settingsWindowTitle() -> String {
-        t("Настройки SuperDictate Next", "SuperDictate Next Settings") + " · v" + currentBundleVersion()
+        t("Настройки Lexomorph", "Lexomorph Settings") + " · v" + currentBundleVersion()
     }
 
     private func resizeCompactPanel(_ window: NSWindow) {
@@ -973,7 +973,7 @@ case .text:
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 1
-        text.addArrangedSubview(panelLabel("SuperDictate Next", size: 20, weight: .semibold))
+        text.addArrangedSubview(panelLabel("Lexomorph", size: 20, weight: .semibold))
         text.addArrangedSubview(panelLabel(
             t("Локальная диктовка · работает в фоне", "Local dictation · runs in the background"),
             size: 11.5,
@@ -982,7 +982,7 @@ case .text:
 
         let version = panelLabel("v\(currentBundleVersion())", size: 11, color: .tertiaryLabelColor)
         version.setContentHuggingPriority(.required, for: .horizontal)
-        version.toolTip = t("Установленная версия SuperDictate Next", "Installed SuperDictate Next version")
+        version.toolTip = t("Установленная версия Lexomorph", "Installed Lexomorph version")
 
         let languageControl = NSSegmentedControl(labels: ["RU", "EN"],
                                                  trackingMode: .selectOne,
@@ -1171,8 +1171,8 @@ header.addArrangedSubview(panelLabel(
             t("Сбросить", "Reset"),
             action: #selector(resetPermissionsClicked(_:)),
             enabled: serviceOperation == nil,
-            toolTip: t("Отозвать все разрешения macOS у SuperDictate (микрофон, вставка текста, хоткей). После сброса их нужно выдать заново.",
-                       "Revoke all macOS permissions from SuperDictate (microphone, text insertion, hotkey). You'll need to grant them again.")
+            toolTip: t("Отозвать все разрешения macOS у Lexomorph (микрофон, вставка текста, хоткей). После сброса их нужно выдать заново.",
+                       "Revoke all macOS permissions from Lexomorph (microphone, text insertion, hotkey). You'll need to grant them again.")
         ))
         content.addArrangedSubview(header)
 
@@ -1183,8 +1183,8 @@ header.addArrangedSubview(panelLabel(
                 size: 11,
                 color: .secondaryLabelColor
             )
-            ready.toolTip = t("SuperDictate Next получил все три необходимых разрешения macOS.",
-                              "SuperDictate Next has all three required macOS permissions.")
+            ready.toolTip = t("Lexomorph получил все три необходимых разрешения macOS.",
+                              "Lexomorph has all three required macOS permissions.")
             content.addArrangedSubview(ready)
         } else {
             for permission in missing {
@@ -1271,7 +1271,7 @@ header.addArrangedSubview(panelLabel(
                     nil, nil, false, nil)
         case .upToDate:
             return ("checkmark.circle.fill", .systemGreen,
-                    t("SuperDictate Next актуален", "SuperDictate Next is up to date"),
+                    t("Lexomorph актуален", "Lexomorph is up to date"),
                     t("Установлена последняя версия v\(currentBundleVersion())",
                       "Latest version v\(currentBundleVersion()) is installed"),
                     t("Проверить", "Check"), #selector(updateButtonClicked(_:)), true,
@@ -1282,8 +1282,8 @@ header.addArrangedSubview(panelLabel(
                     t("Скачается, проверится и установится автоматически",
                       "Downloads, verifies, and installs automatically"),
                     t("Обновить", "Update"), #selector(updateButtonClicked(_:)), serviceOperation == nil,
-                    t("Обновить SuperDictate Next до v\(release.version) одной кнопкой",
-                      "Update SuperDictate Next to v\(release.version) with one click"))
+                    t("Обновить Lexomorph до v\(release.version) одной кнопкой",
+                      "Update Lexomorph to v\(release.version) with one click"))
         case .preparing(let version, let phase):
             return ("arrow.down.circle", .systemBlue,
                     t("Обновляю до v\(version)", "Updating to v\(version)"),
@@ -1408,7 +1408,7 @@ header.addArrangedSubview(panelLabel(
         case .httpStatus(let code):
             return "GitHub вернул ошибку HTTP \(code). Повторите попытку позже."
         case .unexpectedResponse:
-            return "GitHub вернул ответ, который SuperDictate не смог проверить."
+            return "GitHub вернул ответ, который Lexomorph не смог проверить."
         }
     }
 
@@ -1952,8 +1952,8 @@ header.addArrangedSubview(panelLabel(
             weight: .semibold
         ))
         text.addArrangedSubview(panelLabel(
-            t("Открывать SuperDictate Next автоматически при входе в macOS.",
-              "Open SuperDictate Next automatically when you log in to macOS."),
+            t("Открывать Lexomorph автоматически при входе в macOS.",
+              "Open Lexomorph automatically when you log in to macOS."),
             size: 12,
             color: .secondaryLabelColor
         ))
@@ -2230,8 +2230,8 @@ header.addArrangedSubview(panelLabel(
         }
 
         let consent = panelLabel(
-            t("Словарь будет храниться на сервере SuperDictate и использоваться для улучшения распознавания речи.",
-              "Your vocabulary is stored on the SuperDictate server and used to improve speech recognition."),
+            t("Словарь будет храниться на сервере Lexomorph и использоваться для улучшения распознавания речи.",
+              "Your vocabulary is stored on the Lexomorph server and used to improve speech recognition."),
             size: 12,
             color: .secondaryLabelColor
         )
@@ -4958,8 +4958,8 @@ header.addArrangedSubview(panelLabel(
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = t("Сбросить разрешения?", "Reset Permissions?")
-        alert.informativeText = t("macOS отзовёт у SuperDictate Next микрофон, вставку текста и мониторинг ввода. Приложение перезапустится и снова попросит доступ.",
-                                  "macOS will revoke SuperDictate Next's microphone, text insertion, and input monitoring. The app will relaunch and ask again.")
+        alert.informativeText = t("macOS отзовёт у Lexomorph микрофон, вставку текста и мониторинг ввода. Приложение перезапустится и снова попросит доступ.",
+                                  "macOS will revoke Lexomorph's microphone, text insertion, and input monitoring. The app will relaunch and ask again.")
         alert.addButton(withTitle: t("Отмена", "Cancel"))
         alert.addButton(withTitle: t("Сбросить", "Reset"))
         guard alert.runModal() == .alertSecondButtonReturn else { return }

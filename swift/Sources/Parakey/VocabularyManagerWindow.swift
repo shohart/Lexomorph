@@ -433,7 +433,7 @@ final class VocabularyManagerWindowController: NSObject, NSWindowDelegate, NSTab
         guard let validated = normalizedTranscriptCorrections(
             [TranscriptCorrection(source: pair.source, replacement: pair.replacement)]
         ).first else {
-            presentError("That correction was rejected: it's empty, too long, or contains characters Parakey can't store.")
+            presentError("That correction was rejected: it's empty, too long, or contains characters Lexomorph can't store.")
             return
         }
         // Only refuse for genuinely new sources — an add that overwrites
@@ -444,7 +444,7 @@ final class VocabularyManagerWindowController: NSObject, NSWindowDelegate, NSTab
             normalizedTranscriptCorrectionSource($0.source) == normalizedTranscriptCorrectionSource(validated.source)
         }
         if isNewSource, store.count() >= MAX_TRANSCRIPT_CORRECTIONS {
-            presentError("Parakey keeps at most \(MAX_TRANSCRIPT_CORRECTIONS) corrections, and that limit has been reached. Delete an existing entry before adding a new one.")
+            presentError("Lexomorph keeps at most \(MAX_TRANSCRIPT_CORRECTIONS) corrections, and that limit has been reached. Delete an existing entry before adding a new one.")
             return
         }
         do {
@@ -470,7 +470,7 @@ final class VocabularyManagerWindowController: NSObject, NSWindowDelegate, NSTab
         guard let validated = normalizedTranscriptCorrections(
             [TranscriptCorrection(source: pair.source, replacement: pair.replacement)]
         ).first else {
-            presentError("That correction was rejected: it's empty, too long, or contains characters Parakey can't store.")
+            presentError("That correction was rejected: it's empty, too long, or contains characters Lexomorph can't store.")
             return
         }
         let collidesWithOtherRow = records.contains { other in

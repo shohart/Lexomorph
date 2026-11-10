@@ -44,4 +44,4 @@ grep -q 'verify_source_ref' install.sh
 grep -q 'validate_output_app_path "$OUTPUT_APP"' scripts/build-app.sh
 
 git diff --check
-printf 'SuperDictate checks passed (v%s).\n' "$app_version"
+printf 'Lexomorph checks passed (v%s).\n' "$app_version"

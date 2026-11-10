@@ -7,11 +7,11 @@ OUTPUT_APP="${1:-$ROOT_DIR/dist/SuperDictate.app}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
 say() {
-    printf 'SuperDictate: %s\n' "$*"
+    printf 'Lexomorph: %s\n' "$*"
 }
 
 fail() {
-    printf 'SuperDictate: %s\n' "$*" >&2
+    printf 'Lexomorph: %s\n' "$*" >&2
     exit 1
 }
 

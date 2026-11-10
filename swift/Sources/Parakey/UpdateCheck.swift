@@ -70,13 +70,13 @@ enum UpdateCheckFailure: Error, Equatable, Sendable {
 func manualUpdateCheckFailureText(_ failure: UpdateCheckFailure) -> String {
     switch failure {
     case .network:
-        return "SuperDictate Next couldn't reach GitHub. Check your internet connection and try again."
+        return "Lexomorph couldn't reach GitHub. Check your internet connection and try again."
     case .httpStatus(403):
         return "GitHub declined the update check (HTTP 403). This is usually temporary rate limiting — try again in a few minutes."
     case .httpStatus(let code):
         return "GitHub returned an error (HTTP \(code)). Try again later."
     case .unexpectedResponse:
-        return "GitHub returned a response SuperDictate couldn't read. Try again later, or check the releases page on GitHub directly."
+        return "GitHub returned a response Lexomorph couldn't read. Try again later, or check the releases page on GitHub directly."
     }
 }
 
@@ -247,7 +247,7 @@ enum SuperDictateUpdateInstallerError: LocalizedError, Equatable, Sendable {
             case .invalidBundle(let detail):
                 return "The new application failed verification: \(detail)"
             case .appNotWritable:
-                return "SuperDictate Next cannot replace the application in Applications. Run the regular installer once."
+                return "Lexomorph cannot replace the application in Applications. Run the regular installer once."
             }
         }
         switch self {
@@ -268,7 +268,7 @@ enum SuperDictateUpdateInstallerError: LocalizedError, Equatable, Sendable {
         case .invalidBundle(let detail):
             return "Проверка нового приложения не пройдена: \(detail)"
         case .appNotWritable:
-            return "SuperDictate Next не может заменить приложение в папке Applications. Запустите обычный установщик один раз."
+            return "Lexomorph не может заменить приложение в папке Applications. Запустите обычный установщик один раз."
         }
     }
 }
@@ -585,7 +585,7 @@ func updateHelperScript(pid: pid_t,
             sleep 0.5
         done
 
-        log "Parakey was still running after 30s; sending TERM before updating."
+        log "Lexomorph was still running after 30s; sending TERM before updating."
         kill -TERM "$PARAKEY_PID" 2>/dev/null || true
         for _ in {1..20}; do
             if ! kill -0 "$PARAKEY_PID" 2>/dev/null; then
@@ -594,7 +594,7 @@ func updateHelperScript(pid: pid_t,
             sleep 0.5
         done
 
-        fail "Parakey did not quit, so the app bundle was not touched."
+        fail "Lexomorph did not quit, so the app bundle was not touched."
     }
 
     installed_target_version() {
@@ -605,7 +605,7 @@ func updateHelperScript(pid: pid_t,
     }
 
     {
-        echo "[$(timestamp)] Parakey update starting"
+        echo "[$(timestamp)] Lexomorph update starting"
         echo "Target version: $TARGET_VERSION"
         echo "Current installed version: $(app_version)"
         echo "Brew: $BREW"
@@ -615,7 +615,7 @@ func updateHelperScript(pid: pid_t,
         echo "App: $APP_PATH"
     }
 
-    state "preparing" "Preparing Homebrew for Parakey v$TARGET_VERSION..."
+    state "preparing" "Preparing Homebrew for Lexomorph v$TARGET_VERSION..."
 
     if ! run_brew tap "$CASK_TAP"; then
         fail "brew tap failed; leaving the existing app in place."
@@ -626,12 +626,12 @@ func updateHelperScript(pid: pid_t,
         fail "brew update failed; leaving the existing app in place."
     fi
 
-    state "downloading" "Downloading Parakey v$TARGET_VERSION..."
+    state "downloading" "Downloading Lexomorph v$TARGET_VERSION..."
     if ! run_brew fetch --cask --force "$CASK_TOKEN"; then
         fail "brew cask fetch failed; leaving the existing app in place."
     fi
 
-    state "installing" "Installing Parakey v$TARGET_VERSION..."
+    state "installing" "Installing Lexomorph v$TARGET_VERSION..."
     wait_for_parakey_exit
 
     if ! run_brew upgrade --cask --force --appdir="$APP_DIR" "$CASK_TOKEN"; then
@@ -641,7 +641,7 @@ func updateHelperScript(pid: pid_t,
     state "verifying" "Verifying the installed app..."
     if ! installed_target_version; then
         log "brew upgrade completed without installing v$TARGET_VERSION; forcing qualified cask reinstall."
-        state "installing" "Reinstalling Parakey v$TARGET_VERSION..."
+        state "installing" "Reinstalling Lexomorph v$TARGET_VERSION..."
         if ! run_brew update --force; then
             fail "brew update failed before reinstall; leaving the existing app in place."
         fi
@@ -651,13 +651,13 @@ func updateHelperScript(pid: pid_t,
     fi
 
     if ! installed_target_version; then
-        fail "Expected Parakey v$TARGET_VERSION or newer after update, but the installed app is still $(app_version)."
+        fail "Expected Lexomorph v$TARGET_VERSION or newer after update, but the installed app is still $(app_version)."
     fi
 
-    state "relaunching" "Update complete. Reopening Parakey..."
+    state "relaunching" "Update complete. Reopening Lexomorph..."
     sleep 2
     /usr/bin/open "$APP_PATH"
-    state "complete" "Parakey v$TARGET_VERSION is installed."
+    state "complete" "Lexomorph v$TARGET_VERSION is installed."
     """#
 }
 
@@ -673,17 +673,17 @@ func superDictateDirectUpdateHelperScript(pid: pid_t,
     let preparing = localizedText("Подготавливаю замену приложения…",
                                   "Preparing to replace the application…",
                                   language: language)
-    let installing = localizedText("Устанавливаю SuperDictate Next v\(targetVersion)…",
-                                    "Installing SuperDictate Next v\(targetVersion)…",
+    let installing = localizedText("Устанавливаю Lexomorph v\(targetVersion)…",
+                                    "Installing Lexomorph v\(targetVersion)…",
                                     language: language)
     let verifying = localizedText("Проверяю установленную версию…",
                                    "Verifying the installed version…",
                                    language: language)
-    let relaunching = localizedText("Обновление готово. Запускаю SuperDictate Next…",
-                                    "Update complete. Reopening SuperDictate Next…",
+    let relaunching = localizedText("Обновление готово. Запускаю Lexomorph…",
+                                    "Update complete. Reopening Lexomorph…",
                                     language: language)
-    let complete = localizedText("SuperDictate Next v\(targetVersion) установлена.",
-                                  "SuperDictate Next v\(targetVersion) is installed.",
+    let complete = localizedText("Lexomorph v\(targetVersion) установлена.",
+                                  "Lexomorph v\(targetVersion) is installed.",
                                   language: language)
     let failed = localizedText("Обновление не установлено. Предыдущая версия восстановлена.",
                                 "The update was not installed. The previous version was restored.",

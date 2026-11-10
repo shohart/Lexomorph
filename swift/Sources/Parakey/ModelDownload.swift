@@ -194,7 +194,7 @@ func assertSufficientDiskSpaceForGECModelDownload() throws {
         return
     }
     let detail = """
-    Parakey needs about \(formattedByteCount(UInt64(GEC_MODEL_SIZE_BYTES + GEC_LORA_SIZE_BYTES))) of free disk space to download the correction model.
+    Lexomorph needs about \(formattedByteCount(UInt64(GEC_MODEL_SIZE_BYTES + GEC_LORA_SIZE_BYTES))) of free disk space to download the correction model.
 
     Available: \(formattedByteCount(UInt64(availableBytes)))
     Needed: \(formattedByteCount(UInt64(requiredBytes)))
@@ -392,7 +392,7 @@ func assertSufficientDiskSpaceForYandexModelDownload() throws {
         return
     }
     let detail = """
-    Parakey needs about \(formattedByteCount(UInt64(YANDEXGPT_MODEL_SIZE_BYTES))) of free disk space to download YandexGPT 5 Light.
+    Lexomorph needs about \(formattedByteCount(UInt64(YANDEXGPT_MODEL_SIZE_BYTES))) of free disk space to download YandexGPT 5 Light.
 
     Available: \(formattedByteCount(UInt64(availableBytes)))
     Needed: \(formattedByteCount(UInt64(requiredBytes)))
@@ -595,7 +595,7 @@ func assertSufficientDiskSpaceForBundledModel(_ model: BundledLLMModel) throws {
         return
     }
     let detail = """
-    Parakey needs about \(formattedByteCount(UInt64(bundledLLMModelDownloadSize(model)))) of free disk space to download \(model.displayName).
+    Lexomorph needs about \(formattedByteCount(UInt64(bundledLLMModelDownloadSize(model)))) of free disk space to download \(model.displayName).
 
     Available: \(formattedByteCount(UInt64(availableBytes)))
     Needed: \(formattedByteCount(UInt64(requiredBytes)))
@@ -752,7 +752,7 @@ func speechModelDiskSpaceFailureDetail(profile: SpeechModelProfile,
         return nil
     }
     return """
-    Parakey needs \(profile.downloadSizeText) of free disk space to download \(profile.shortName), plus room for the speech runtime to prepare it.
+    Lexomorph needs \(profile.downloadSizeText) of free disk space to download \(profile.shortName), plus room for the speech runtime to prepare it.
 
     Available: \(formattedByteCount(UInt64(availableBytes)))
     Needed: \(formattedByteCount(UInt64(requiredBytes)))
@@ -882,7 +882,7 @@ func correctionImportCountText(sourceName: String, originalCount: Int, keptCount
     guard originalCount > keptCount else {
         return "\(sourceName) contains \(keptCount) corrections."
     }
-    return "\(sourceName) contains \(originalCount) entries; only the first \(keptCount) valid corrections (Parakey keeps at most \(MAX_TRANSCRIPT_CORRECTIONS)) will be imported."
+    return "\(sourceName) contains \(originalCount) entries; only the first \(keptCount) valid corrections (Lexomorph keeps at most \(MAX_TRANSCRIPT_CORRECTIONS)) will be imported."
 }
 
 /// Appended to the import dialog when choosing Merge would push the
@@ -893,7 +893,7 @@ func correctionImportMergeCapWarningText(existingCount: Int,
                                          cap: Int = MAX_TRANSCRIPT_CORRECTIONS) -> String? {
     let mergedCount = existingCount + newCount
     guard mergedCount > cap else { return nil }
-    return "Merging would produce \(mergedCount) corrections; Parakey keeps at most \(cap), so \(mergedCount - cap) would be dropped."
+    return "Merging would produce \(mergedCount) corrections; Lexomorph keeps at most \(cap), so \(mergedCount - cap) would be dropped."
 }
 
 private func utf8ClippedPrefix(_ text: String, maxBytes: Int) -> String {

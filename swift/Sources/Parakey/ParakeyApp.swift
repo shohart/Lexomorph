@@ -1298,10 +1298,10 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         button.image = image
         button.imagePosition = .imageOnly
         if image == nil {
-            button.title = "Parakey"
+            button.title = "Lexomorph"
             log("statusItem: parakey-menubar.png not in Bundle.main — text fallback")
         }
-        button.toolTip = "Parakey"
+        button.toolTip = "Lexomorph"
     }
 
     private func concealMenuBarIcon() {
@@ -1319,7 +1319,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func revealMenuBarIcon() {
         statusItem.length = NSStatusItem.squareLength
         statusItem.button?.isHidden = false
-        statusItem.button?.toolTip = "Parakey"
+        statusItem.button?.toolTip = "Lexomorph"
     }
 
     private func tintedCopy(of source: NSImage, with color: NSColor) -> NSImage {
@@ -3859,8 +3859,8 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func confirmStopDictation() -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Stop SuperDictate Next?"
-        alert.informativeText = "The \(hotkey.hotkey.name) dictation shortcut will stop until you open SuperDictate Next again. Use Close to hide windows while keeping dictation running."
+        alert.messageText = "Stop Lexomorph?"
+        alert.informativeText = "The \(hotkey.hotkey.name) dictation shortcut will stop until you open Lexomorph again. Use Close to hide windows while keeping dictation running."
         alert.addButton(withTitle: "Keep Running")
         alert.addButton(withTitle: "Stop Dictation")
         return alert.runModal() == .alertSecondButtonReturn
@@ -3892,9 +3892,9 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showAppForModal()
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "SuperDictate Next Reopened After an Unexpected Exit"
+        alert.messageText = "Lexomorph Reopened After an Unexpected Exit"
         alert.informativeText = """
-            Parakey appears to have exited last time without a normal shutdown. Nothing was sent anywhere.
+            Lexomorph appears to have exited last time without a normal shutdown. Nothing was sent anywhere.
 
             You can copy a privacy-safe diagnostics report or open the local log if you want to file an issue.
             """
@@ -3916,7 +3916,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.title = "Save Diagnostics"
         panel.message = "Save a privacy-safe diagnostics report for a GitHub issue."
         panel.prompt = "Save"
-        panel.nameFieldStringValue = "Parakey Diagnostics.txt"
+        panel.nameFieldStringValue = "Lexomorph Diagnostics.txt"
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -4075,7 +4075,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // in the menu that gets such an indicator — every other row
         // sits flush against the left edge. The wrapper produces the
         // identical behaviour with no auto-glyph.
-        let quit = NSMenuItem(title: "Quit SuperDictate Next",
+        let quit = NSMenuItem(title: "Quit Lexomorph",
                               action: #selector(quitClicked(_:)),
                               keyEquivalent: "q")
         quit.target = self
@@ -4132,7 +4132,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         sub.addItem(.separator())
 
-        let about = NSMenuItem(title: "About SuperDictate Next",
+        let about = NSMenuItem(title: "About Lexomorph",
                                action: #selector(showAboutClicked(_:)),
                                keyEquivalent: "")
         about.target = self
@@ -4224,7 +4224,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if isCoreRuntimeReady {
             return "Starting hotkey listener…"
         }
-        return "SuperDictate Next is not ready"
+        return "Lexomorph is not ready"
     }
 
     private func diagnosticsText() -> String {
@@ -4398,7 +4398,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                               styleMask: [.titled, .closable],
                               backing: .buffered,
                               defer: false)
-        window.title = "Set Up SuperDictate Next"
+        window.title = "Set Up Lexomorph"
         window.isReleasedWhenClosed = false
         window.delegate = self
         setupChecklistWindow = window
@@ -4461,8 +4461,8 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         root.edgeInsets = NSEdgeInsets(top: 20, left: 22, bottom: 18, right: 22)
         root.translatesAutoresizingMaskIntoConstraints = false
 
-        let title = setupLabel("Set Up SuperDictate Next", font: .systemFont(ofSize: 22, weight: .semibold))
-        let subtitle = setupLabel("Finish these checks before dictating. SuperDictate Next keeps this setup local to your Mac.",
+        let title = setupLabel("Set Up Lexomorph", font: .systemFont(ofSize: 22, weight: .semibold))
+        let subtitle = setupLabel("Finish these checks before dictating. Lexomorph keeps this setup local to your Mac.",
                                   font: .systemFont(ofSize: 13),
                                   color: .secondaryLabelColor)
         subtitle.preferredMaxLayoutWidth = 476
@@ -4539,7 +4539,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func setupChecklistSummary() -> String {
         setupChecklistIsComplete
-            ? "Setup is complete. Use SuperDictate from the Dock or shortcuts."
+            ? "Setup is complete. Use Lexomorph from the Dock or shortcuts."
             : "You can close this window; the menu will keep tracking setup."
     }
 
@@ -4805,7 +4805,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         automaticUpdates.toolTip = "Periodically checks GitHub for a newer release and only notifies you."
         sub.addItem(automaticUpdates)
 
-        let dock = NSMenuItem(title: "Show SuperDictate Next in Dock",
+        let dock = NSMenuItem(title: "Show Lexomorph in Dock",
                               action: #selector(toggleDock(_:)),
                               keyEquivalent: "")
         dock.target = self
@@ -5421,7 +5421,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showAppForModal()
         let panel = NSOpenPanel()
         panel.title = "Import Text Corrections"
-        panel.message = "Choose a Parakey corrections file to import."
+        panel.message = "Choose a Lexomorph corrections file to import."
         panel.prompt = "Import"
         panel.allowedContentTypes = [TranscriptCorrectionsTransfer.contentType]
         panel.allowsMultipleSelection = false
@@ -5484,9 +5484,9 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let alert = NSAlert()
         alert.messageText = "Set Up Text Correction Sync"
         alert.informativeText = """
-            Parakey can keep corrections in one local file. Put that file in iCloud Drive, Dropbox, Syncthing, or another synced folder to keep multiple Macs aligned without a Parakey account.
+            Lexomorph can keep corrections in one local file. Put that file in iCloud Drive, Dropbox, Syncthing, or another synced folder to keep multiple Macs aligned without a Lexomorph account.
 
-            Parakey only reads and writes the file you choose.
+            Lexomorph only reads and writes the file you choose.
             """
         alert.addButton(withTitle: "Create Sync File")
         alert.addButton(withTitle: "Use Existing File")
@@ -5512,7 +5512,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Stop Syncing Text Corrections?"
-        alert.informativeText = "Parakey will keep the corrections already on this Mac. The sync file will not be deleted."
+        alert.informativeText = "Lexomorph will keep the corrections already on this Mac. The sync file will not be deleted."
         alert.addButton(withTitle: "Stop Syncing")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -5568,7 +5568,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showAppForModal()
         let panel = NSSavePanel()
         panel.title = "Create Text Correction Sync File"
-        panel.message = "Choose where Parakey should keep the sync file. A folder synced by iCloud Drive or another provider works best."
+        panel.message = "Choose where Lexomorph should keep the sync file. A folder synced by iCloud Drive or another provider works best."
         panel.prompt = "Create"
         panel.nameFieldStringValue = CORRECTIONS_FILE_NAME
         panel.allowedContentTypes = [TranscriptCorrectionsTransfer.contentType]
@@ -5589,7 +5589,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showAppForModal()
         let panel = NSOpenPanel()
         panel.title = "Choose Text Correction Sync File"
-        panel.message = "Choose an existing Parakey corrections file."
+        panel.message = "Choose an existing Lexomorph corrections file."
         panel.prompt = "Use File"
         panel.allowedContentTypes = [TranscriptCorrectionsTransfer.contentType]
         panel.allowsMultipleSelection = false
@@ -5883,7 +5883,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case .fingerprintUnavailable:
             if presentErrors {
                 showCorrectionTransferError(title: "Sync Failed",
-                                            message: "Parakey could not find the selected sync file.")
+                                            message: "Lexomorph could not find the selected sync file.")
             }
         case .unchanged:
             break
@@ -6000,7 +6000,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showCorrectionTransferError(
             title: "Text Correction Sync Conflict",
             message: """
-            The sync file changed before this Mac wrote its latest text correction edits. Parakey kept the corrections on this Mac and stopped syncing so it would not overwrite the file.
+            The sync file changed before this Mac wrote its latest text correction edits. Lexomorph kept the corrections on this Mac and stopped syncing so it would not overwrite the file.
 
             Reconnect the sync file after importing or resolving the conflicting correction\(conflictingSources.count == 1 ? "" : "s"):
             \(examples)\(remainingText)
@@ -6021,7 +6021,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             showCorrectionTransferError(
                 title: "Text Correction Sync Stopped",
                 message: """
-                Parakey stopped syncing because the selected corrections file is no longer safe to use.
+                Lexomorph stopped syncing because the selected corrections file is no longer safe to use.
 
                 \(error.localizedDescription)
                 """
@@ -6048,7 +6048,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showAppForModal()
         let alert = NSAlert()
         alert.messageText = existing == nil ? "Add Text Correction" : "Edit Text Correction"
-        alert.informativeText = "Add the incorrect text Parakey typed, then the text it should paste instead."
+        alert.informativeText = "Add the incorrect text Lexomorph typed, then the text it should paste instead."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
 
@@ -6426,7 +6426,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func showAboutClicked(_ sender: NSMenuItem) {
         showAppForModal()
         let alert = NSAlert()
-        alert.messageText = "SuperDictate Next \(currentBundleVersion())"
+        alert.messageText = "Lexomorph \(currentBundleVersion())"
         alert.informativeText = """
             Lightweight push-to-talk dictation for Apple Silicon Macs.
 
@@ -6438,6 +6438,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             Network: model download, optional update check and install.
             Permissions: microphone audio, paste-at-cursor, push-to-talk hotkey.
 
+            Formerly SuperDictate Next.
             Open source, based on Parakey by Richard Courtman.
             github.com/shohart/SuperDictate-Next · MIT licensed
             """
@@ -6566,7 +6567,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showReleaseNotes(for release: GitHubRelease) {
         showAppForModal()
         let alert = NSAlert()
-        alert.messageText = "Parakey v\(release.version)"
+        alert.messageText = "Lexomorph v\(release.version)"
         var body = release.body.trimmingCharacters(in: .whitespacesAndNewlines)
         if body.isEmpty { body = "(No release notes available for this version.)" }
         else if body.count > 1500 { body = String(body.prefix(1500)) + "\n\n…" }
@@ -6658,7 +6659,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showUpdateAvailableAlert(for release: GitHubRelease, currentVersion: String) {
         showAppForModal()
         let alert = NSAlert()
-        alert.messageText = "Parakey v\(release.version) is available"
+        alert.messageText = "Lexomorph v\(release.version) is available"
         alert.informativeText = "You're running v\(currentVersion). Nothing is installed unless you choose Update Now."
         alert.addButton(withTitle: "Update Now")
         alert.addButton(withTitle: "What's New")
@@ -6725,7 +6726,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func showUpToDateAlert(currentVersion: String) {
         showAppForModal()
         let alert = NSAlert()
-        alert.messageText = "Parakey is up to date"
+        alert.messageText = "Lexomorph is up to date"
         alert.informativeText = "You're running v\(currentVersion)."
         alert.addButton(withTitle: "OK")
         alert.runModal()
@@ -6874,7 +6875,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             statePath = try createPrivateUpdateProgressStateFile()
         } catch {
             log("update: creating progress state failed: \(error.localizedDescription)")
-            showUpdateCouldNotStart(detail: "Parakey couldn't prepare the update progress window.")
+            showUpdateCouldNotStart(detail: "Lexomorph couldn't prepare the update progress window.")
             return
         }
 
@@ -6898,7 +6899,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } catch {
             try? FileManager.default.removeItem(atPath: statePath)
             log("update: writing helper failed: \(error.localizedDescription)")
-            showUpdateCouldNotStart(detail: "Parakey couldn't write the update helper script.")
+            showUpdateCouldNotStart(detail: "Lexomorph couldn't write the update helper script.")
             return
         }
         let helperLog: PrivateOutputFile
@@ -6908,7 +6909,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             try? FileManager.default.removeItem(atPath: helperPath)
             try? FileManager.default.removeItem(atPath: statePath)
             log("update: opening helper log failed: \(error.localizedDescription)")
-            showUpdateCouldNotStart(detail: "Parakey couldn't open the update helper log.")
+            showUpdateCouldNotStart(detail: "Lexomorph couldn't open the update helper log.")
             return
         }
 
@@ -6922,7 +6923,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             try? FileManager.default.removeItem(atPath: statePath)
             helperLog.handle.closeFile()
             log("update: launching progress app failed: \(error.localizedDescription)")
-            showUpdateCouldNotStart(detail: "Parakey couldn't open the update progress window.")
+            showUpdateCouldNotStart(detail: "Lexomorph couldn't open the update progress window.")
             return
         }
 
@@ -6938,9 +6939,9 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             try? FileManager.default.removeItem(atPath: helperPath)
             helperLog.handle.closeFile()
             try? writePrivateUpdateProgressState(phase: "failed",
-                                                 message: "Parakey couldn't launch the update helper.",
+                                                 message: "Lexomorph couldn't launch the update helper.",
                                                  to: statePath)
-            showUpdateCouldNotStart(detail: "Parakey couldn't launch the update helper.")
+            showUpdateCouldNotStart(detail: "Lexomorph couldn't launch the update helper.")
             return
         }
         log("update helper spawned \(privacySafeLogPath(helperPath)), progress app \(privacySafeLogPath(progressAppPath)), logging to \(privacySafeLogPath(helperLog.path)); quitting for upgrade")

@@ -405,7 +405,7 @@ enum SpeechModelProfile: String, CaseIterable {
     }
 
     var cacheResetDetail: String {
-        "Parakey will delete the local \(shortName) model cache, unload the current speech model, and download a fresh verified copy before dictation is available again."
+        "Lexomorph will delete the local \(shortName) model cache, unload the current speech model, and download a fresh verified copy before dictation is available again."
     }
 
     var estimatedDownloadBytes: Int64 {
