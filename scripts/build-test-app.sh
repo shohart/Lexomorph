@@ -35,22 +35,21 @@ fail() { printf 'build-test-app: %s\n' "$*" >&2; exit 1; }
 # Signing identity. An AD-HOC signature ("-") changes CDHash on every
 # build, so macOS TCC treats each rebuild as a DIFFERENT app and resets
 # its microphone/accessibility permissions. To keep permissions stable
-# across rebuilds the test app is signed with the same stable Apple
-# Development identity the production install uses (same resolution chain
+# across rebuilds the test app is signed with the same stable
+# local identity the production install uses (same resolution chain
 # as install-local.sh): certificate-anchored designated requirement stays
 # identical while the bundle id keeps the test app a separate TCC
 # identity. Override with SIGN_IDENTITY env; pass SIGN_IDENTITY=- to
 # force ad-hoc deliberately (permissions WILL reset on every rebuild).
-if [[ -z "${SIGN_IDENTITY+x}" ]]; then
-    # First identity valid FOR CODESIGNING (skip "(Invalid ...)" entries);
-    # name-agnostic — this Mac's identity is custom-named ("Aleksei Bykov").
+if [[ -z "${SIGN_IDENTITY:-}" ]]; then
+    # Same resolution as build-app.sh: the stable certificate "Aleksei Bykov"
+    # (override the name with LEXOMORPH_SIGN_IDENTITY), by hash, valid only.
+    sign_name="${LEXOMORPH_SIGN_IDENTITY:-Aleksei Bykov}"
     SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-        | grep -v '(' \
-        | sed -n 's/.*"\(.*\)".*/\1/p' \
-        | head -n 1)"
+        | awk -v n="\"$sign_name\"" 'index($0, n) && $0 !~ /\(Invalid/ { print $2; exit }')"
 fi
 if [[ -z "$SIGN_IDENTITY" ]]; then
-    fail "No Apple Development signing identity found. Set SIGN_IDENTITY explicitly (or SIGN_IDENTITY=- for ad-hoc, which resets TCC permissions on every rebuild)."
+    fail "No valid code-signing identity \"${LEXOMORPH_SIGN_IDENTITY:-Aleksei Bykov}\" found. Set SIGN_IDENTITY explicitly (or SIGN_IDENTITY=- for ad-hoc, which resets TCC permissions on every rebuild)."
 fi
 
 [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || fail "macOS is required."
