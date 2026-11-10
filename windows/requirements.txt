@@ -1,4 +1,4 @@
-# SuperDictate for Windows, runtime dependencies.
+# Lexomorph for Windows, runtime dependencies.
 #
 # CPU speech recognition is not a Python dependency: it runs in
 # LexomorphOnnxHost.exe (native/asr-runtime), built and staged by

@@ -14,7 +14,7 @@ imports ONNX Runtime.
 
 The speech model is NOT bundled. It is ~600 MB, it is licensed
 separately, and the app already downloads it on first run with a progress
-bar into %LOCALAPPDATA%\\SuperDictate\\Models\\onnx.
+bar into %LOCALAPPDATA%\\Lexomorph\\Models\\onnx.
 
 Recognition on the Intel NPU runs in a second executable,
 LexomorphOvHost.exe (ov_host_main.py): OpenVINO and the NPU builds of

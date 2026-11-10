@@ -1,4 +1,4 @@
-; Inno Setup script for Lexomorph (Windows; formerly SuperDictate Next).
+﻿; Inno Setup script for Lexomorph (Windows; formerly SuperDictate Next).
 ;
 ; Builds a per-user installer: the app writes only to %LOCALAPPDATA% and
 ; needs no driver or service, so requiring an admin prompt would buy
