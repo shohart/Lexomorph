@@ -6,6 +6,18 @@ chronological order. This file covers the release history published on
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+Not released yet. Version numbers are not changed here; no release contains these changes.
+
+### Changed
+- **Lexomorph is the new name of SuperDictate Next.** Tagline: "Speak freely. Write precisely." README, README.ru, PRIVACY, the issue and pull-request templates and CONTRIBUTING now use the new name, a new header image and a "formerly SuperDictate Next" note. The repository, release tags, the `SuperDictate.zip` and `SuperDictate-X.Y.Z-setup.exe` file names, `/Applications/SuperDictate.app`, the bundle ID `com.local.superdictate`, the LaunchAgent label, data and log paths, the sync server address and `update.json` stay unchanged on purpose, so installed copies keep updating and keep their data. See `docs/branding/MIGRATION_NOTES.md`.
+- **README and PRIVACY corrected to match what the app does.** Removed the "100% local" badge, "no cloud, no account" and "Windows not supported" claims; PRIVACY no longer names parakeet.cpp or says logs avoid transcript text. They now list the optional network routes (a custom LLM endpoint receives the dictated text, optional account sync, model and update downloads), where the data lives (including `DictationTrace.jsonl`), that API keys are stored as plain text, how personalization works today (no model training on your data), and that release builds are signed with a developer certificate and are not notarized.
+
+### Added
+- **Brand assets and guidelines** in `docs/assets/branding` (raster only; there are no SVG masters) and `docs/branding`: brand guidelines, migration notes, owner checklist and the rebrand audit.
+- **Sync of custom rewrite modes and dictation statistics** between macOS and Windows through the same account as the vocabulary (branch `feat/sync-modes-stats`): modes (name, color, instruction) and per-day, per-device usage counters. Hotkeys and the active mode stay local. Sync is off until you sign in. Windows gets a screen to create and edit custom modes. A custom mode edited in the Control Panel is merged into the current mode list instead of overwriting it.
+
 ## 0.9.7 — 2026-11-06
 
 macOS (`mac-v0.9.7`) and Windows (`win-v0.9.7`).
