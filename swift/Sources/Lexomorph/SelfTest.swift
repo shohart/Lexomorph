@@ -6455,7 +6455,7 @@ enum LexomorphSelfTest {
             "printf '%s\\t%s\\n' \"$phase\" \"$message\" >\"$tmp\"",
             "CASK_TAP='shlgd/superdictate'",
             "CASK_TOKEN='shlgd/superdictate/superdictate'",
-            "CASK_INSTALLED_TOKEN='lexomorph'",
+            "CASK_INSTALLED_TOKEN='parakey'",
             "PlistBuddy -c \"Print :CFBundleShortVersionString\"",
             "version_at_least \"$installed\" \"$TARGET_VERSION\"",
             "state \"preparing\" \"Preparing Homebrew for Lexomorph v$TARGET_VERSION...\"",
