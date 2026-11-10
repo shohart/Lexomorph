@@ -59,6 +59,7 @@ def main(argv: list[str]) -> int:
         index = argv.index("--benchmark-transcribe")
         return benchmark_transcribe([a for a in argv[index + 1:] if a != "--verbose"])
 
+    paths.migrate_legacy_data()
     paths.ensure_directories()
     log = configure(verbose="--verbose" in argv)
     log.info("Lexomorph %s starting", VERSION)

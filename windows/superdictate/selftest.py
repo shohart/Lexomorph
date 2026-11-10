@@ -9,6 +9,7 @@ headless runner.
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -2426,6 +2427,16 @@ def test_data_migration_edge_cases() -> None:
         _check("migration: ...and the marker is complete", marker["status"], "complete")
         _check("migration: ...then it stops", paths.migrate_legacy_directory(flaky, (old,)), False)
 
+        # ensure_directories (called by every Settings.save) must not migrate:
+        # a test run would otherwise copy the real data of whoever runs it.
+        guarded = root / "Guarded"
+        with mock.patch.multiple(paths, BASE_DIR=guarded, LOG_DIR=guarded / "Logs",
+                                 MODELS_DIR=guarded / "Models", CACHE_DIR=guarded / "Cache",
+                                 LEGACY_BASE_DIRS=(old,)):
+            paths.ensure_directories()
+        _check("migration: ensure_directories does not copy anything",
+               (guarded / "Settings.json").exists() or (guarded / paths.MIGRATION_MARKER).exists(), False)
+
         # A broken source never raises.
         with mock.patch.object(paths.Path, "iterdir", side_effect=OSError("denied")):
             ok = True
@@ -2530,6 +2541,24 @@ def test_sync_token_survives_the_rename() -> None:
         store.save("secret")
         _check("token: round trip", store.load(), "secret")
         _check("token: migrate_legacy is a no-op on a current token", store.migrate_legacy() is False, True)
+    if sys.platform == "win32":
+        import win32crypt
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "VocabularySync.token"
+            blob = win32crypt.CryptProtectData(b"legacy-secret", "old", sync._LEGACY_DPAPI_ENTROPY,
+                                               None, None, 0)
+            path.write_bytes(bytes(blob))
+            store = sync.DpapiTokenStore(path)
+            _check("token: a token protected the old way still loads", store.load(), "legacy-secret")
+            _check("token: migrate_legacy re-protects it", store.migrate_legacy(), True)
+            try:
+                win32crypt.CryptUnprotectData(path.read_bytes(), sync._DPAPI_ENTROPY, None, None, 0)
+                readable = True
+            except Exception:
+                readable = False
+            _check("token: ...and now the new entropy opens it", readable, True)
+            _check("token: ...with the same value", store.load(), "legacy-secret")
     _check("token: new entropy", sync._DPAPI_ENTROPY, b"com.lexomorph.vocab-sync")
     _check("token: old entropy still readable", sync._LEGACY_DPAPI_ENTROPY,
            b"com.local.superdictate.vocab-sync")
@@ -2641,6 +2670,10 @@ def run_all() -> bool:
     # The interface language now follows the system by default; the tests
     # that read Russian toasts expect the Russian table.
     i18n.set_language("ru")
+    # Belt and braces: nothing a test does may touch the real old data tree.
+    from . import paths
+
+    paths.LEGACY_BASE_DIRS = ()
     _failures.clear()
     errored = 0
     for test in _TESTS:

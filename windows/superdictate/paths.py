@@ -206,8 +206,9 @@ def migrate_legacy_directory(base: Optional[Path] = None,
 
 
 def ensure_directories() -> None:
-    if migrate_legacy_directory():
-        _migrate_sync_token()
+    """Create the tree. Does NOT migrate: this runs from ``Settings.save()``
+    and so from every self-test, and a test must never copy somebody's real
+    data. The app start calls :func:`migrate_legacy_data` explicitly."""
     for directory in (BASE_DIR, LOG_DIR, MODELS_DIR, CACHE_DIR):
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -218,6 +219,15 @@ def resource_path(*parts: str) -> Path:
 
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
     return root.joinpath(*parts)
+
+
+def migrate_legacy_data() -> bool:
+    """The first-launch migration, called once from ``main()`` before the
+    directories are created. Never raises."""
+    copied = migrate_legacy_directory()
+    if copied:
+        _migrate_sync_token()
+    return copied
 
 
 def _migrate_sync_token() -> None:
