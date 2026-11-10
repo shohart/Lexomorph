@@ -1,233 +1,304 @@
-# 🎙️ SuperDictate Next
+<div align="center">
+  <img src="docs/assets/branding/readme/readme-hero-1280x640.png" alt="Lexomorph. Speak freely. Write precisely." width="100%" />
+</div>
+
+# Lexomorph
+
+**Speak freely. Write precisely.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey.svg)](#-one-minute-install)
-[![Latest release](https://img.shields.io/github/v/release/shohart/SuperDictate-Next?label=release)](https://github.com/shohart/SuperDictate-Next/releases/latest)
-[![100% local](https://img.shields.io/badge/speech%20processing-100%25%20local-success.svg)](#-privacy--data)
+[![Platforms: macOS 14+ and Windows 10+](https://img.shields.io/badge/platforms-macOS%2014%2B%20%7C%20Windows%2010%2B-lightgrey.svg)](#supported-platforms)
+[![Latest macOS release](https://img.shields.io/github/v/release/shohart/SuperDictate-Next?label=macOS%20release)](https://github.com/shohart/SuperDictate-Next/releases)
 
-**Fast, private, local dictation for macOS — including the Intel Macs other
-projects left behind.** Hold a hotkey, speak, and your words are typed into
-whatever field is focused. No cloud, no account, no audio ever leaving your
-Mac.
+Lexomorph is a personal adaptive writing engine for macOS and Windows. It
+combines speech recognition with language-specific correction, a personal
+vocabulary and configurable writing modes, helping you turn spoken thoughts
+into text that matches the way you want to write. Hold a hotkey, speak, and
+the text is typed into whatever field is focused.
+
+> **Lexomorph is the new name of SuperDictate Next.** Same project, a broader
+> vision: from speech recognition to adaptive, personal writing. The
+> repository, the releases, the installer and the data on your disk keep their
+> old names on purpose, so that existing installations keep working and
+> updating. See [Compatibility: names that stayed](#compatibility-names-that-stayed).
 
 **[Читать по-русски](README.ru.md)**
 
-## 🌱 Why this project exists
+## Highlights
 
-SuperDictate Next is an independent continuation of the
-[SuperDictate](https://github.com/shlgd/SuperDictate) project — itself based
-on [Parakey](https://github.com/rcourtman/parakey) by Richard Courtman —
-forked in July 2026. It is **not** a mirror: 170+ commits of original work,
-its own speech engine, its own release channel, its own update checker.
+- **Speech recognition on your own machine.** Audio is recognized locally by
+  Parakeet Ultra 0.6B or GigaAM v3 (ONNX Runtime, CPU). Audio is never sent
+  anywhere.
+- **A personal vocabulary.** Replacement rules for names, terms and spellings,
+  plus a list of terms that is passed to the recognizer as hints.
+- **Corrections you make are remembered.** Fix a short word right after it is
+  typed and the app offers to remember the fix, with an undo.
+- **Writing modes.** Optional LLM correction and rewrite: Polish, Structured
+  task, Official and your own modes. Run on a local model or on an
+  OpenAI-compatible endpoint you choose. Off by default.
+- **Honest about the network.** [One table](#privacy-and-backends) lists what
+  stays on the device and what can leave it.
+- **macOS and Windows,** Apple Silicon and Intel.
 
-Three things were missing upstream, and they are the reason this project
-exists:
+## How it works
 
-1. **Intel Macs.** Upstream development and CI target Apple Silicon only.
-   Plenty of still-capable Intel machines (this project is built and tested
-   on a Xeon E5-2678 v3 with an AMD Radeon RX 6600) were untested territory
-   there. Here they are a first-class target.
-2. **A different speech engine.** Upstream stayed on whisper.cpp. SuperDictate
-   Next runs NVIDIA Parakeet (TDT 0.6B, multilingual) through ONNX Runtime,
-   on the CPU only — it beat both whisper.cpp and the earlier GGUF
-   parakeet.cpp build, GPU included, on accuracy and speed. The GPU (Vulkan
-   via MoltenVK) is used only for the local LLM correction/rewrite model.
-3. **Room to iterate on dictation ergonomics** for a Russian+English daily
-   workflow: filler-word management, auto-stop on silence, a proper settings
-   window, Russian number normalization, long-dictation segmentation.
+```
+microphone
+  -> pause segmentation (Silero VAD), overlapping windows, seam deduplication
+  -> speech recognition: Parakeet Ultra or GigaAM v3, in a separate helper process
+       (your ASR terms are passed to the decoder as hints, before any text step)
+  -> rules: your replacement dictionary, filler words, Russian numbers as digits
+  -> optional LLM correction     (off by default)
+  -> optional rewrite by mode    (off by default)
+  -> optional punctuation        (off by default; the last step)
+  -> text inserted into the focused field
+```
 
-## 🔀 How it differs from upstream SuperDictate
+This is the order the code and the changelog describe. Individual modes can
+skip steps; for example, correction and rewrite are separate switches, and each
+can use its own backend.
 
-| Area | Upstream (at fork point) | SuperDictate Next |
+## Supported platforms
+
+| Platform | Requirements | How you get it |
 |---|---|---|
-| Speech engine | whisper.cpp, large-v3-turbo | Parakeet Ultra 0.6B (ONNX int8) on ONNX Runtime, CPU only — whisper removed entirely |
-| GPU acceleration | none in this path | only for the local LLM correction/rewrite model (Vulkan, ggml + MoltenVK) |
-| Intel Macs | untested | first-class target, verified on real hardware |
-| Filler words | single on/off toggle | per-word checklist: 27 curated RU/EN presets in 4 columns + your own words/phrases |
-| Auto-stop | — | ends dictation after 1–10 s of silence (optional) |
-| Settings window | partial | adds Launch at Login, mute-while-recording, adaptive **Contrast** HUD color, capsule size, indicator modes (level bars / elapsed-timer outline) |
-| Russian numbers | words | optional ITN: dictated numbers written as digits (25, not двадцать пять) |
-| Long dictations | single pass | pause-based segmentation with overlap seam deduplication |
-| Pause detection | — | Silero VAD (local ggml port, downloaded automatically) for smarter seam placement |
-| Vocabulary learning | — | automatic: hand-correct a word right after dictation and it's remembered — with an Undo toast and a SQLite-backed manager |
-| Corrections | — | vocabulary manager (Settings → Text): add/edit/delete, JSON import/export, cross-Mac folder sync |
+| macOS | macOS 14 or newer, Apple Silicon or Intel. Verified by hand on one Intel machine; CI runs on Apple Silicon only. | One-line installer (below). The published `SuperDictate.zip` is built for **Intel (x86_64)**; on Apple Silicon, build from source with the same installer. |
+| Windows | Windows 10 version 1809 (build 17763) or newer, 64-bit. Per-user install, no administrator rights needed. | `SuperDictate-X.Y.Z-setup.exe` from a `win-v*` entry on the [Releases page](https://github.com/shohart/SuperDictate-Next/releases). There is no Windows CI; Windows builds are checked by hand. |
 
-## 🚀 One-minute install
+Linux is not supported. On Intel laptops with an NPU, the Windows version can
+also recognize speech on the NPU (OpenVINO); see [windows/README.md](windows/README.md).
 
-**Requires a Mac on macOS 14+ — Apple Silicon or Intel.**
+## Privacy and backends
 
-1. Open the **Terminal** app.
-2. Paste this command and press Enter:
+Audio never leaves the device. Text can leave it only through the options you
+turn on. Nothing here is "offline by default": the first run downloads models.
+
+| Data or network use | Where it goes | When | What is sent | Credentials | Default |
+|---|---|---|---|---|---|
+| Your voice (audio) | nowhere | never; recognition is local | none | none | n/a |
+| Speech and punctuation models | huggingface.co (pinned revisions, SHA-256 checked) | first run, or when you pick another model | a file request | none | on first run |
+| Silero VAD file | huggingface.co (`ggml-org/whisper-vad`) | automatically after the speech model loads | a file request | none | on |
+| Local LLM models | the pinned model catalog; the correction adapter is fetched from this repository on GitHub | when you press download | a file request | none | not downloaded |
+| Update check | api.github.com, raw.githubusercontent.com | macOS: when you open the panel, plus a background check if you enable it. Windows: automatic by default | a request for the release list | none | macOS: panel only; Windows: on |
+| LLM correction or rewrite on **your own endpoint** | the URL you enter (the field suggests OpenRouter) | only if you pick the custom endpoint | **the dictated text** and the instruction prompt; no audio | your API key, stored **as plain text** in the settings (macOS UserDefaults, Windows `Settings.json`) | off; the default backend is the local model |
+| Account sync of vocabulary and ASR terms | the sync server run by the project owner (`superdictate.bykovlegal.ru`; source in [server/vocab-sync](server/vocab-sync)) | only after you sign in | replacement rules (source, replacement, origin, ASR-hint flag) and ASR terms; in this branch, also your custom mode names, colors and instructions and per-day usage counters | e-mail and password; the token is kept in the macOS Keychain or Windows DPAPI | off |
+| History, settings, diagnostics | your disk only | always | stays on the device | none | on |
+| Analytics and telemetry | none in the code | n/a | n/a | n/a | n/a |
+
+Where the records live (paths keep the old name, see
+[below](#compatibility-names-that-stayed)):
+
+- macOS: `~/Library/Application Support/SuperDictate` (history, settings,
+  `corrections.sqlite`, models), `~/Library/Logs/SuperDictate*`, and the
+  LaunchAgent `~/Library/LaunchAgents/com.local.superdictate.agent.plist`.
+- Windows: `%LOCALAPPDATA%\SuperDictate`.
+- History keeps the dictated text. `DictationTrace.jsonl` records, for the last
+  2000 to 4000 dictations, what recognition wrote, the text after the rules and
+  the final text. It stays on your computer; delete it if you do not want it.
+- A recording that was interrupted by a crash is kept as audio for recovery
+  and removed after it is handled.
+
+Sync is opt-in and is the only thing that needs an account. More details:
+[PRIVACY.md](PRIVACY.md).
+
+## Installation
+
+### macOS
+
+Open Terminal, paste, press Enter:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | /bin/bash
 ```
 
-3. When SuperDictate opens, click `Allow` for **Microphone**,
-   **Accessibility**, and **Input Monitoring**.
-4. Wait for the status to read `Ready`, press **right Command**, and speak.
-   Press **right Command** again to insert the text.
+The installer downloads `SuperDictate.zip` from
+[GitHub Releases](https://github.com/shohart/SuperDictate-Next/releases),
+verifies a pinned SHA-256, the version, the bundle ID, the architecture, the
+code signature and the microphone entitlements, then replaces
+`/Applications/SuperDictate.app` and opens it. Xcode is not needed. Your
+history, settings and downloaded models are kept.
 
-On first launch, SuperDictate downloads a local speech-recognition model once
-(Parakeet Ultra 0.6B, ONNX int8). It takes about 630 MB on disk; plan for at
-least 1.5 GB of free space during installation. After the
-download completes, dictation works fully offline.
+Release builds are signed with a developer certificate ("PolterType Dev") and
+are **not notarized by Apple**. The installer path above is verified, but a ZIP
+downloaded through a browser can trigger a Gatekeeper warning. Local builds made
+with `scripts/build-app.sh` are signed ad-hoc unless you pass `SIGN_IDENTITY`.
 
-## ⬆️ Updating
-
-**If SuperDictate already shows an `Update` button:** open the app from the
-Applications folder and click it. The app downloads and verifies the new
-version, replaces the old one, and relaunches on its own.
-
-**If SuperDictate was installed before the update button existed:** don't
-delete anything. Open Terminal and run the same command again:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | /bin/bash
-```
-
-The command only replaces `/Applications/SuperDictate.app`. Your history,
-settings, and already-downloaded model stay in place. After this, future
-updates can be installed straight from the app.
-
-The latest published version is always visible on the
-[GitHub Releases](https://github.com/shohart/SuperDictate-Next/releases/latest)
-page.
-
-## ⌨️ Hotkeys
-
-- **Right Command** — start dictating; press again to stop the recording.
-- Settings let you choose what a second press does: just insert the text, or
-  insert the text and then press Enter.
-- **Right Option + right Command** (default; fully re-recordable) — an
-  alternate way to stop the active recording. It does the opposite of the
-  primary hotkey: if the primary key presses Enter, this one stops without
-  Enter, and vice versa. Any combination works, including modifier-only
-  chords such as `Control + Command` — record it by holding the chord and
-  releasing either key. The alternate hotkey can be turned off.
-- **Right Shift + right Command** — open or close the quick history.
-- All three shortcuts can be changed independently. Single keys, function
-  keys, regular combinations, and modifier-only combinations (e.g.
-  `Option + Command`) are all supported.
-- Left and right variants of a modifier are distinct: a right-Command
-  shortcut will not fire from the left Command key.
-- While the shortcut-recording window is open, global dictation is
-  temporarily paused. Keys you press are only recorded as the new hotkey and
-  don't trigger anything else.
-- Open `SuperDictate` from Applications to check the background service,
-  permissions, and updates. Settings open via the gear button.
-
-## 🖥️ Control panel and settings
-
-The main panel is compact: it shows the background service status, any
-missing permissions, and an available update. Service controls sit to the
-right of the status; hovering shows a tooltip for each button.
-
-The gear button opens the Settings window, organized into five compact tabs:
-
-- **Dictation** — the three shortcuts and the stop-action behavior (insert,
-  or insert + Enter).
-- **Text** — filler words, Russian number formatting, vocabulary learning.
-- **Audio** — microphone picker, auto-stop on silence, mute while recording.
-- **Appearance** — capsule size, recording/transcribing colors, indicator
-  mode, background.
-- **System** — Launch at Login, privacy info.
-
-The `RU / EN` toggle instantly switches the language of both panels. Changes
-stay as a draft first; the `Save and Restart` button applies them together
-and restarts only the background service — history and the model are left
-untouched.
-
-The panel can be closed entirely. The background service keeps running
-separately and launches automatically after the next macOS login.
-
-## 🧹 Filler-word removal
-
-Settings → `Remove filler words` opens a four-column checklist:
-
-- **27 curated presets** — hesitation sounds (`um`, `uh`, `ah`, `эм`, `м`,
-  `аа`…, on by default) and verbal-tic phrases (`как бы`, `типа`, `короче`,
-  `это самое`, `знаешь`, `you know`, `basically`…, off until you tick them,
-  because they can be real words).
-- **Your own words and phrases**: type one, press Enter — it joins the same
-  list, already ticked. Untick to keep it on the list but unused; the `×`
-  button deletes it.
-
-## 📖 Vocabulary learning
-
-When you hand-correct a short word or phrase right after SuperDictate
-inserts a dictation (the classic case: an English word dictated
-phonetically in Cyrillic), the app notices the fix and remembers it as a
-text correction — the next time the same word is dictated, it is replaced
-automatically.
-
-- Only short edits count (up to three words swapped). Pure deletions,
-  half-finished trims, and casing-only touch-ups are ignored.
-- A small pill-shaped toast appears near the field, confirming what was
-  learned. Press **Escape** (or click the toast) to undo it immediately.
-- You can keep correcting: multiple fixes in the same dictated passage are
-  each learned independently.
-- Automatic learning can be turned off in Settings → Text.
-- Corrections live in a local SQLite database
-  (`~/Library/Application Support/SuperDictate/corrections.sqlite`), with a
-  full manager — add, edit, delete, JSON import/export — and optional
-  folder-based sync between your Macs.
-
-## ⏸️ Auto-stop on silence
-
-Optional: dictation ends itself after a chosen stretch of continuous silence
-(1–10 seconds, default 5). Silence is measured from the last voiced sample,
-exactly as you perceive it.
-
-## 🔐 Why the permissions are needed
-
-macOS doesn't let an app grant these to itself:
-
-- **Microphone** — records your voice while dictation is active.
-- **Accessibility** — locates the focused field and inserts the finished
-  text.
-- **Input Monitoring** — detects the global hotkey.
-
-If the status doesn't change to `Ready` after granting permissions, open
-SuperDictate and click `Restart` on the background service. If the app
-doesn't show up in the system list, click `Try Again` next to the relevant
-permission.
-
-## 📦 What the installer does
-
-The installer:
-
-1. Downloads `SuperDictate.zip` from
-   [GitHub Releases](https://github.com/shohart/SuperDictate-Next/releases).
-2. Verifies a pinned SHA-256, version, bundle ID, architecture (Apple Silicon
-   or Intel), code signature, and microphone entitlements.
-3. Safely replaces `/Applications/SuperDictate.app` and opens the panel.
-
-Xcode and the Command Line Tools are not required for a normal install.
-History, settings, and the already-downloaded model are preserved across
-updates.
-
-## 🛠️ Building from source
-
-### The easiest way
-
-This command downloads the open-source code, builds it locally, and installs
-the result into `/Applications`:
+**Apple Silicon:** the published ZIP is Intel-only and the installer will refuse
+it. Build from source with the same script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | SUPERDICTATE_BUILD_FROM_SOURCE=1 /bin/bash
 ```
 
-You'll need the free Apple Command Line Tools. If they're missing, the
-installer opens the standard installation dialog; run the command again once
-that finishes. A clean first build usually takes a few minutes.
+This needs the free Apple Command Line Tools; if they are missing, the
+installer opens Apple's dialog and you run the command again. A clean first
+build takes a few minutes. By default it downloads the pinned release source
+commit and verifies it against GitHub.
 
-By default, building from source downloads the exact release source commit
-and verifies it against GitHub. For development, you can pass your own
-`SUPERDICTATE_REF` and `SUPERDICTATE_SOURCE_COMMIT`; without a matching
-commit, the installer won't run the downloaded `scripts/build-app.sh`.
+### Windows
 
-### Manual build for development
+Download `SuperDictate-X.Y.Z-setup.exe` from the newest `win-v*` entry on the
+[Releases page](https://github.com/shohart/SuperDictate-Next/releases) and run
+it. Windows releases are never marked "latest", so the badge above and the
+"latest" link show the macOS release. The app is installed for the current user.
+
+### Updating
+
+- **macOS, from the app:** open the app from Applications and click `Update`
+  when it appears. The app downloads the new build, verifies the checksum, bundle
+  ID, version and signature, replaces itself and relaunches. The panel
+  checks when opened; the automatic background check is **off by default** on
+  macOS and can be enabled in the settings.
+- **macOS, from Terminal:** run the install command again. It replaces only
+  `/Applications/SuperDictate.app`.
+- **Windows:** the app checks for updates by default (can be turned off) and
+  opens the release page when a newer `win-v*` exists. It does not download or
+  run anything by itself; you run the new `setup.exe`.
+
+### Uninstalling
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/uninstall.sh | bash
+```
+
+Removes the app and the background service. History, settings and models are
+kept so that a reinstall does not lose data or redownload the model. On Windows,
+use "Apps and features".
+
+## Quick start
+
+1. Install (above). On the first macOS launch, click `Allow` for **Microphone**,
+   **Accessibility** and **Input Monitoring**.
+2. Wait while the speech model downloads once (Parakeet Ultra 0.6B, ONNX int8):
+   about 630 MB on disk, and about 1.5 GB of free space during installation.
+3. When the status reads `Ready`, press **right Command** (macOS) or **right
+   Ctrl** (Windows), speak, and press the same key again. The text is inserted.
+
+Hotkeys on macOS (all rebindable in Settings; single keys, function keys,
+combinations and modifier-only chords work, and left and right modifiers are
+distinct):
+
+| Action | Default |
+|---|---|
+| Start, then insert | right Command |
+| Stop the other way (insert + Enter, or without it) | right Option + right Command |
+| Open the quick history | right Shift + right Command |
+
+Windows defaults are in [windows/README.md](windows/README.md).
+
+## Configuration
+
+The control panel shows the background service, missing permissions and
+updates. The gear opens Settings:
+
+- **Dictation:** the three hotkeys and what the second press does.
+- **Text:** filler words, Russian numbers as digits, vocabulary learning,
+  correction and rewrite settings.
+- **Audio:** microphone, auto-stop on silence (1 to 10 s, optional), mute while
+  recording.
+- **Appearance:** capsule size, colors, indicator mode.
+- **System:** launch at login, privacy information.
+
+`RU / EN` switches the interface language. Changes are a draft until
+`Save and Restart`, which restarts only the background service. The panel can be
+closed; the service keeps running and starts after the next login.
+
+Filler words (`um`, `uh`, `эм`, and others) have 27 curated presets plus your
+own words and phrases; the verbal-tic phrases are off until you tick them.
+
+## Personalization
+
+What actually happens today. Nothing is trained on your device or on your data:
+there is no fine-tuning of the recognizer or the language model, and no
+adaptation to your voice.
+
+| Mechanism | What it does | Notes |
+|---|---|---|
+| Replacement dictionary | Rules "heard text -> written text" applied after recognition. Add, edit, delete by hand; JSON import and export. | Local SQLite file. Cleanup tool shows a preview of merges and removals. |
+| Learning from your edits | If you fix a short word or phrase (up to three words) right after it was inserted, the app saves a rule and shows a toast; **Esc** undoes it. | On by default, can be turned off. Heuristic: case-ending changes, meaning changes and pure punctuation or casing edits are ignored. Not machine learning. |
+| ASR terms (hotwords) | Names and terms from the dictionary and your own list are passed to the decoder as hints, so it spells them correctly more often. | On by default. A hint, not a guarantee. They never replace text on their own. |
+| Writing modes | Instructions to an LLM that reshape the text. | Off by default. See below. |
+| Correction guard | When the LLM changes a word, the change is compared with the original; unrelated replacements are reverted, and words from your vocabulary are protected. | Part of LLM correction. |
+
+You can review, edit and delete everything the app remembers in Settings > Text
+(the vocabulary manager).
+
+<p align="center">
+  <img src="docs/assets/branding/features/personal-vocabulary.png" alt="Personal Vocabulary card" width="30%" />
+  <img src="docs/assets/branding/features/correction-learning.png" alt="Correction Learning card" width="30%" />
+  <img src="docs/assets/branding/features/style-modes.png" alt="Style Modes card" width="30%" />
+</p>
+
+*Concept illustrations, not screenshots. In the app, the vocabulary works as
+described above and is a nudge, not a promise of perfect spelling; learning is
+limited to short edits; modes need an LLM (local or your endpoint) and are off by
+default.*
+
+## Writing modes
+
+Correction and rewrite are two independent, optional stages. Each can use the
+bundled local model (llama.cpp, CPU or Vulkan GPU) or an OpenAI-compatible
+endpoint you configure.
+
+| Mode | Does |
+|---|---|
+| Correction | Fixes recognition mistakes, case and punctuation, and restores Latin spelling of English terms. Off by default. |
+| Polish | Removes repeats and clutter, keeps your wording and style. |
+| Structured task | Expands a spoken request into a structured task description. |
+| Official | Turns text into a formal, business register. |
+| Custom modes | Your own name, color, instruction and hotkey. |
+
+Rewrite is off by default. With a custom endpoint, the dictated text and the instruction are sent to
+that server, so they leave the device.
+
+## Sync
+
+| What | Status |
+|---|---|
+| Replacement dictionary and ASR terms between your Macs (one JSON file in a folder you choose, for example iCloud, Dropbox or Syncthing; no account) | released (macOS) |
+| Dictionary and ASR terms between macOS and Windows, through an account (e-mail and password) on the sync server | released: dictionary in 0.9.3, ASR terms in 0.9.5; off until you sign in |
+| Custom writing modes (name, color, instruction) and dictation statistics per day and device | **unreleased: exists only in this branch, no release contains it yet** |
+| Settings, hotkeys, the active mode | not synced (hotkeys and the active mode are intentionally local) |
+| Mobile devices | no client exists |
+
+## Screenshots
+
+> **TODO: real screenshot.** No application screenshot is included yet. A real
+> one, free of private text, will replace this note. The images in this README
+> are brand illustrations, not screenshots of the app.
+
+## Architecture
+
+- **macOS:** Swift and AppKit, SwiftPM package in [swift/](swift); recognition in
+  the helper process `SuperDictateOnnxHost` (C++ core in
+  [native/asr-runtime](native/asr-runtime), ONNX Runtime 1.23.2, CPU); LLM in
+  `SuperDictateLLMHost` (llama.cpp, loopback HTTP).
+- **Windows:** Python and PySide6 in [windows/](windows), the same ONNX host.
+- **Sync server:** FastAPI and SQLite in [server/vocab-sync](server/vocab-sync).
+- Specs: [docs/specs](docs/specs). Release process: [docs/RELEASING.md](docs/RELEASING.md).
+
+### Speech recognition: why CPU
+
+Measured through the app's real dictation path (pause segmentation, overlapping
+windows, seam deduplication), 8 clips of 1.7 to 52 s, 8 threads, no LLM, on a
+reference Intel Mac (Xeon E5-2696 v3, AMD Radeon Vega):
+
+| Engine | Mean WER | Mean punctuation F1 | Mean RTF | Load, s |
+|---|---:|---:|---:|---:|
+| **ONNX, CPU** | **0.079** | **0.965** | **0.119** | 3.7 |
+| parakeet.cpp GGUF q8_0, CPU | 0.084 | 0.909 | 0.182 | 5.5 |
+| parakeet.cpp GGUF q8_0, Vulkan | 0.084 | 0.909 | 0.133 | 6.0 |
+| whisper.cpp large-v3-turbo q8_0, Vulkan | not scored | not scored | 0.63 to 6.4 | 17 |
+
+The GGUF and Whisper engines were removed on 2026-10-17; details in
+`docs/specs/cross-platform-onnx-asr-spec.md` section 12. Long dictations are cut
+at pauses and the seams are placed with
+[Silero VAD](https://github.com/snakers4/silero-vad) (ggml build, 885 KB, MIT,
+downloaded in the background; without it a mel-energy heuristic is used).
+
+## Building from source
+
+Manual build for development (macOS):
 
 ```bash
 xcode-select --install
@@ -235,160 +306,71 @@ git clone https://github.com/shohart/SuperDictate-Next.git
 cd SuperDictate-Next
 swift run -c debug --package-path swift Parakey --self-test all
 ./scripts/build-app.sh ./dist/SuperDictate.app
-open ./dist/SuperDictate.app
 ```
 
-By default, a local build is signed ad-hoc. To use your own certificate, pass
-its name:
+Do not launch the copied or test bundle. The only runnable installed bundle is
+`/Applications/SuperDictate.app`; for local installation use
+`scripts/install-local.sh`. `--self-test` can stop the production background
+agent; check that it is running afterwards. Windows: see
+[windows/README.md](windows/README.md).
+
+## Troubleshooting
+
+- **The status never becomes `Ready` after granting permissions.** Open the app
+  and click `Restart` on the background service. If the app is missing from the
+  system list, click `Try Again` next to that permission.
+- **Where do I find the app in macOS Privacy settings?** It is listed as
+  **SuperDictate**, not Lexomorph: macOS takes the name from the app file, which
+  keeps its old name on purpose.
+- **The installer says the build is not for this Mac.** You are on Apple
+  Silicon: use the build-from-source command.
+- **A browser-downloaded ZIP shows a Gatekeeper warning.** The build is not
+  notarized; use the Terminal installer.
+- **macOS asks for permissions again after an update.** Release builds are
+  signed with a local developer certificate, not notarized; re-grant if prompted.
+- **Text is not inserted in some fields.** Protected password fields and apps
+  that hide Accessibility data may not expose the caret; that can affect the
+  animation position and sometimes insertion.
+- **A recording stops by itself.** A single recording ends after 20 minutes. If
+  the app crashes, an unfinished recording is saved for recovery from history.
+- **Model download fails.** The first run needs internet access to huggingface.co.
+- **Resource use:** the speech model is about 630 MB on disk; the ONNX helper
+  peaks at about 2.2 GB resident (mapped model pages included); the app process
+  stays around 40 to 60 MB.
+
+Logs: `~/Library/Logs/SuperDictate*` on macOS, `%LOCALAPPDATA%\SuperDictate` on
+Windows. Do not paste transcripts or audio into public issues.
+
+## Compatibility: names that stayed
+
+Only the user-visible product name changes. These keep the name SuperDictate,
+deliberately, so that updates and your data keep working: the repository
+`shohart/SuperDictate-Next` and its release tags, `/Applications/SuperDictate.app`,
+bundle ID `com.local.superdictate`, the LaunchAgent label, data and log paths,
+the `SuperDictate.zip` and `SuperDictate-X.Y.Z-setup.exe` file names, the sync
+server address, the `SUPERDICTATE_*` variables, and the SwiftPM target `Parakey`.
+Details and reasons: [docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md).
+Brand rules: [docs/branding/BRAND_GUIDELINES.md](docs/branding/BRAND_GUIDELINES.md).
+
+## Contributing
+
+Issues and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) lists
+the checks, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) the community rules.
+Checks before a pull request:
 
 ```bash
-SIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build-app.sh ./dist/SuperDictate.app
-```
-
-Don't move or delete `dist/SuperDictate.app` while the background service is
-running from that build. For regular use, prefer the
-`SUPERDICTATE_BUILD_FROM_SOURCE=1` command, which installs the app into
-`/Applications`.
-
-## 🗣️ Speech recognition: Parakeet on ONNX Runtime, CPU only
-
-SuperDictate Next recognizes speech with Parakeet Ultra 0.6B (a fine-tune of
-NVIDIA Parakeet TDT 0.6B v3, ONNX int8) running in ONNX Runtime inside the
-`SuperDictateOnnxHost` helper process. Recognition runs **on the CPU only**;
-there is no GPU option for it. The GPU (Vulkan) is reserved for the local
-LLM that corrects and rewrites text — see the `LLM on GPU (Vulkan)` toggle.
-
-Why CPU only: on the reference Intel Mac (Xeon E5-2696 v3, AMD Radeon Vega),
-through the app's real dictation path (pause segmentation, overlap windows,
-seam dedup), 8 clips from 1.7 s to 52 s, 8 threads, no LLM correction:
-
-| Engine | Mean WER | Mean punctuation F1 | Mean RTF | Load, s |
-|---|---:|---:|---:|---:|
-| **ONNX, CPU** | **0.079** | **0.965** | **0.119** | 3.7 |
-| parakeet.cpp GGUF q8_0, CPU | 0.084 | 0.909 | 0.182 | 5.5 |
-| parakeet.cpp GGUF q8_0, Vulkan | 0.084 | 0.909 | 0.133 | 6.0 |
-| whisper.cpp large-v3-turbo q8_0, Vulkan | — | — | 0.63–6.4 | 17 |
-
-whisper.cpp spends about 11 s on every call whatever the clip length (it
-pads input to a 30 s window), so a 2 s command took 11 s; its run was
-stopped there, so its accuracy is not scored. The GGUF and
-Whisper engines were removed on 2026-10-17; details in
-`docs/specs/cross-platform-onnx-asr-spec.md` §12.
-
-## 🎚️ Pause detection (Silero VAD)
-
-Long dictations are split into segments at pauses (a lightweight
-mel-energy heuristic), recognized in overlapping windows and stitched back
-together. Seams between windows are placed with
-[Silero VAD](https://github.com/snakers4/silero-vad) — the ggml build,
-`ggml-silero-v6.2.0.bin` (885 KB, MIT), which SuperDictate downloads in the
-background into `~/Library/Application Support/SuperDictate/Models/` after
-the speech model loads (pinned revision, size and SHA-256 verified). The VAD
-runs locally on the CPU; until the file is there (or offline), seams fall
-back to the mel-energy heuristic and everything keeps working.
-
-## ✅ Checks before a pull request
-
-```bash
-bash -n install.sh uninstall.sh scripts/*.sh
-plutil -lint swift/Info.plist entitlements.plist
+./scripts/check.sh
 swift run -c debug --package-path swift Parakey --self-test all
 ./scripts/build-app.sh ./dist/SuperDictate.app
-codesign --verify --deep --strict ./dist/SuperDictate.app
-otool -L ./dist/SuperDictate.app/Contents/MacOS/SuperDictate
-file ./dist/SuperDictate.app/Contents/MacOS/SuperDictate
-lipo -info ./dist/SuperDictate.app/Contents/MacOS/SuperDictate
 ```
 
-`otool -L` must not list `/usr/local`, `/opt/homebrew`, `Cellar`,
-`MoltenVK.dylib`, or `libvulkan`: the app executable carries only a CPU ggml
-core for the Silero VAD and no GPU code at all, and the LLM helper
-(`Contents/Helpers/SuperDictateLLMHost`) links MoltenVK statically — the
-only runtime dependencies are Apple's system frameworks.
+## License and credits
 
-GitHub Actions repeats the self-tests, builds the bundle, runs the installer
-on a clean macOS runner, and verifies uninstallation.
+MIT, see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
 
-### Speech recognition benchmark
-
-`scripts/benchmark-asr.sh` is a persistent, re-runnable script: it
-synthesizes a fixed corpus via `say`/`afconvert` (RU/EN/mixed, short
-commands, numbers, technical terms, ~30 s and ~120 s segments), runs each
-clip through the real `--benchmark-transcribe onnx cpu <threads>` entry
-point (checked before `NSApplication` is created, so it never falls through
-to a normal app launch) and the app's own segmented dictation path, and
-writes a report with WER, CER, punctuation F1, cold load, warm-up, first
-transcription, warm median/p95 latency, RTF and peak RSS. It needs a
-packaged bundle (`scripts/build-test-app.sh`), because the ONNX helper lives
-in `Contents/Helpers`.
-
-## ⚠️ Limitations
-
-- Apple Silicon and Intel Macs on macOS 14 or newer are supported. Windows
-  and Linux are not supported yet. Intel support has only been manually
-  tested on one specific machine (Xeon E5-2678 v3 + AMD Radeon RX 6600,
-  macOS 15.7.7), not through CI: hosted GitHub macOS runners are only
-  available on Apple Silicon, so there's no automated coverage of this path
-  yet.
-- The published `SuperDictate.zip` is built for Intel (x86_64). On Apple
-  Silicon, install with the build-from-source command instead — the
-  installer verifies the architecture and will tell you.
-- The public build is signed ad-hoc and not notarized by Apple. Installing
-  via the command above is verified, but a ZIP downloaded manually through a
-  browser may trigger a Gatekeeper warning.
-- Because there's no stable Developer ID signature, macOS sometimes
-  re-prompts for permissions after an update. Notarization requires a paid
-  Apple Developer account.
-- The first launch needs internet access to download the model. The panel
-  checks for updates when opened; the background auto-check, if enabled,
-  hits the public GitHub API once every six hours.
-- A single recording ends automatically after 20 minutes. If the app crashes,
-  an unfinished recording is saved for history recovery.
-- Protected password fields and apps that hide Accessibility data may not
-  expose caret coordinates. This affects the animation's position but doesn't
-  always prevent text insertion.
-- Resource footprint on the current build: about 630 MB on disk for the
-  speech model (ONNX int8, CPU). The ONNX helper process peaks at about
-  2.2 GB resident (mapped model pages included); the app process itself
-  stays around 40–60 MB.
-
-## 🔒 Privacy & data
-
-- History and settings: `~/Library/Application Support/SuperDictate`.
-- The speech model: `~/Library/Application Support/SuperDictate/onnx`.
-  (GGUF Parakeet and whisper.cpp files left over from earlier versions, in
-  `~/Library/Application Support/SuperDictate/Models` and
-  `~/Library/Application Support/Whisper/Models`, are no longer used and can
-  be deleted.)
-- LaunchAgent: `~/Library/LaunchAgents/com.local.superdictate.agent.plist`.
-- Logs: `~/Library/Logs/SuperDictate*`.
-- No analytics, accounts, or telemetry.
-
-More details: [PRIVACY.md](PRIVACY.md).
-
-## 🗑️ Uninstalling
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/uninstall.sh | bash
-```
-
-The app and the background service are removed. History, settings, and the
-model are kept, so you don't lose data or need to re-download the model by
-accident.
-
-## 📜 Origin and license
-
-SuperDictate Next is a fork of
-[SuperDictate](https://github.com/shlgd/SuperDictate), which is based on the
-open-source [Parakey](https://github.com/rcourtman/parakey) project by
-Richard Courtman. The original and modified code is distributed under the
-MIT License. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
-
-The project was formerly named **SuperDictate-Intel**; it was renamed to
-SuperDictate Next with the v0.5.0 release. Old repository URLs redirect.
-
-## 🤝 Contributing
-
-Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
-for the checks to run before opening one, and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community guidelines.
+Lexomorph (formerly SuperDictate Next, and before that SuperDictate-Intel) is a
+fork of [SuperDictate](https://github.com/shlgd/SuperDictate), which is based on
+the open-source [Parakey](https://github.com/rcourtman/parakey) project by
+Richard Courtman. The name changed from SuperDictate-Intel to SuperDictate Next
+with v0.5.0. The rename to Lexomorph is not part of any release yet (the latest
+release is 0.9.7). Old repository URLs redirect. The brand has not been checked for trademark or domain availability.
