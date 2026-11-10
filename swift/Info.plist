@@ -15,16 +15,17 @@
 			<string>Owner</string>
 			<key>LSItemContentTypes</key>
 			<array>
+				<string>com.local.lexomorph.corrections</string>
 				<string>com.local.superdictate.corrections</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
-	<string>SuperDictate</string>
+	<string>Lexomorph</string>
 	<key>CFBundleIconFile</key>
-	<string>Parakey</string>
+	<string>Lexomorph</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.local.superdictate</string>
+	<string>com.local.lexomorph</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -32,9 +33,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.9.7</string>
+	<string>0.10.0</string>
 	<key>CFBundleVersion</key>
-	<string>70</string>
+	<string>71</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -56,6 +57,26 @@
 			</array>
 			<key>UTTypeDescription</key>
 			<string>Lexomorph Corrections</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.local.lexomorph.corrections</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<string>lexomorph-corrections</string>
+				<key>public.mime-type</key>
+				<string>application/vnd.lexomorph.corrections+json</string>
+			</dict>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Lexomorph Corrections (legacy SuperDictate export)</string>
 			<key>UTTypeIdentifier</key>
 			<string>com.local.superdictate.corrections</string>
 			<key>UTTypeTagSpecification</key>

@@ -2,7 +2,7 @@
 # scripts/verify-release.sh — mandatory functional check of the macOS
 # release ARTIFACT before `gh release create` (docs/RELEASING.md).
 #
-# usage: scripts/verify-release.sh <SuperDictate.zip>
+# usage: scripts/verify-release.sh <Lexomorph.zip>
 #
 # Self-tests run from the build tree. mac-v0.8.4 passed all of them and
 # still shipped an LLM host that crashed on every GPU start: its Vulkan
@@ -16,18 +16,18 @@
 #   2. the LLM host from the bundle loads its shaders from the bundle, not
 #      from any build tree;
 #   3. correction on the GPU and the CPU, rewrite on the GPU, through the
-#      real coordinator (`SuperDictate --diagnose-llm`);
+#      real coordinator (`Lexomorph --diagnose-llm`);
 #   4. speech recognition (Parakeet, and GigaAM if downloaded) on a `say`
-#      recording (`SuperDictate --benchmark-transcribe`);
+#      recording (`Lexomorph --benchmark-transcribe`);
 #   5. punctuation restoration with every downloaded model
-#      (`SuperDictate --diagnose-punctuation`).
+#      (`Lexomorph --diagnose-punctuation`).
 # Never touches /Applications or the LaunchAgent. Any failure exits non-zero.
 # No `set -e`: a checker must run every check and report each failure.
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZIP="${1:-}"
-[[ -f "$ZIP" ]] || { echo "usage: $0 <SuperDictate.zip>" >&2; exit 2; }
+[[ -f "$ZIP" ]] || { echo "usage: $0 <Lexomorph.zip>" >&2; exit 2; }
 
 failures=0
 pass() { printf '  PASS %s\n' "$*"; }
@@ -36,7 +36,7 @@ step() { printf '\n== %s\n' "$*"; }
 # No coreutils `timeout` on stock macOS; a hung check must not hang the release.
 with_timeout() { local seconds=$1; shift; perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"; }
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/superdictate-verify.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/lexomorph-verify.XXXXXX")"
 HOST_PID=""
 cleanup() {
     [[ -n "$HOST_PID" ]] && kill -9 "$HOST_PID" 2>/dev/null || true
@@ -44,28 +44,28 @@ cleanup() {
 }
 trap cleanup EXIT
 ditto -x -k "$ZIP" "$WORK/unpacked" || { echo "cannot unpack $ZIP" >&2; exit 1; }
-[[ -d "$WORK/unpacked/SuperDictate.app" ]] || { echo "no SuperDictate.app in $ZIP" >&2; exit 1; }
+[[ -d "$WORK/unpacked/Lexomorph.app" ]] || { echo "no Lexomorph.app in $ZIP" >&2; exit 1; }
 # Physical path: the host reports its shader directory resolved (/var is
 # /private/var on macOS).
-APP="$(cd "$WORK/unpacked/SuperDictate.app" && pwd -P)"
-BIN="$APP/Contents/MacOS/SuperDictate"
-LLM_HOST="$APP/Contents/Helpers/SuperDictateLLMHost"
-MODELS="$HOME/Library/Application Support/SuperDictate/Models/LLM"
+APP="$(cd "$WORK/unpacked/Lexomorph.app" && pwd -P)"
+BIN="$APP/Contents/MacOS/Lexomorph"
+LLM_HOST="$APP/Contents/Helpers/LexomorphLLMHost"
+MODELS="$HOME/Library/Application Support/Lexomorph/Models/LLM"
 
 step "1. Bundle"
 codesign --verify --deep --strict "$APP" && pass "signature verifies" || failed "signature"
-[[ "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" == "com.local.superdictate" ]] \
+[[ "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" == "com.local.lexomorph" ]] \
     && pass "bundle id" || failed "bundle id"
 want="$(plutil -extract CFBundleShortVersionString raw "$ROOT_DIR/swift/Info.plist")"
 got="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
 [[ "$got" == "$want" ]] && pass "version $got" || failed "version $got, swift/Info.plist says $want"
-if [[ -d /Applications/SuperDictate.app ]]; then
+if [[ -d /Applications/Lexomorph.app ]]; then
     dr() { codesign -d -r- "$1" 2>&1 | grep '^designated'; }
-    [[ "$(dr "$APP")" == "$(dr /Applications/SuperDictate.app)" ]] \
+    [[ "$(dr "$APP")" == "$(dr /Applications/Lexomorph.app)" ]] \
         && pass "designated requirement equals the installed app's" \
         || failed "designated requirement differs from the installed app's (permissions would reset)"
 fi
-for helper in SuperDictateLLMHost SuperDictateOnnxHost; do
+for helper in LexomorphLLMHost LexomorphOnnxHost; do
     [[ -x "$APP/Contents/Helpers/$helper" ]] && pass "helper $helper" || failed "helper $helper missing"
 done
 shader_count="$(find "$APP/Contents/Resources/llama-vulkan-shaders" -name '*.spv' 2>/dev/null | wc -l | tr -d ' ')"
@@ -135,7 +135,7 @@ say -v Milena -r 145 "Открой докер и залей изменения �
     || failed "cannot synthesize the test recording"
 asr_models="onnx"
 (( asr_checks )) || asr_models=""
-[[ -n "$asr_models" && -d "$HOME/Library/Application Support/SuperDictate/onnx/gigaam-v3-e2e-rnnt-int8" ]] && asr_models="onnx gigaam"
+[[ -n "$asr_models" && -d "$HOME/Library/Application Support/Lexomorph/onnx/gigaam-v3-e2e-rnnt-int8" ]] && asr_models="onnx gigaam"
 for asr in $asr_models; do
     if with_timeout 600 "$BIN" --benchmark-transcribe "$asr" cpu 4 "$WORK/speech.wav" > "$WORK/asr.out" 2>&1 \
         && text="$(grep '^BENCH_RESULT' "$WORK/asr.out" | sed 's/.* text=//')" \
@@ -153,7 +153,7 @@ if ! grep -q -- "--diagnose-punctuation" "$BIN"; then
 else
     punct_models=""
     for size in base small; do
-        [[ -f "$HOME/Library/Application Support/SuperDictate/onnx/punct-$size-int8/manifest.json" ]] \
+        [[ -f "$HOME/Library/Application Support/Lexomorph/onnx/punct-$size-int8/manifest.json" ]] \
             && punct_models="$punct_models $size"
     done
     [[ -n "$punct_models" ]] || failed "no punctuation model downloaded (Settings → Correction → Punctuation restoration)"

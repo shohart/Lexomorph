@@ -1,9 +1,9 @@
 #!/bin/bash
-# scripts/build-onnx-host.sh — build SuperDictateOnnxHost (native/asr-runtime)
+# scripts/build-onnx-host.sh — build LexomorphOnnxHost (native/asr-runtime)
 # and stage it into an UNSIGNED .app bundle, for build-app.sh and
 # build-test-app.sh (docs/specs/cross-platform-onnx-asr-spec.md §10):
 #
-#   Contents/Helpers/SuperDictateOnnxHost          rpath @executable_path/../Frameworks
+#   Contents/Helpers/LexomorphOnnxHost          rpath @executable_path/../Frameworks
 #   Contents/Frameworks/libonnxruntime.1.23.2.dylib
 #   Contents/Resources/onnx-asr/onnx-models.json   pinned model catalog
 #   Contents/Resources/onnx-asr/nemo128.onnx       bundled feature graph (Parakeet)
@@ -43,7 +43,7 @@ ORT_ROOT="$RUNTIME_DIR/third_party/onnxruntime/$platform"
 
 generator=()
 command -v ninja >/dev/null 2>&1 && generator=(-G Ninja)
-say "building SuperDictateOnnxHost ($platform)..."
+say "building the ONNX host (native target SuperDictateOnnxHost, staged as LexomorphOnnxHost) ($platform)..."
 cmake -S "$RUNTIME_DIR" -B "$BUILD_DIR" "${generator[@]}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
@@ -56,8 +56,8 @@ DYLIB="$ORT_ROOT/lib/libonnxruntime.$ORT_VERSION.dylib"
 [[ -f "$DYLIB" && ! -L "$DYLIB" ]] || fail "missing $DYLIB"
 
 mkdir -p "$APP/Contents/Helpers" "$APP/Contents/Frameworks" "$APP/Contents/Resources/onnx-asr"
-cp "$HOST" "$APP/Contents/Helpers/SuperDictateOnnxHost"
-chmod 755 "$APP/Contents/Helpers/SuperDictateOnnxHost"
+cp "$HOST" "$APP/Contents/Helpers/LexomorphOnnxHost"
+chmod 755 "$APP/Contents/Helpers/LexomorphOnnxHost"
 cp "$DYLIB" "$APP/Contents/Frameworks/"
 chmod 644 "$APP/Contents/Frameworks/libonnxruntime.$ORT_VERSION.dylib"
 cp "$RUNTIME_DIR/catalog/onnx-models.json" "$APP/Contents/Resources/onnx-asr/onnx-models.json"
@@ -69,14 +69,14 @@ cp "$ORT_ROOT/ThirdPartyNotices.txt" "$APP/Contents/Resources/onnx-asr/ThirdPart
 cp "$ORT_ROOT/LICENSE" "$APP/Contents/Resources/onnx-asr/onnxruntime-LICENSE.txt"
 
 # Packaging checks (spec §10): no Homebrew/SDK paths, the bundle rpath only.
-staged_host="$APP/Contents/Helpers/SuperDictateOnnxHost"
+staged_host="$APP/Contents/Helpers/LexomorphOnnxHost"
 if otool -L "$staged_host" | tail -n +2 | grep -Eq '/usr/local/|/opt/homebrew/|Cellar|third_party'; then
     otool -L "$staged_host" >&2
-    fail "SuperDictateOnnxHost links a non-system path"
+    fail "LexomorphOnnxHost links a non-system path"
 fi
 otool -L "$staged_host" | grep -q "@rpath/libonnxruntime.$ORT_VERSION.dylib" \
-    || fail "SuperDictateOnnxHost does not load ONNX Runtime via @rpath"
+    || fail "LexomorphOnnxHost does not load ONNX Runtime via @rpath"
 rpaths="$(otool -l "$staged_host" | awk '/LC_RPATH/ {getline; getline; print $2}')"
 [[ "$rpaths" == "@executable_path/../Frameworks" ]] \
-    || fail "unexpected SuperDictateOnnxHost rpath(s): $rpaths"
+    || fail "unexpected LexomorphOnnxHost rpath(s): $rpaths"
 say "staged host, ONNX Runtime $ORT_VERSION and onnx-asr resources into $APP"

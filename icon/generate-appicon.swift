@@ -1,6 +1,6 @@
-// generate-appicon.swift — deterministic AppIcon generator for SuperDictate
+// generate-appicon.swift — deterministic AppIcon generator for Lexomorph
 // Next. Renders every macOS iconset size as PNGs into
-// <outdir>/AppIcon.iconset; run iconutil afterwards to build Parakey.icns.
+// <outdir>/AppIcon.iconset; run iconutil afterwards to build Lexomorph.icns.
 //
 // Design brief (v0.5.4 rebrand): keep the microphone concept, make it modern
 // and vivid — a diagonal indigo→violet→pink gradient plate, a soft top sheen,
@@ -10,7 +10,7 @@
 // Usage (no arguments — the swift driver in some environments rewrites
 // positional args, so paths are fixed/environment-driven):
 //   APPICON_PREVIEW=dist/appicon-preview.png swift icon/generate-appicon.swift
-//   iconutil -c icns icon/build/AppIcon.iconset -o icon/Parakey.icns
+//   iconutil -c icns icon/build/AppIcon.iconset -o icon/Lexomorph.icns
 
 import Foundation
 import CoreGraphics

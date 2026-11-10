@@ -32,14 +32,23 @@ manifest_sha256="$(plutil -extract sha256 raw -o - update.json)"
     exit 1
 }
 
+# The legacy SuperDictate/Parakey names live only in the migration code, the
+# install/uninstall scripts, tests and deliberately kept infrastructure.
+legacy_hits="$(grep -rIn -i -E 'superdictate|parakey' swift/Sources/Lexomorph swift/Package.swift \
+    | grep -v -E 'Migration\.swift|SelfTest\.swift|SuperDictate-Next|bykovlegal|shlgd/|superdictate_|based on Parakey|Parakey by|[Ff]ormerly SuperDictate|HOMEBREW_CASK_INSTALLED_TOKEN|superdictate-corrections|CorrectionsTransfer\.swift|main\.swift' || true)"
+[[ -z "$legacy_hits" ]] || {
+    printf 'Legacy names outside the migration code:\n%s\n' "$legacy_hits" >&2
+    exit 1
+}
+
 grep -q 'com.apple.security.device.audio-input' entitlements.plist
 grep -q 'com.apple.security.device.microphone' entitlements.plist
 
 ! grep -q 'shohart/SuperDictate-Intel\|shlgd/SuperDictate' README.md README.ru.md
 grep -q 'raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh' README.md
 grep -q 'raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh' README.ru.md
-grep -q '^REF="${SUPERDICTATE_REF:-\$SOURCE_COMMIT}"$' install.sh
-grep -q '^EXPECTED_SOURCE_COMMIT="${SUPERDICTATE_SOURCE_COMMIT:-\$SOURCE_COMMIT}"$' install.sh
+grep -q '^REF="${LEXOMORPH_REF:-\$SOURCE_COMMIT}"$' install.sh
+grep -q '^EXPECTED_SOURCE_COMMIT="${LEXOMORPH_SOURCE_COMMIT:-\$SOURCE_COMMIT}"$' install.sh
 grep -q 'verify_source_ref' install.sh
 grep -q 'validate_output_app_path "$OUTPUT_APP"' scripts/build-app.sh
 

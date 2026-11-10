@@ -17,7 +17,7 @@ jobs:
       github.event_name != 'release' ||
       startsWith(github.event.release.tag_name, 'mac-v') ||
       startsWith(github.event.release.tag_name, 'v')
-    # The published SuperDictate.zip is an Intel (x86_64) build, and
+    # The published Lexomorph.zip is an Intel (x86_64) build, and
     # install.sh refuses a build whose architecture differs from the Mac's,
     # so the smoke test needs an Intel runner.
     runs-on: macos-15-intel
@@ -42,35 +42,35 @@ jobs:
       - name: Install from the public command
         run: |
           curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | \
-            SUPERDICTATE_NO_OPEN=1 bash
+            LEXOMORPH_NO_OPEN=1 bash
       - name: Verify installed release
         env:
           VERSION: ${{ steps.pin.outputs.version }}
         run: |
-          app=/Applications/SuperDictate.app
-          test -x "$app/Contents/MacOS/SuperDictate"
-          test "$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")" = "com.local.superdictate"
+          app=/Applications/Lexomorph.app
+          test -x "$app/Contents/MacOS/Lexomorph"
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist")" = "com.local.lexomorph"
           test "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = "$VERSION"
-          file "$app/Contents/MacOS/SuperDictate" | grep -q x86_64
+          file "$app/Contents/MacOS/Lexomorph" | grep -q x86_64
           codesign --verify --deep --strict "$app"
           codesign -d --entitlements :- "$app" > "$RUNNER_TEMP/entitlements.plist" 2>/dev/null
           test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' "$RUNNER_TEMP/entitlements.plist")" = "true"
           test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.microphone' "$RUNNER_TEMP/entitlements.plist")" = "true"
       - name: Verify bundled helpers and runtime
         run: |
-          app=/Applications/SuperDictate.app
-          test -x "$app/Contents/Helpers/SuperDictateOnnxHost"
-          test -x "$app/Contents/Helpers/SuperDictateLLMHost"
+          app=/Applications/Lexomorph.app
+          test -x "$app/Contents/Helpers/LexomorphOnnxHost"
+          test -x "$app/Contents/Helpers/LexomorphLLMHost"
           test -f "$app/Contents/Frameworks/libonnxruntime.1.23.2.dylib"
           test -f "$app/Contents/Resources/onnx-asr/onnx-models.json"
           # Speech recognition is ONNX only: no Whisper helper and no ASR
           # Vulkan shaders may ship any more.
-          test ! -e "$app/Contents/Helpers/SuperDictateWhisperHost"
+          test ! -e "$app/Contents/Helpers/LexomorphWhisperHost"
           test ! -e "$app/Contents/Resources/vulkan-shaders"
           test ! -e "$app/Contents/Resources/whisper-vulkan-shaders"
           # Everything is self-contained: no Homebrew, MoltenVK or Vulkan
           # loader dylib at runtime.
-          for binary in "$app/Contents/MacOS/SuperDictate" "$app/Contents/Helpers/"* \
+          for binary in "$app/Contents/MacOS/Lexomorph" "$app/Contents/Helpers/"* \
                         "$app/Contents/Frameworks/"*.dylib; do
             if otool -L "$binary" | tail -n +2 | grep -Ei '/usr/local|/opt/homebrew|Cellar|MoltenVK|libvulkan'; then
               echo "unexpected runtime dependency in $binary" >&2
@@ -80,4 +80,4 @@ jobs:
       - name: Uninstall
         run: |
           curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/uninstall.sh | bash
-          test ! -e /Applications/SuperDictate.app
+          test ! -e /Applications/Lexomorph.app

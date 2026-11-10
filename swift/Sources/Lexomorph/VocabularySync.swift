@@ -1,0 +1,850 @@
+// Lexomorph — account sync of the vocabulary with the Lexomorph sync
+// server (docs/specs/vocabulary-hygiene-and-sync-spec.md §4; server in
+// server/vocab-sync). Layers:
+//   - VocabularySyncTokenStore: where the bearer token lives (Keychain in
+//     the app, in memory in self-tests);
+//   - VocabularySyncClient: the HTTP API (URLSession, system proxy for
+//     internet hosts, direct for loopback/LAN — same policy as
+//     OpenAICompatibleClient);
+//   - VocabularySyncEngine: one serial push/pull pass over a store;
+//   - VocabularySyncCoordinator: triggers (launch, 5 s after a local edit,
+//     every 15 min, the manual button), backoff and notifications. Both
+//     the agent and the Control Panel run one; a file lock keeps their
+//     passes from overlapping.
+
+import Foundation
+import Security
+
+// MARK: - Failures
+
+enum VocabularySyncFailure: String, Error, Equatable, Sendable {
+    case wrongPassword = "wrong-password"
+    case tooManyAttempts = "too-many-attempts"
+    case invalidCredentials = "invalid-credentials"
+    /// A 401 on an authenticated request: the token is gone.
+    case unauthorized
+    case network
+    case server
+    case notSignedIn = "not-signed-in"
+    case busy
+    case keychain
+
+    /// Failures worth backing off on (the next automatic trigger retries).
+    var isTransient: Bool {
+        switch self {
+        case .network, .server, .busy: return true
+        default: return false
+        }
+    }
+}
+
+// MARK: - Token storage
+
+protocol VocabularySyncTokenStore: Sendable {
+    func token(for account: String) -> String?
+    func setToken(_ token: String, for account: String) throws
+    func removeToken(for account: String)
+}
+
+/// Generic password, service `com.local.lexomorph.vocab-sync`, account =
+/// the e-mail (spec §4.1). The password itself is never stored.
+struct KeychainVocabularySyncTokenStore: VocabularySyncTokenStore {
+    let service: String
+
+    init(service: String = VOCABULARY_SYNC_KEYCHAIN_SERVICE) {
+        self.service = service
+    }
+
+    private func baseQuery(_ account: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: account]
+    }
+
+    func token(for account: String) -> String? {
+        guard !account.isEmpty else { return nil }
+        var query = baseQuery(account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func setToken(_ token: String, for account: String) throws {
+        let data = Data(token.utf8)
+        let update = SecItemUpdate(baseQuery(account) as CFDictionary,
+                                   [kSecValueData as String: data] as CFDictionary)
+        if update == errSecSuccess { return }
+        guard update == errSecItemNotFound else { throw VocabularySyncFailure.keychain }
+        var add = baseQuery(account)
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        add[kSecAttrLabel as String] = "Lexomorph vocabulary sync"
+        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { throw VocabularySyncFailure.keychain }
+    }
+
+    func removeToken(for account: String) {
+        guard !account.isEmpty else { return }
+        SecItemDelete(baseQuery(account) as CFDictionary)
+    }
+}
+
+/// Self-tests only: never touches the real Keychain entry.
+final class InMemoryVocabularySyncTokenStore: VocabularySyncTokenStore, @unchecked Sendable {
+    private var tokens: [String: String] = [:]
+    private let lock = NSLock()
+
+    func token(for account: String) -> String? { lock.withLock { tokens[account] } }
+    func setToken(_ token: String, for account: String) throws { lock.withLock { tokens[account] = token } }
+    func removeToken(for account: String) { _ = lock.withLock { tokens.removeValue(forKey: account) } }
+}
+
+// MARK: - HTTP client
+
+struct VocabularySyncWireEntry: Codable, Equatable, Sendable {
+    let source: String
+    let replacement: String
+    let origin: String
+    let asrHint: Bool?
+    let deleted: Bool
+    let updatedAt: String
+    var revision: Int? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case source, replacement, origin, deleted, revision
+        case asrHint = "asr_hint"
+        case updatedAt = "updated_at"
+    }
+}
+
+/// A custom ASR hotword on the wire (`hotwords` collection of the same
+/// push/pull payload; user-hotword-vocabulary spec §8).
+struct VocabularySyncHotwordEntry: Codable, Equatable, Sendable {
+    let phrase: String
+    let enabled: Bool
+    let deleted: Bool
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case phrase, enabled, deleted
+        case updatedAt = "updated_at"
+    }
+}
+
+/// A custom rewrite style on the wire (`styles` collection; modes-and-usage-sync
+/// spec §3.1). Hotkeys and the active mode never travel.
+struct VocabularySyncStyleEntry: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let color: String
+    let instruction: String
+    let deleted: Bool
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, color, instruction, deleted
+        case updatedAt = "updated_at"
+    }
+}
+
+/// One (day, device) usage row on the wire (`usage` collection; spec §3.2).
+/// `words` and `asr_seconds` are optional: the other platform may not count them.
+struct VocabularySyncUsageEntry: Codable, Equatable, Sendable {
+    let day: String
+    let device: String
+    let dictations: Int
+    let characters: Int
+    let words: Int?
+    let audioSeconds: Double
+    let asrSeconds: Double?
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case day, device, dictations, characters, words
+        case audioSeconds = "audio_seconds"
+        case asrSeconds = "asr_seconds"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct VocabularySyncResponse: Codable, Sendable {
+    let revision: Int
+    let entries: [VocabularySyncWireEntry]
+    /// Absent in answers from a server that predates custom hotwords.
+    let hotwords: [VocabularySyncHotwordEntry]
+    let styles: [VocabularySyncStyleEntry]
+    let usage: [VocabularySyncUsageEntry]
+    /// False when the answer has no `hotwords` field: that server dropped
+    /// the hotwords it was sent, so they must be pushed again later.
+    let serverStoresHotwords: Bool
+    /// Same for `styles` and `usage` (servers before the modes/usage sync).
+    let serverStoresStyles: Bool
+    let serverStoresUsage: Bool
+
+    init(revision: Int, entries: [VocabularySyncWireEntry], hotwords: [VocabularySyncHotwordEntry] = [],
+         styles: [VocabularySyncStyleEntry] = [], usage: [VocabularySyncUsageEntry] = []) {
+        self.revision = revision
+        self.entries = entries
+        self.hotwords = hotwords
+        self.styles = styles
+        self.usage = usage
+        serverStoresHotwords = true
+        serverStoresStyles = true
+        serverStoresUsage = true
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        revision = try container.decode(Int.self, forKey: .revision)
+        entries = try container.decode([VocabularySyncWireEntry].self, forKey: .entries)
+        let decoded = try container.decodeIfPresent([VocabularySyncHotwordEntry].self, forKey: .hotwords)
+        hotwords = decoded ?? []
+        serverStoresHotwords = decoded != nil
+        let decodedStyles = try container.decodeIfPresent([VocabularySyncStyleEntry].self, forKey: .styles)
+        styles = decodedStyles ?? []
+        serverStoresStyles = decodedStyles != nil
+        let decodedUsage = try container.decodeIfPresent([VocabularySyncUsageEntry].self, forKey: .usage)
+        usage = decodedUsage ?? []
+        serverStoresUsage = decodedUsage != nil
+    }
+
+    enum CodingKeys: String, CodingKey { case revision, entries, hotwords, styles, usage }
+}
+
+struct VocabularySyncAuthResult: Codable, Sendable {
+    let token: String
+    let created: Bool
+    let email: String
+}
+
+struct VocabularySyncClient: Sendable {
+    let baseURL: URL
+    var timeout: TimeInterval = 30
+
+    private struct ClientInfo: Codable { let platform: String; let version: String }
+    private struct AuthRequest: Codable { let email: String; let password: String; let client: ClientInfo }
+    private struct PushRequest: Codable {
+        let since: Int
+        let changes: [VocabularySyncWireEntry]
+        let hotwords: [VocabularySyncHotwordEntry]
+        let styles: [VocabularySyncStyleEntry]
+        let usage: [VocabularySyncUsageEntry]
+        let client: ClientInfo
+    }
+
+    private static var clientInfo: ClientInfo { ClientInfo(platform: "macos", version: currentBundleVersion()) }
+
+    private func endpoint(_ path: String) -> URL {
+        baseURL.appendingPathComponent(path)
+    }
+
+    private func session() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout * 2
+        if isLocalNetworkHost(baseURL.host) {
+            // Same rule as OpenAICompatibleClient: a system proxy has no
+            // route to loopback/LAN. The public sync server keeps the
+            // system proxy policy (nil = honor the system configuration).
+            config.connectionProxyDictionary = [:]
+        }
+        return URLSession(configuration: config)
+    }
+
+    private func send(_ request: URLRequest) async throws -> (Data, Int) {
+        let session = session()
+        defer { session.finishTasksAndInvalidate() }
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw VocabularySyncFailure.server }
+            return (data, http.statusCode)
+        } catch let failure as VocabularySyncFailure {
+            throw failure
+        } catch {
+            throw VocabularySyncFailure.network
+        }
+    }
+
+    private func jsonRequest(_ path: String, method: String, token: String?, body: Data?) -> URLRequest {
+        var request = URLRequest(url: endpoint(path))
+        request.httpMethod = method
+        request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body {
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        if let token {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    func signIn(email: String, password: String) async throws -> VocabularySyncAuthResult {
+        let body = try JSONEncoder().encode(AuthRequest(email: email, password: password, client: Self.clientInfo))
+        let (data, status) = try await send(jsonRequest("v1/auth", method: "POST", token: nil, body: body))
+        switch status {
+        case 200..<300:
+            guard let result = try? JSONDecoder().decode(VocabularySyncAuthResult.self, from: data) else {
+                throw VocabularySyncFailure.server
+            }
+            return result
+        case 401: throw VocabularySyncFailure.wrongPassword
+        case 422: throw VocabularySyncFailure.invalidCredentials
+        case 429: throw VocabularySyncFailure.tooManyAttempts
+        default: throw VocabularySyncFailure.server
+        }
+    }
+
+    func signOut(token: String) async {
+        _ = try? await send(jsonRequest("v1/auth", method: "DELETE", token: token, body: nil))
+    }
+
+    func pull(token: String, since: Int) async throws -> VocabularySyncResponse {
+        var components = URLComponents(url: endpoint("v1/vocabulary"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "since", value: String(since))]
+        guard let url = components?.url else { throw VocabularySyncFailure.server }
+        var request = jsonRequest("v1/vocabulary", method: "GET", token: token, body: nil)
+        request.url = url
+        return try decodeSync(try await send(request))
+    }
+
+    func push(token: String, since: Int, changes: [VocabularySyncWireEntry],
+              hotwords: [VocabularySyncHotwordEntry] = [],
+              styles: [VocabularySyncStyleEntry] = [],
+              usage: [VocabularySyncUsageEntry] = []) async throws -> VocabularySyncResponse {
+        let body = try JSONEncoder().encode(PushRequest(since: since, changes: changes, hotwords: hotwords,
+                                                        styles: styles, usage: usage, client: Self.clientInfo))
+        return try decodeSync(try await send(jsonRequest("v1/vocabulary", method: "POST", token: token, body: body)))
+    }
+
+    private func decodeSync(_ result: (Data, Int)) throws -> VocabularySyncResponse {
+        let (data, status) = result
+        switch status {
+        case 200..<300:
+            guard let response = try? JSONDecoder().decode(VocabularySyncResponse.self, from: data) else {
+                throw VocabularySyncFailure.server
+            }
+            return response
+        case 401: throw VocabularySyncFailure.unauthorized
+        default: throw VocabularySyncFailure.server
+        }
+    }
+}
+
+// MARK: - Engine
+
+struct VocabularySyncPassSummary: Equatable, Sendable {
+    var pushed = 0
+    var applied = 0
+}
+
+/// One serial push/pull pass at a time (spec §4.2). Within a process the
+/// actor queues callers; across the agent and the Control Panel an
+/// optional lock file does.
+actor VocabularySyncEngine {
+    static let maxChangesPerPush = 1000
+    /// The server's per-field limit (MAX_FIELD in server/vocab-sync/app.py).
+    static let maxFieldLength = 200
+
+    let settings: Settings
+    let tokenStore: any VocabularySyncTokenStore
+    private let lockFileURL: URL?
+    private var running = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(settings: Settings, tokenStore: any VocabularySyncTokenStore, lockFileURL: URL?) {
+        self.settings = settings
+        self.tokenStore = tokenStore
+        self.lockFileURL = lockFileURL
+    }
+
+    private var store: VocabularyStore { settings.vocabularyStore }
+    private var client: VocabularySyncClient { VocabularySyncClient(baseURL: settings.vocabularySyncServerURL) }
+
+    /// Read on the main thread, so it must never touch the Keychain: after an
+    /// update macOS may hold a Keychain read behind a dialog, and the app would
+    /// freeze until somebody answers it. The token is read inside a pass.
+    nonisolated var isSignedIn: Bool {
+        settings.vocabularySyncEnabled && !settings.vocabularySyncEmail.isEmpty
+            && settings.vocabularySyncLastError != VocabularySyncFailure.unauthorized.rawValue
+    }
+
+    // MARK: Serialization
+
+    private func acquire() async {
+        if running {
+            await withCheckedContinuation { waiters.append($0) }
+        } else {
+            running = true
+        }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            running = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+
+    /// Cross-process lock: the agent and the Control Panel may both run a
+    /// pass; the cursors in UserDefaults must not interleave.
+    private func acquireFileLock() async throws -> Int32? {
+        guard let lockFileURL else { return nil }
+        let fd = open(lockFileURL.path, O_CREAT | O_RDWR, 0o600)
+        guard fd >= 0 else { return nil }
+        for _ in 0..<150 {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { return fd }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        close(fd)
+        throw VocabularySyncFailure.busy
+    }
+
+    private func releaseFileLock(_ fd: Int32?) {
+        guard let fd else { return }
+        flock(fd, LOCK_UN)
+        close(fd)
+    }
+
+    // MARK: Account
+
+    /// Signs in (the first sign-in with a new e-mail creates the account),
+    /// stores the token and resets the cursors so the next pass is a full
+    /// merge. Returns whether the account was created.
+    func signIn(email: String, password: String) async throws -> Bool {
+        await acquire()
+        defer { release() }
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let auth = try await client.signIn(email: trimmed, password: password)
+        let previous = settings.vocabularySyncEmail
+        if !previous.isEmpty, previous != auth.email {
+            tokenStore.removeToken(for: previous)
+        }
+        try tokenStore.setToken(auth.token, for: auth.email)
+        settings.vocabularySyncEmail = auth.email
+        settings.vocabularySyncEnabled = true
+        settings.vocabularySyncLastServerRevision = 0
+        settings.vocabularySyncLastPushedLocalStamp = ""
+        settings.vocabularySyncLastSyncAt = nil
+        settings.vocabularySyncLastError = nil
+        // A new sign-in re-pulls everything from revision 0 and re-sends this
+        // device's usage rows (the account may be a different one).
+        settings.resetUsageSyncState()
+        log("vocabulary sync: signed in as \(auth.email)\(auth.created ? " (new account)" : "")")
+        return auth.created
+    }
+
+    func signOut() async {
+        await acquire()
+        defer { release() }
+        let email = settings.vocabularySyncEmail
+        if let token = tokenStore.token(for: email) {
+            await client.signOut(token: token)
+        }
+        tokenStore.removeToken(for: email)
+        settings.vocabularySyncEnabled = false
+        settings.vocabularySyncLastServerRevision = 0
+        settings.vocabularySyncLastPushedLocalStamp = ""
+        settings.vocabularySyncLastSyncAt = nil
+        settings.vocabularySyncLastError = nil
+        settings.resetUsageSyncState()
+        log("vocabulary sync: signed out")
+    }
+
+    // MARK: Pass
+
+    func runPass() async throws -> VocabularySyncPassSummary {
+        await acquire()
+        defer { release() }
+        let lock = try await acquireFileLock()
+        defer { releaseFileLock(lock) }
+        settings.refreshFromDisk()
+
+        let email = settings.vocabularySyncEmail
+        guard settings.vocabularySyncEnabled, !email.isEmpty else {
+            throw VocabularySyncFailure.notSignedIn
+        }
+        guard let token = tokenStore.token(for: email) else {
+            // Gone from the Keychain, or the user refused access: ask to sign in.
+            settings.vocabularySyncLastError = VocabularySyncFailure.unauthorized.rawValue
+            throw VocabularySyncFailure.notSignedIn
+        }
+        do {
+            let summary = try await pass(token: token)
+            settings.vocabularySyncLastSyncAt = Date()
+            settings.vocabularySyncLastError = nil
+            return summary
+        } catch let failure as VocabularySyncFailure {
+            if failure == .unauthorized {
+                // Spec §4.2: a 401 drops the token; the UI asks to sign in again.
+                tokenStore.removeToken(for: email)
+                log("vocabulary sync: the server rejected the token (401); signed out locally")
+            } else {
+                log("vocabulary sync: pass failed (\(failure.rawValue))")
+            }
+            settings.vocabularySyncLastError = failure.rawValue
+            throw failure
+        } catch {
+            log("vocabulary sync: pass failed (\(error))")
+            settings.vocabularySyncLastError = VocabularySyncFailure.server.rawValue
+            throw VocabularySyncFailure.server
+        }
+    }
+
+    private func pass(token: String) async throws -> VocabularySyncPassSummary {
+        let passStart = VocabularyStore.timestamp()
+        let cursorStamp = settings.vocabularySyncLastPushedLocalStamp
+        let local = store.syncChanges(since: cursorStamp)
+
+        var changes: [VocabularySyncWireEntry] = []
+        var newestPushed = ""
+        for record in local.entries {
+            guard let source = Self.wireField(record.source),
+                  let replacement = Self.wireField(record.replacement), !record.updatedAt.isEmpty else {
+                log("vocabulary sync: entry id=\(record.id) not pushed (empty, too long or control characters)")
+                continue
+            }
+            changes.append(VocabularySyncWireEntry(source: source, replacement: replacement,
+                                                   origin: record.origin.rawValue, asrHint: record.asrHint,
+                                                   deleted: false, updatedAt: record.updatedAt))
+            newestPushed = max(newestPushed, record.updatedAt)
+        }
+        for tombstone in local.tombstones {
+            guard let source = Self.wireField(tombstone.source), !tombstone.deletedAt.isEmpty else { continue }
+            changes.append(VocabularySyncWireEntry(source: source, replacement: "", origin: VocabularyOrigin.manual.rawValue,
+                                                   asrHint: nil, deleted: true, updatedAt: tombstone.deletedAt))
+            newestPushed = max(newestPushed, tombstone.deletedAt)
+        }
+
+        // Custom ASR hotwords share the cursor stamp, the server revision and
+        // the push/pull flow with the corrections above.
+        let localHotwords = store.hotwordSyncChanges(since: cursorStamp)
+        var hotwordChanges: [VocabularySyncHotwordEntry] = []
+        for record in localHotwords.entries {
+            guard let phrase = Self.wireField(record.phrase), !record.updatedAt.isEmpty else {
+                log("vocabulary sync: hotword id=\(record.id) not pushed (empty, too long or control characters)")
+                continue
+            }
+            hotwordChanges.append(VocabularySyncHotwordEntry(phrase: phrase, enabled: record.enabled,
+                                                             deleted: false, updatedAt: record.updatedAt))
+            newestPushed = max(newestPushed, record.updatedAt)
+        }
+        for tombstone in localHotwords.tombstones {
+            guard let phrase = Self.wireField(tombstone.phrase), !tombstone.deletedAt.isEmpty else { continue }
+            hotwordChanges.append(VocabularySyncHotwordEntry(phrase: phrase, enabled: true,
+                                                             deleted: true, updatedAt: tombstone.deletedAt))
+            newestPushed = max(newestPushed, tombstone.deletedAt)
+        }
+
+        // Custom rewrite styles share the cursor stamp as well.
+        let localStyles = settings.customStyleSyncChanges(since: cursorStamp)
+        var styleChanges: [VocabularySyncStyleEntry] = []
+        for style in localStyles.styles {
+            guard let name = Self.wireStyleName(style.name), Self.isWireColor(style.colorHex),
+                  style.instruction.unicodeScalars.count <= Self.maxStyleInstructionLength else {
+                log("vocabulary sync: style id=\(style.id) not pushed (invalid name, color or instruction)")
+                continue
+            }
+            let stamp = style.updatedAt ?? Settings.epochStamp
+            styleChanges.append(VocabularySyncStyleEntry(id: style.id, name: name, color: style.colorHex,
+                                                         instruction: style.instruction, deleted: false,
+                                                         updatedAt: stamp))
+            newestPushed = max(newestPushed, stamp)
+        }
+        for tombstone in localStyles.tombstones {
+            styleChanges.append(VocabularySyncStyleEntry(id: tombstone.id, name: "", color: "#000000",
+                                                         instruction: "", deleted: true, updatedAt: tombstone.deletedAt))
+            newestPushed = max(newestPushed, tombstone.deletedAt)
+        }
+
+        // Usage: this device's rows as absolute per-day values. Only days that
+        // differ from what the server last confirmed are sent; the cursor is
+        // not involved (idempotent, no conflicts between devices).
+        let localUsage = settings.dailyDictationUsage
+        let usageChanges = Self.usageChanges(local: localUsage,
+                                             lastSent: settings.usageSyncLastSent,
+                                             device: settings.usageSyncDeviceID, stamp: passStart)
+
+        var summary = VocabularySyncPassSummary()
+        var since = settings.vocabularySyncLastServerRevision
+        if changes.isEmpty && hotwordChanges.isEmpty && styleChanges.isEmpty && usageChanges.isEmpty {
+            let response = try await client.pull(token: token, since: since)
+            summary.applied += try apply(response)
+            since = response.revision
+            settings.vocabularySyncLastServerRevision = since
+        } else {
+            var start = 0
+            var hotwordStart = 0
+            var styleStart = 0
+            var usageStart = 0
+            var hotwordsDropped = false
+            var stylesDropped = false
+            var usageDropped = false
+            while start < changes.count || hotwordStart < hotwordChanges.count
+                    || styleStart < styleChanges.count || usageStart < usageChanges.count {
+                let batch = Array(changes[start..<min(start + Self.maxChangesPerPush, changes.count)])
+                let hotwordBatch = Array(hotwordChanges[hotwordStart..<min(hotwordStart + Self.maxChangesPerPush,
+                                                                           hotwordChanges.count)])
+                let styleBatch = Array(styleChanges[styleStart..<min(styleStart + Self.maxChangesPerPush,
+                                                                     styleChanges.count)])
+                let usageBatch = Array(usageChanges[usageStart..<min(usageStart + Self.maxChangesPerPush,
+                                                                     usageChanges.count)])
+                let response = try await client.push(token: token, since: since, changes: batch,
+                                                     hotwords: hotwordBatch, styles: styleBatch, usage: usageBatch)
+                summary.applied += try apply(response)
+                summary.pushed += batch.count + hotwordBatch.count + styleBatch.count + usageBatch.count
+                if !hotwordBatch.isEmpty && !response.serverStoresHotwords { hotwordsDropped = true }
+                if !styleBatch.isEmpty && !response.serverStoresStyles { stylesDropped = true }
+                if !usageBatch.isEmpty && !response.serverStoresUsage { usageDropped = true }
+                since = response.revision
+                settings.vocabularySyncLastServerRevision = since
+                start += batch.count
+                hotwordStart += hotwordBatch.count
+                styleStart += styleBatch.count
+                usageStart += usageBatch.count
+            }
+            // Never ahead of this device's own clock: a remote stamp from a
+            // device whose clock runs fast must not hide later local edits.
+            // An old server ignored the hotwords or styles: keep the cursor so
+            // they go out again once it is upgraded (re-pushed corrections
+            // tie and change nothing there).
+            if hotwordsDropped || stylesDropped {
+                log("vocabulary sync: the server does not store hotwords or styles yet; will push them again")
+            } else {
+                settings.vocabularySyncLastPushedLocalStamp = min(newestPushed, passStart)
+            }
+            if usageDropped {
+                log("vocabulary sync: the server does not store usage yet; will push it again")
+            } else if !usageChanges.isEmpty {
+                settings.usageSyncLastSent = localUsage
+            }
+        }
+        log("vocabulary sync: pass done — pushed \(summary.pushed), applied \(summary.applied), revision \(since)")
+        return summary
+    }
+
+    private func apply(_ response: VocabularySyncResponse) throws -> Int {
+        let entries = response.entries.map { entry in
+            VocabularyStore.RemoteEntry(source: entry.source, replacement: entry.replacement,
+                                        origin: VocabularyOrigin(rawValue: entry.origin) ?? .manual,
+                                        asrHint: entry.asrHint, deleted: entry.deleted, updatedAt: entry.updatedAt)
+        }
+        let hotwords = response.hotwords.map { entry in
+            HotwordRemoteEntry(phrase: entry.phrase, enabled: entry.enabled, deleted: entry.deleted,
+                               updatedAt: entry.updatedAt)
+        }
+        let styles = response.styles.map { entry in
+            CustomStyleRemoteEntry(id: entry.id, name: entry.name, color: entry.color,
+                                   instruction: entry.instruction, deleted: entry.deleted, updatedAt: entry.updatedAt)
+        }
+        let usage = response.usage.map { entry in
+            DeviceDictationUsage(day: entry.day, device: entry.device, dictationCount: max(0, entry.dictations),
+                                 characterCount: max(0, entry.characters), wordCount: max(0, entry.words ?? 0),
+                                 audioSeconds: max(0, entry.audioSeconds.isFinite ? entry.audioSeconds : 0),
+                                 asrSeconds: max(0, (entry.asrSeconds ?? 0).isFinite ? (entry.asrSeconds ?? 0) : 0),
+                                 updatedAt: entry.updatedAt)
+        }
+        do {
+            return try store.applyRemote(entries) + store.applyRemoteHotwords(hotwords)
+                + settings.applyRemoteCustomStyles(styles) + settings.applyRemoteUsage(usage)
+        } catch {
+            log("vocabulary sync: applying server entries failed: \(error)")
+            throw VocabularySyncFailure.busy
+        }
+    }
+
+    static let maxStyleNameLength = 40
+    static let maxStyleInstructionLength = 4000
+    static let maxUsageDays = 400
+
+    static func wireStyleName(_ text: String) -> String? {
+        let cleaned = text.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned.unicodeScalars.count <= maxStyleNameLength else { return nil }
+        return cleaned
+    }
+
+    static func isWireColor(_ value: String) -> Bool {
+        value.count == 7 && value.hasPrefix("#") && value.dropFirst().allSatisfy { $0.isHexDigit }
+    }
+
+    /// This device's usage rows (last 400 days) that differ from `lastSent`,
+    /// as absolute values; days with no activity are skipped.
+    static func usageChanges(local: [DailyDictationUsage], lastSent: [DailyDictationUsage],
+                             device: String, stamp: String) -> [VocabularySyncUsageEntry] {
+        let sent = Dictionary(lastSent.map { ($0.day, $0) }, uniquingKeysWith: { first, _ in first })
+        return local.suffix(maxUsageDays).compactMap { day in
+            guard day.dictationCount > 0 || day.characterCount > 0 || day.audioSeconds > 0 else { return nil }
+            if sent[day.day] == day { return nil }
+            return VocabularySyncUsageEntry(day: day.day, device: device, dictations: day.dictationCount,
+                                            characters: day.characterCount, words: 0,
+                                            audioSeconds: day.audioSeconds, asrSeconds: day.asrSeconds,
+                                            updatedAt: stamp)
+        }
+    }
+
+    /// What the server accepts (its `_clean`): NFC, trimmed, non-empty, at
+    /// most 200 characters, no control characters.
+    static func wireField(_ text: String) -> String? {
+        let cleaned = text.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned.unicodeScalars.count <= maxFieldLength,
+              !cleaned.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else { return nil }
+        return cleaned
+    }
+}
+
+// MARK: - Coordinator
+
+/// App-side triggers and status around one engine. The agent runs the
+/// automatic triggers; the Control Panel uses it for sign-in, sign-out and
+/// the manual button.
+@MainActor
+final class VocabularySyncCoordinator {
+    enum Role { case agent, controlPanel }
+
+    static let debounceSeconds: TimeInterval = 5
+    static let periodicSeconds: TimeInterval = 15 * 60
+    static let maxBackoffSeconds: TimeInterval = 15 * 60
+
+    let engine: VocabularySyncEngine
+    private let settings: Settings
+    private let role: Role
+    private var debounceTask: Task<Void, Never>?
+    private var notifyTask: Task<Void, Never>?
+    private var periodicTimer: Timer?
+    private var consecutiveFailures = 0
+    private var nextAutomaticAttempt = Date.distantPast
+    private(set) var isSyncing = false
+    private var started = false
+
+    init(settings: Settings, role: Role) {
+        self.settings = settings
+        self.role = role
+        let lockURL = (try? lexomorphApplicationSupportDirectory())?
+            .appendingPathComponent("vocab-sync.lock", isDirectory: false)
+        self.engine = VocabularySyncEngine(settings: settings, tokenStore: KeychainVocabularySyncTokenStore(),
+                                           lockFileURL: lockURL)
+    }
+
+    var isSignedIn: Bool { engine.isSignedIn }
+
+    func start() {
+        guard !started else { return }
+        started = true
+        let pid = Int(ProcessInfo.processInfo.processIdentifier)
+        settings.vocabularyStore.onLocalChange = { [weak self] in
+            Task { @MainActor in self?.localChangeHappened() }
+        }
+        settings.onCustomStylesLocalChange = { [weak self] in
+            Task { @MainActor in self?.localChangeHappened() }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: VOCABULARY_CHANGED_NOTIFICATION, object: nil, queue: .main
+        ) { [weak self] notification in
+            let sender = notification.userInfo?["pid"] as? Int
+            let reason = notification.userInfo?["reason"] as? String
+            guard sender != pid, reason == "local" else { return }
+            MainActor.assumeIsolated { self?.scheduleDebouncedSync() }
+        }
+        guard role == .agent else { return }
+        periodicTimer = Timer.scheduledTimer(withTimeInterval: Self.periodicSeconds, repeats: true) { [weak self] _ in
+            Task { @MainActor in _ = await self?.sync(trigger: "periodic", manual: false) }
+        }
+        Task { _ = await sync(trigger: "launch", manual: false) }
+    }
+
+    /// Coalesced: an import upserts row by row, and each write calls back.
+    private func localChangeHappened() {
+        guard notifyTask == nil else { return }
+        notifyTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let self else { return }
+            self.notifyTask = nil
+            DistributedNotificationCenter.default().postNotificationName(
+                VOCABULARY_CHANGED_NOTIFICATION, object: nil,
+                userInfo: ["pid": Int(ProcessInfo.processInfo.processIdentifier), "reason": "local"],
+                deliverImmediately: true)
+            self.scheduleDebouncedSync()
+        }
+    }
+
+    /// Spec §4.2 trigger: 5 s after any local vocabulary change. Only the
+    /// agent pushes automatically; a Control Panel edit reaches the agent
+    /// through the distributed notification posted above.
+    private func scheduleDebouncedSync() {
+        guard role == .agent else { return }
+        debounceTask?.cancel()
+        debounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.debounceSeconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            _ = await self?.sync(trigger: "local change", manual: false)
+        }
+    }
+
+    /// One pass. Automatic triggers are skipped while signed out or inside
+    /// the backoff window after a transient failure; the manual button
+    /// always tries. Returns the failure, nil on success.
+    @discardableResult
+    func sync(trigger: String, manual: Bool) async -> VocabularySyncFailure? {
+        guard engine.isSignedIn else { return manual ? .notSignedIn : nil }
+        if !manual, Date() < nextAutomaticAttempt { return nil }
+        isSyncing = true
+        postStatusChanged()
+        defer {
+            isSyncing = false
+            postStatusChanged()
+        }
+        do {
+            let summary = try await engine.runPass()
+            consecutiveFailures = 0
+            nextAutomaticAttempt = .distantPast
+            if summary.applied > 0 {
+                DistributedNotificationCenter.default().postNotificationName(
+                    VOCABULARY_CHANGED_NOTIFICATION, object: nil,
+                    userInfo: ["pid": Int(ProcessInfo.processInfo.processIdentifier), "reason": "sync"],
+                    deliverImmediately: true)
+            }
+            log("vocabulary sync: \(trigger) pass ok")
+            return nil
+        } catch let failure as VocabularySyncFailure {
+            if failure.isTransient {
+                consecutiveFailures += 1
+                let delay = min(30 * pow(2, Double(consecutiveFailures - 1)), Self.maxBackoffSeconds)
+                nextAutomaticAttempt = Date().addingTimeInterval(delay)
+            }
+            return failure
+        } catch {
+            return .server
+        }
+    }
+
+    func signIn(email: String, password: String) async -> Result<Bool, VocabularySyncFailure> {
+        do {
+            let created = try await engine.signIn(email: email, password: password)
+            postStatusChanged()
+            consecutiveFailures = 0
+            nextAutomaticAttempt = .distantPast
+            _ = await sync(trigger: "sign-in", manual: true)
+            return .success(created)
+        } catch let failure as VocabularySyncFailure {
+            return .failure(failure)
+        } catch {
+            return .failure(.server)
+        }
+    }
+
+    func signOut() async {
+        await engine.signOut()
+        postStatusChanged()
+    }
+
+    private func postStatusChanged() {
+        DistributedNotificationCenter.default().postNotificationName(
+            VOCABULARY_SYNC_STATUS_NOTIFICATION, object: nil, userInfo: nil, deliverImmediately: true)
+    }
+}

@@ -10,8 +10,8 @@
 - [ ] Ran the pre-PR checks:
   ```bash
   ./scripts/check.sh
-  swift run -c debug --package-path swift Parakey --self-test all
-  ./scripts/build-app.sh ./dist/SuperDictate.app
+  swift run -c debug --package-path swift Lexomorph --self-test all
+  ./scripts/build-app.sh ./dist/Lexomorph.app
   ```
 - [ ] If this changes the release version, `swift/Info.plist` and `install.sh` match
 

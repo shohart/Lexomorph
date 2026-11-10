@@ -1,6 +1,6 @@
 // swift-tools-version: 6.0
 //
-// SuperDictate — a Swift push-to-talk dictation app
+// Lexomorph — a Swift push-to-talk dictation app
 // for macOS Apple Silicon. Native AppKit / AVFoundation, FluidAudio
 // driving Parakeet TDT v3 on the Apple Neural Engine. macOS 14
 // (Sonoma) minimum. The Hardened Runtime microphone entitlement
@@ -13,17 +13,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "Parakey",
+    name: "Lexomorph",
     platforms: [
         .macOS("14.0"),
     ],
     products: [
-        .executable(name: "Parakey", targets: ["Parakey"]),
+        .executable(name: "Lexomorph", targets: ["Lexomorph"]),
         // A SEPARATE executable, deliberately never a dependency of
-        // "Parakey" above -- see the SuperDictateLLMHost target's own
+        // "Lexomorph" above -- see the LexomorphLLMHost target's own
         // comment below for why (two independently vendored ggml copies
         // cannot share one linked binary).
-        .executable(name: "SuperDictateLLMHost", targets: ["SuperDictateLLMHost"]),
+        .executable(name: "LexomorphLLMHost", targets: ["LexomorphLLMHost"]),
     ],
     dependencies: [],
     targets: [
@@ -31,8 +31,8 @@ let package = Package(
         // whisper.cpp by scripts/vendor-silero-vad.sh) over a CPU-only ggml
         // v0.13.0 core (upstream/, scripts/vendor-ggml-core.sh). It only
         // finds pauses for long-dictation segmentation; speech recognition
-        // runs in the SuperDictateOnnxHost helper and the GPU belongs to
-        // SuperDictateLLMHost, so this target has no Vulkan and links no
+        // runs in the LexomorphOnnxHost helper and the GPU belongs to
+        // LexomorphLLMHost, so this target has no Vulkan and links no
         // MoltenVK. Non-x86 ggml-cpu arch variants are stripped at vendor
         // time. amx/ is compiled (ggml-cpu.cpp calls
         // ggml_backend_amx_buffer_type()/ggml_cpu_has_amx_int8()
@@ -89,7 +89,7 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "Parakey",
+            name: "Lexomorph",
             dependencies: ["silero_vad"],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
@@ -104,11 +104,11 @@ let package = Package(
             // path. Source PNGs live in swift/Resources/ at the repo
             // root, NOT in the SwiftPM target, so SwiftPM never sees them.
         ),
-        // SuperDictateLLMHost — a minimal, hand-authored OpenAI-compatible
+        // LexomorphLLMHost — a minimal, hand-authored OpenAI-compatible
         // chat-completions HTTP host built on a vendored llama.cpp
         // (scripts/vendor-llama-cpp.sh; see swift/Sources/llama_cpp_host/
         // upstream/PROVENANCE.md for the exact pin). Deliberately its OWN
-        // executableTarget/product, NEVER a dependency of "Parakey" above:
+        // executableTarget/product, NEVER a dependency of "Lexomorph" above:
         // this target vendors its own independent copy of ggml (a
         // different pin than silero_vad/upstream's own, separately
         // vendored ggml v0.13.0), and SwiftPM statically links a target's
@@ -117,14 +117,14 @@ let package = Package(
         // (ggml_init, the ggml_backend_reg singleton, etc.) in the same
         // linked binary is a guaranteed duplicate-symbol error. Instead,
         // this ships as its own separate binary in the .app
-        // (Contents/Helpers/SuperDictateLLMHost, see scripts/build-app.sh)
-        // that Parakey spawns as a subprocess and talks to over loopback
+        // (Contents/Helpers/LexomorphLLMHost, see scripts/build-app.sh)
+        // that Lexomorph spawns as a subprocess and talks to over loopback
         // HTTP (LLMHostProcess.swift) via the same OpenAI-compatible
         // client (OpenAICompatibleClient.swift) used for a user-supplied
         // custom baseURL -- the two ggml copies never share an address
         // space.
         .executableTarget(
-            name: "SuperDictateLLMHost",
+            name: "LexomorphLLMHost",
             path: "Sources/llama_cpp_host",
             // upstream/ggml-vulkan/vulkan-shaders/ holds loose
             // pre-compiled `.spv` binaries (not source), loaded at runtime

@@ -9,11 +9,11 @@
 #
 # Requires macOS (uses `say`/`afconvert` for corpus synthesis and
 # `/usr/bin/time -l` for peak RSS) and a packaged bundle carrying the
-# SuperDictateOnnxHost helper (dist/SuperDictate-test.app, then
-# dist/SuperDictate.app).
+# LexomorphOnnxHost helper (dist/Lexomorph-test.app, then
+# dist/Lexomorph.app).
 #
 # It drives the REAL, permanent `--benchmark-transcribe` diagnostic entry
-# point in swift/Sources/Parakey/main.swift, which itself calls the real
+# point in swift/Sources/Lexomorph/main.swift, which itself calls the real
 # production code (downloadOnnxModelIfNeeded, OnnxAsrEngine) — never a
 # mock backend.
 #
@@ -32,7 +32,7 @@
 #     removed (2026-10-17 comparison, spec §12); the app rejects them.
 #   - The model is downloaded on first use if it is missing.
 #
-# Safety: this script never touches /Applications/SuperDictate.app or its
+# Safety: this script never touches /Applications/Lexomorph.app or its
 # LaunchAgent. It only invokes a locally built binary with
 # --benchmark-transcribe, which (see main.swift) is checked and dispatched
 # BEFORE NSApplication is constructed, so it can never fall through to
@@ -43,7 +43,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BINARY=""
-CORPUS_DIR="${TMPDIR:-/tmp}/superdictate-benchmark-corpus"
+CORPUS_DIR="${TMPDIR:-/tmp}/lexomorph-benchmark-corpus"
 OUT_DIR="$ROOT_DIR/dist/benchmark-asr-$(date +%Y%m%d-%H%M%S)"
 REPEATS=3    # first call = "first inference (cold)"; remaining N-1 = warm pool
 DEVICES="cpu"
@@ -73,15 +73,15 @@ done
 [[ "$(uname -s)" == "Darwin" ]] || fail "macOS is required (uses 'say'/'afconvert')."
 
 if [[ -z "$BINARY" ]]; then
-    if [[ -x "$ROOT_DIR/dist/SuperDictate-test.app/Contents/MacOS/SuperDictate" ]]; then
-        BINARY="$ROOT_DIR/dist/SuperDictate-test.app/Contents/MacOS/SuperDictate"
-    elif [[ -x "$ROOT_DIR/dist/SuperDictate.app/Contents/MacOS/SuperDictate" ]]; then
-        BINARY="$ROOT_DIR/dist/SuperDictate.app/Contents/MacOS/SuperDictate"
+    if [[ -x "$ROOT_DIR/dist/Lexomorph-test.app/Contents/MacOS/Lexomorph" ]]; then
+        BINARY="$ROOT_DIR/dist/Lexomorph-test.app/Contents/MacOS/Lexomorph"
+    elif [[ -x "$ROOT_DIR/dist/Lexomorph.app/Contents/MacOS/Lexomorph" ]]; then
+        BINARY="$ROOT_DIR/dist/Lexomorph.app/Contents/MacOS/Lexomorph"
     else
-        log_msg "No --binary given and no dist/SuperDictate.app found; building release via swift build..."
+        log_msg "No --binary given and no dist/Lexomorph.app found; building release via swift build..."
         swift build -c release --package-path "$ROOT_DIR/swift"
         BIN_DIR="$(swift build -c release --package-path "$ROOT_DIR/swift" --show-bin-path)"
-        BINARY="$BIN_DIR/Parakey"
+        BINARY="$BIN_DIR/Lexomorph"
     fi
 fi
 [[ -x "$BINARY" ]] || fail "Binary not found or not executable: $BINARY"

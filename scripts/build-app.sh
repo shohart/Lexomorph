@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUTPUT_APP="${1:-$ROOT_DIR/dist/SuperDictate.app}"
+OUTPUT_APP="${1:-$ROOT_DIR/dist/Lexomorph.app}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
 say() {
@@ -42,26 +42,26 @@ command -v codesign >/dev/null 2>&1 || fail "codesign is missing. Run: xcode-sel
 say "Building the release app..."
 swift build -c release --package-path "$ROOT_DIR/swift"
 BIN_DIR="$(swift build -c release --package-path "$ROOT_DIR/swift" --show-bin-path)"
-BIN="$BIN_DIR/Parakey"
+BIN="$BIN_DIR/Lexomorph"
 [[ -x "$BIN" ]] || fail "The Swift build did not produce $BIN"
-# SuperDictateLLMHost (Ветка 1/2: local correction-model host) is a
+# LexomorphLLMHost (Ветка 1/2: local correction-model host) is a
 # SEPARATE product built by the same `swift build` invocation above -- see
 # its own comment in Package.swift for why it's never a dependency of
-# Parakey. Bundled into Contents/Helpers/ (not Contents/MacOS/, which is
+# Lexomorph. Bundled into Contents/Helpers/ (not Contents/MacOS/, which is
 # reserved for the app's own main executable that Launch Services/Dock
 # identify the app by) so LLMHostProcess.swift's
 # resolvedHelperBinaryURL() finds it at runtime.
-LLM_HOST_BIN="$BIN_DIR/SuperDictateLLMHost"
+LLM_HOST_BIN="$BIN_DIR/LexomorphLLMHost"
 
-STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/superdictate-build.XXXXXX")"
+STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lexomorph-build.XXXXXX")"
 trap 'rm -rf "$STAGE_DIR"' EXIT
-STAGE_APP="$STAGE_DIR/SuperDictate.app"
+STAGE_APP="$STAGE_DIR/Lexomorph.app"
 
 mkdir -p "$STAGE_APP/Contents/MacOS" "$STAGE_APP/Contents/Resources"
-cp "$BIN" "$STAGE_APP/Contents/MacOS/SuperDictate"
+cp "$BIN" "$STAGE_APP/Contents/MacOS/Lexomorph"
 if [[ -x "$LLM_HOST_BIN" ]]; then
     mkdir -p "$STAGE_APP/Contents/Helpers"
-    cp "$LLM_HOST_BIN" "$STAGE_APP/Contents/Helpers/SuperDictateLLMHost"
+    cp "$LLM_HOST_BIN" "$STAGE_APP/Contents/Helpers/LexomorphLLMHost"
 else
     echo "build-app.sh: WARNING: $LLM_HOST_BIN not found -- shipping without the local correction-model helper (text-correction mode will be unavailable in this build)" >&2
 fi
@@ -74,15 +74,15 @@ cp "$ROOT_DIR/swift/Info.plist" "$STAGE_APP/Contents/Info.plist"
 LLM_SHADER_SRC="$ROOT_DIR/swift/Sources/llama_cpp_host/upstream/ggml-vulkan/vulkan-shaders"
 [[ -f "$LLM_SHADER_SRC/matmul_f32_f32.spv" ]] || fail "No LLM Vulkan shader corpus in $LLM_SHADER_SRC"
 cp -R "$LLM_SHADER_SRC" "$STAGE_APP/Contents/Resources/llama-vulkan-shaders"
-cp "$ROOT_DIR/swift/Resources/parakey-menubar.png" "$STAGE_APP/Contents/Resources/"
-cp "$ROOT_DIR/swift/Resources/parakey-menubar@2x.png" "$STAGE_APP/Contents/Resources/"
-cp "$ROOT_DIR/icon/Parakey.icns" "$STAGE_APP/Contents/Resources/Parakey.icns"
+cp "$ROOT_DIR/swift/Resources/lexomorph-menubar.png" "$STAGE_APP/Contents/Resources/"
+cp "$ROOT_DIR/swift/Resources/lexomorph-menubar@2x.png" "$STAGE_APP/Contents/Resources/"
+cp "$ROOT_DIR/icon/Lexomorph.icns" "$STAGE_APP/Contents/Resources/Lexomorph.icns"
 # ONNX ASR backend, the only speech engine (docs/specs/cross-platform-onnx-asr-spec.md
-# §10): SuperDictateOnnxHost in Contents/Helpers/, ONNX Runtime in
+# §10): LexomorphOnnxHost in Contents/Helpers/, ONNX Runtime in
 # Contents/Frameworks/, catalog + feature graph + notices in
 # Contents/Resources/onnx-asr/. Signed together with the bundle below.
 "$ROOT_DIR/scripts/build-onnx-host.sh" "$STAGE_APP"
-chmod 755 "$STAGE_APP/Contents/MacOS/SuperDictate"
+chmod 755 "$STAGE_APP/Contents/MacOS/Lexomorph"
 
 SIGN_ARGS=(--force --deep --sign "$SIGN_IDENTITY" --options runtime
            --entitlements "$ROOT_DIR/entitlements.plist")

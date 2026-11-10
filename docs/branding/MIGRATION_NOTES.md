@@ -1,88 +1,83 @@
-# Lexomorph: заметки о миграции (что намеренно осталось под старым именем)
+# Lexomorph 0.10: переименование идентификаторов macOS и миграция
 
-Lexomorph это новое название SuperDictate Next. Меняется только то, что видит пользователь: название, тексты, иконки,
-документация. Всё, от чего зависят установленные копии, обновления, подпись и данные, остаётся прежним. Здесь список
-того, что осталось, и причины. Данные пользователя не переносятся и не конвертируются: миграция данных не требуется.
+Решение владельца (отменяет прежнее «идентификаторы не менять»): имя SuperDictate / Parakey заменено везде в macOS-части,
+включая идентификаторы. Версия 0.10.0. Этот документ описывает, что переименовано, как данные переезжают и как откатиться.
 
-Статус: документ описывает намерения и состояние на момент ветки `feat/lexomorph-rebrand`. Что именно сделано в
-macOS-коде и в Windows-коде другими потоками, документ не утверждает; проверяйте по истории ветки. Версия
-приложения этой веткой не меняется (последний релиз 0.9.7), релиза с новым именем пока нет.
+## 1. Что переименовано
 
-## 1. Что осталось `SuperDictate` и почему
+| Было | Стало |
+|---|---|
+| `/Applications/SuperDictate.app`, исполняемый файл `SuperDictate` | `/Applications/Lexomorph.app`, `Lexomorph` |
+| bundle id и домен UserDefaults `com.local.superdictate` | `com.local.lexomorph` |
+| LaunchAgent `com.local.superdictate.agent` | `com.local.lexomorph.agent` (`~/Library/LaunchAgents/com.local.lexomorph.agent.plist`) |
+| `~/Library/Application Support/SuperDictate` | `~/Library/Application Support/Lexomorph` |
+| `~/Library/Logs/SuperDictate*` | `~/Library/Logs/Lexomorph-*` |
+| Keychain `com.local.superdictate.vocab-sync` | `com.local.lexomorph.vocab-sync` |
+| UTI `com.local.superdictate.corrections`, расширение `.superdictate-corrections` | `com.local.lexomorph.corrections`, `.lexomorph-corrections` (старые файлы продолжают импортироваться: объявлен импортируемый тип) |
+| Хелперы `SuperDictateLLMHost`, `SuperDictateOnnxHost` | `LexomorphLLMHost`, `LexomorphOnnxHost` |
+| SwiftPM-таргет и каталог `Parakey` | `Lexomorph` (`swift/Sources/Lexomorph`) |
+| Иконка `icon/Parakey.icns`, `parakey-menubar*.png` | `icon/Lexomorph.icns`, `lexomorph-menubar*.png` |
+| Релизный ассет `SuperDictate.zip` с `SuperDictate.app` | `Lexomorph.zip` с `Lexomorph.app` |
+| Переменные окружения `SUPERDICTATE_*` (macOS-скрипты, Swift) | `LEXOMORPH_*` |
 
-Классы по `REBRAND_AUDIT.md`: C совместимость, B внутренний идентификатор, H история и кредиты.
+Намеренно не менялись (инфраструктура владельца или общий код с Windows): репозиторий `shohart/SuperDictate-Next` и все
+ссылки на него, домен синхронизации `superdictate.bykovlegal.ru`, каталог `server/`, весь `windows/`, имя CMake-таргета
+`SuperDictateOnnxHost` в `native/asr-runtime` (в бандл он кладётся под именем `LexomorphOnnxHost`), имена C++-файлов
+`superdictate_*` в `swift/Sources/{llama_cpp_host,silero_vad}`, бренд-кредиты Parakey (Richard Courtman) и shlgd, история
+(CHANGELOG, спецификации, планы), токены upstream-кэска Homebrew.
 
-| Что | Значение | Класс | Почему не меняется |
-|---|---|---|---|
-| Бандл macOS | `/Applications/SuperDictate.app`, исполняемый файл `Contents/MacOS/SuperDictate` | C | Зафиксирован `AGENTS.md`. Самообновление и установщик ищут именно это имя. |
-| Bundle ID | `com.local.superdictate` | C | Смена сбрасывает разрешения macOS (микрофон, Accessibility, Input Monitoring), ключи UserDefaults и Keychain. Запрещено `AGENTS.md`. |
-| Подпись | существующий сертификат (локально Apple Development, релизы «PolterType Dev») | C | Смена меняет designated requirement и сбрасывает разрешения у всех. Запрещено `AGENTS.md`. |
-| LaunchAgent | `com.local.superdictate.agent`, `~/Library/LaunchAgents/com.local.superdictate.agent.plist` | C | `AGENTS.md`; `install-local.sh` перезапускает только эту метку. |
-| Данные macOS | `~/Library/Application Support/SuperDictate` (включая `Models`, `onnx`, `corrections.sqlite`), `~/Library/Logs/SuperDictate*`, домен UserDefaults = bundle ID | C | Любое изменение пути требует обратимой миграции данных пользователя. |
-| Keychain | сервис `com.local.superdictate.vocab-sync` | C | Токен синхронизации уже лежит под этим именем. |
-| Тип файла корректировок | расширение `.superdictate-corrections`, UTI `com.local.superdictate.corrections`, MIME `application/vnd.superdictate.corrections+json` | C | У пользователей есть сохранённые файлы и ассоциации. Меняется только видимое описание типа. |
-| Релизные файлы | `SuperDictate.zip` (внутри `SuperDictate.app`), `SuperDictate-X.Y.Z-setup.exe`, теги `mac-vX.Y.Z` и `win-vX.Y.Z` | C | Клиенты 0.9.7 ждут именно такой ассет и такую структуру (см. раздел 2). |
-| `update.json` | `{version, sha256}` на ветке `main` | C | Клиенты 0.9.7 сверяют с ним контрольную сумму. |
-| Репозиторий | `shohart/SuperDictate-Next`, ссылки в клиентах, `install.sh`, `uninstall.sh`, CI, `.github/ISSUE_TEMPLATE/config.yml` | C | См. раздел 3. `scripts/check.sh` требует точную строку `raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh` в обоих README. |
-| Домен синхронизации | `superdictate.bykovlegal.ru` | C | Зашит по умолчанию во всех клиентах, на нём аккаунты. Новый домен возможен только с оставленным старым как алиасом. |
-| Процессы и хелперы | `SuperDictateOnnxHost`, `SuperDictateLLMHost`, `SuperDictateOvHost`, `pkill -x SuperDictate` | B/C | Установщик, CI и проверки релиза ищут по именам. |
-| Переменные окружения | `SUPERDICTATE_*` | C | Скрипты пользователей и CI. |
-| Windows | `SuperDictate.exe`, каталог установки, `AppId`, AppUserModelID, mutex, значение автозапуска, `%LOCALAPPDATA%\SuperDictate`, лог `SuperDictate.log` | C | Смена оставила бы второй автозапуск и вторую копию. Допустимо менять только отображаемые имена (заголовок, трей, ярлыки, имя в «Приложения и возможности»), и только вместе с разделением отображаемого имени и каталога в установщике. |
-| Код | таргет и каталог SwiftPM `Parakey`, `swift run ... Parakey`, Swift-типы `SuperDictate*`, Python-пакет `superdictate`, нативный API `sd_asr_*` | B | Внутреннее; не переименовывать ради эстетики. |
-| Иконка-файл | `icon/Parakey.icns` (до решения потока macOS) | B | Имя файла иконки не входит в designated requirement; решение принимает поток macOS. |
-| Кредиты и история | Parakey (Richard Courtman), SuperDictate (shlgd), `NOTICE.md`, `LICENSE`, старые записи CHANGELOG, спецификации | H | Юридически обязательно или исторически. |
+## 2. Миграция при первом запуске
 
-Что видит пользователь и что не изменить совсем: Finder, Activity Monitor и списки «Конфиденциальность» в macOS берут
-имя из файла бандла, поэтому там по-прежнему «SuperDictate». Документация об этом предупреждает.
+Код: `swift/Sources/Lexomorph/Migration.swift`. Запускается и в агенте, и в Панели (`main.swift`) до создания делегата
+(и значит до `Settings.shared`), под файловым локом `~/Library/Application Support/.lexomorph-migration.lock`
+(ожидание до 20 с; не дождались: запуск идёт без миграции, повторится в следующий раз, маркера нет).
+Запускается только в production-бандле `com.local.lexomorph` (тестовые бандлы и `swift build` без бандла не мигрируют).
 
-## 2. Как обновляются клиенты 0.9.7
+1. UserDefaults: все ключи домена `com.local.superdictate` копируются в `com.local.lexomorph`, если такого ключа в новом
+   домене ещё нет (существующие не перезаписываются). Не копируется `active_run_marker` (состояние старого процесса).
+   Абсолютные пути внутри старой папки данных переписываются на новую. Сохранённый язык интерфейса переносится.
+2. Папка данных: каждый элемент `Application Support/SuperDictate` клонируется в `Application Support/Lexomorph`
+   системным `clonefile(2)` (APFS: модели на гигабайты не занимают место второй раз), во временное имя
+   `.migrating-*` и затем атомарным переименованием; без APFS-клона используется обычное копирование. Уже существующие
+   в новой папке элементы не затираются (sqlite-файлы `-wal/-shm/-journal` не присоединяются к чужой базе).
+   Не переносятся `AgentStatus*.json`, `*.pid`, `*.lock` (состояние процессов).
+3. Keychain: только в агенте, в фоновом потоке, после шага 1. Читается токен по старому service и e-mail из
+   перенесённых настроек и записывается под новый service; если новый уже есть, он не трогается. Попытка делается
+   ровно один раз: сбой или отказ в диалоге доступа считается окончательным (повторов и диалога на каждый запуск нет),
+   пользователю достаточно войти в синхронизацию снова. Диалог Keychain не блокирует старт (главный поток его не ждёт).
+4. Маркер `Application Support/Lexomorph/.migrated-from-superdictate.json`: версия приложения, дата, что скопировано и
+   пропущено, итог Keychain, флаг показанного уведомления. Есть маркер: ничего не делается.
+5. Одноразовое окно при первом запуске после миграции (только если старые данные были найдены): почему название и пакет
+   изменились, что разрешения macOS нужно выдать заново, что данные перенесены, что старые данные остались нетронутыми.
+   Окно не открывает ни одной панели «Конфиденциальность».
 
-macOS (код `UpdateCheck.swift`):
+Разрешения macOS (микрофон, универсальный доступ, мониторинг ввода) переехать не могут: новый bundle id для системы новое
+приложение. Это принято владельцем. `tccutil reset` не вызывается нигде.
 
-1. Клиент запрашивает список релизов GitHub API репозитория `shohart/SuperDictate-Next` и берёт самый новый
-   опубликованный `mac-v*` (или старый `v*`), пропуская Windows-теги, черновики и пре-релизы.
-2. Скачивает `.../releases/download/<тег>/SuperDictate.zip`, сверяет SHA-256 с `update.json` на `main`
-   (по старому пути репозитория), проверяет bundle ID, версию, подпись и то, что внутри лежат `SuperDictate.app` и
-   исполняемый файл `SuperDictate`; затем заменяет бандл и перезапускает.
-3. Установленные копии 0.9.7 без кнопки `Update` и новые пользователи обновляются повторным запуском
-   `install.sh` (он заменяет только `/Applications/SuperDictate.app`).
-4. Автопроверка по умолчанию выключена; проверка при открытии панели есть всегда.
+## 3. Установка и старая установка
 
-Поэтому первый релиз с именем Lexomorph обязан выйти с тем же именем ассета (`SuperDictate.zip`), тем же бандлом, тем
-же bundle ID и той же подписью, с новой версией, новой суммой в `install.sh` и `update.json` и обязательным прогоном
-`scripts/verify-release.sh` (порядок в `docs/RELEASING.md`).
+- `scripts/install-local.sh`, `install.sh`: ставят `/Applications/Lexomorph.app` атомарно, пишут/используют агент
+  `com.local.lexomorph.agent`. Найдя `/Applications/SuperDictate.app` или агент `com.local.superdictate.agent`, выгружают
+  старый агент, завершают его процесс и удаляют старый бандл и старый plist ТОЛЬКО после успешной установки нового и до
+  запуска нового агента (чтобы два агента не боролись за горячую клавишу). Данные, Defaults и Keychain старого не трогаются.
+- Подпись: идентичность не меняется и новые сертификаты не создаются. `install-local.sh` сравнивает подписанта и команду
+  (Authority/TeamIdentifier) со старой установкой, а не designated requirement (он содержит bundle id и меняется).
+- `uninstall.sh` удаляет Lexomorph; с флагом `--legacy` ещё и прежнюю установку SuperDictate (данные остаются).
 
-Windows (код `windows/superdictate/updater.py`): клиент читает тот же список релизов, берёт самый новый `win-v*`,
-ищет ассет по шаблону `.exe`, `.msi` или `.zip`, **ничего не скачивает и не запускает** и открывает страницу релиза.
-Пользователь запускает новый `setup.exe` сам. Имя `.exe` технически можно менять, но в первом релизе его
-оставляют, чтобы не ломать `docs/RELEASING.md` и привычные ссылки.
+## 4. Откат
 
-Данные пользователя при любом обновлении остаются на месте, потому что пути и идентификаторы не меняются.
+Старые данные не изменяются и не удаляются: `~/Library/Application Support/SuperDictate`, домен `com.local.superdictate`,
+Keychain `com.local.superdictate.vocab-sync`. Для отката: `uninstall.sh`, установить прежний релиз (0.9.x, он снова
+использует свои данные). Правки, сделанные в Lexomorph после миграции, в старые данные не возвращаются. Чтобы повторить
+миграцию с нуля: удалить `~/Library/Application Support/Lexomorph` (или только маркер) и домен `com.local.lexomorph`
+вручную (это явное действие пользователя; код его не выполняет).
 
-## 3. Переименование репозитория
+## 5. Риски и ограничения
 
-Репозиторий сейчас называется `shohart/SuperDictate-Next`; локальный `origin` разработчика ещё указывает на старое имя
-`SuperDictate-Intel` (работает через редирект GitHub). Переименование откладывается:
-
-- GitHub перенаправляет web, API и raw со старого имени, но редирект исчезает, если старое имя займёт другой
-  репозиторий.
-- Клиент 0.9.7 принимает ссылку на заметки релиза только с путём `/shohart/SuperDictate-Next/releases/tag/<тег>`.
-  После переименования API вернёт новый путь, и ссылка тихо подменится страницей `releases/latest`. Сама проверка
-  обновления продолжит работать, но деградирует. Нужен клиент, который принимает оба префикса, выпущенный до
-  переименования.
-- Адаптер LoRA качается с ветки `feat/llm-postproc-gec` этого репозитория; ветку нельзя удалять, пока живы клиенты
-  с этой ссылкой.
-
-Порядок действий см. `MANUAL_OWNER_ACTIONS.md`.
-
-## 4. Что менялось в документах
-
-README, README.ru, PRIVACY, CONTRIBUTING, шаблоны `.github/` (только текст, без путей и ссылок на репозиторий),
-CHANGELOG (раздел `Unreleased`), ассеты и документы бренда в `docs/assets/branding` и `docs/branding`. В README
-сохранены строки установки и удаления с адресом `shohart/SuperDictate-Next`, команда `swift run ... Parakey`,
-все пути и метки.
-
-## 5. Фраза «formerly SuperDictate Next»
-
-Использовать в README, описаниях релизов и окне «О программе» один-два релиза или пока не опубликованы заметки о
-миграции. История SuperDictate Next сохранена: старые записи CHANGELOG не переписываются.
+- Клиенты 0.9.x не обновятся «изнутри» до Lexomorph: они проверяют bundle id, имя `SuperDictate.app` и ассет
+  `SuperDictate.zip`. Переход делается установщиком (`install.sh`). Это нужно учесть при выпуске.
+- `install.sh` и `update.json` содержат заглушки (SHA-256 из нулей, версия 0.10.0): `docs/RELEASING.md` заменяет их
+  реальными значениями при выпуске; до этого установщик закрыт по контрольной сумме. Не вливать в `main` до релиза.
+- Первый запуск Lexomorph при ещё работающем старом агенте: данные копируются «на лету» (если установка шла
+  не через скрипты). Скрипты выгружают старый агент заранее.
+- Диалог Keychain при чтении старого токена возможен (ACL привязан к подписи старого пакета).
