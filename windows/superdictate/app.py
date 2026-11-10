@@ -32,6 +32,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from . import (asr, audio, dictation_trace, edit_watch, focus_target, i18n, incremental, inject, system,
+               recording_flow,
                textproc, transcription, vocabulary_hygiene)
 from .history import History, HistoryEntry, UsageStats
 from .hotkeys import STYLE_ACTION_PREFIX, Action, HotkeyListener
@@ -234,6 +235,8 @@ class DictationController(QObject):
         )
         self.recorder.silence_stop_enabled = self.settings.stop_on_silence
         self.recorder.silence_stop_seconds = self.settings.silence_stop_seconds
+        self.recorder.open_ms_ema = self.settings.mic_open_ms_ema
+        self.recorder.on_open_measured = self._save_open_time
         self.listener = HotkeyListener(self._on_hotkey_actions)
         self._apply_hotkey_settings()
         self.listener.is_recording_active = lambda: self.state is AppState.RECORDING
@@ -280,6 +283,7 @@ class DictationController(QObject):
         # this app than a stuck Shift.
         self.output_mute.recover()
 
+        self._apply_instant_start()
         self.listener.start()
         if not self.listener.installed:
             log.error("Keyboard hook could not be installed")
@@ -333,6 +337,7 @@ class DictationController(QObject):
                 self.recorder.discard()
         finally:
             self._restore_playback()
+        self.recorder.shutdown()
         self.listener.stop()
         self._jobs.put(None)
         if self._worker is not None:
@@ -399,6 +404,7 @@ class DictationController(QObject):
         self._apply_hotkey_settings()
         self.recorder.silence_stop_enabled = self.settings.stop_on_silence
         self.recorder.silence_stop_seconds = self.settings.silence_stop_seconds
+        self._apply_instant_start()
         self.sounds.enabled = self.settings.play_feedback_sounds
         i18n.set_language(self.settings.interface_language)
         system.set_autostart(self.settings.start_at_login)
@@ -418,6 +424,22 @@ class DictationController(QObject):
         self._warm_up_correction()
         self._warm_up_punctuation()
         self.settings_applied.emit()
+
+    def _apply_instant_start(self) -> None:
+        self.recorder.configure_warm(self.settings.instant_start_mode,
+                                     self.settings.input_device)
+
+    def _save_open_time(self, ema: float) -> None:
+        """Remember how slow the microphone is to open (see cue_before_open).
+
+        Called on the recording path, so the file write is left to a thread,
+        and skipped while the figure has hardly moved.
+        """
+        if abs(ema - self.settings.mic_open_ms_ema) < 5.0:
+            return
+        threading.Thread(
+            target=lambda: self.settings.update_runtime({"mic_open_ms_ema": round(ema, 1)}),
+            name="save-open-time", daemon=True).start()
 
     def _apply_hotkey_settings(self) -> None:
         self.listener.hotkey = self.settings.hotkey
@@ -631,7 +653,17 @@ class DictationController(QObject):
         self._insertion_target = self.focus.capture()
         # A new dictation ends the watch on the previous one.
         self.edit_watch.stop()
-        if not self.recorder.start(self.settings.input_device):
+        # The start cue goes out before the microphone is opened, so the
+        # (slow) stream open does not delay it. With the output mute on, the
+        # mute waits for the cue to finish (see _mute_after_cue).
+        then = None
+        if self.settings.mute_while_recording:
+            with self._playback_lock:
+                self._recording_session += 1
+                session = self._recording_session
+            then = lambda: self._mute_after_cue(session)
+        if not recording_flow.begin(self.recorder, self.sounds,
+                                    self.settings.input_device, then=then):
             self._drop_insertion_target()
             self._restore_playback()
             message = self._microphone_error_message(self.recorder.last_error or "")
@@ -644,23 +676,6 @@ class DictationController(QObject):
         # Before the recording-time windows start, so they and the final
         # pass decode with the same list.
         self._refresh_hotwords()
-        # The mute waits for the start cue to finish. Muting first silenced
-        # the cue along with everything else, so the one sound that says
-        # "it is listening now" was the one nobody could hear.
-        #
-        # The recorder is already running by then, so the cue itself lands
-        # in the first fraction of a second of the clip. That is the right
-        # way round: a beep at the front of a recording costs nothing, and
-        # holding the microphone shut until the cue ends would clip the
-        # first word of anybody who starts talking straight away.
-        if self.settings.mute_while_recording:
-            with self._playback_lock:
-                self._recording_session += 1
-                session = self._recording_session
-            self.sounds.play("start",
-                             then=lambda: self._mute_after_cue(session))
-        else:
-            self.sounds.play("start")
         self._start_preview()
         self._start_speculative()
 
@@ -679,10 +694,9 @@ class DictationController(QObject):
             return
         self._stop_preview(clear=False)
         speculative, self._speculative = self._speculative, None
-        samples = self.recorder.stop()
-        self._restore_playback()
+        samples = recording_flow.end(self.recorder, self.sounds,
+                                     restore=self._restore_playback)
         audio.clear_pending_dictation()
-        self.sounds.play("stop")
 
         duration = len(samples) / audio.SAMPLE_RATE
         if duration < audio.MIN_CLIP_SECONDS:

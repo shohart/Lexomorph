@@ -12,6 +12,7 @@ recording is discarded as an accidental tap.
 
 from __future__ import annotations
 
+import collections
 import struct
 import threading
 import time
@@ -29,6 +30,13 @@ SAMPLE_RATE = 16_000
 MAX_RECORDING_SECONDS = 20 * 60
 MIN_CLIP_SECONDS = 0.25
 BLOCK_FRAMES = 512  # 32 ms, smooth enough for the waveform, cheap enough to log
+PREROLL_SECONDS = 0.4  # what a warm stream remembers from before the key press
+PREROLL_BLOCKS = max(1, round(PREROLL_SECONDS * SAMPLE_RATE / BLOCK_FRAMES))
+# A real stream open faster than this lets the start cue play before the
+# stream is open; slower and the cue waits until capture is running.
+STOP_CUE_GUARD_SECONDS = 0.5  # pre-roll ignores the previous clip's tail and stop cue
+OPEN_FAST_MS = 60.0
+OPEN_EMA_ALPHA = 0.3
 
 PENDING_MAGIC = b"SDPD"
 PENDING_VERSION = 1
@@ -173,10 +181,34 @@ class Recorder:
         self._lock = threading.Lock()
         self._started_at = 0.0
         self._recording = False
+        # False from halt() on: the clip ends there, whatever the stream
+        # still delivers while it is being closed (the stop cue, say).
+        self._accepting = False
         self._pending_handle = None
+        # Rate that opened last time, per device name: skips the 16 kHz
+        # attempt that WASAPI shared mode rejects for most endpoints.
+        self._rate_cache: dict[str, int] = {}
+        # Seconds a warm stream may idle before it is released, per mode.
+        # ``always`` never is. Public so tests can shorten it.
+        self.warm_idle_seconds: dict[str, Optional[float]] = {"1min": 60.0, "always": None}
+        self._halted_at = 0.0
+        self._warm_mode = "off"
+        self._warm_device = ""
+        self._stream_device = ""
+        self._stream_lock = threading.RLock()
+        self._idle_timer: Optional[threading.Timer] = None
+        # Ring of the most recent blocks while no clip is being recorded.
+        self._preroll: collections.deque = collections.deque(
+            maxlen=PREROLL_BLOCKS)
+        # EMA of how long a real stream open took (ms); 0 = never measured.
+        self.open_ms_ema = 0.0
+        self.on_open_measured: Optional[Callable[[float], None]] = None
         self._auto_stop_fired = False
         self._capture_rate = SAMPLE_RATE
         self.last_error: Optional[str] = None
+        # perf_counter_ns marks of the last start()/stop(), for the
+        # --bench-record-latency diagnostic. Four dict writes: free.
+        self.trace: dict[str, int] = {}
 
         # Stop-on-silence. Counting only starts once the speaker has
         # actually said something, so a pause before the first word never
@@ -198,23 +230,48 @@ class Recorder:
     def elapsed(self) -> float:
         return time.monotonic() - self._started_at if self._recording else 0.0
 
-    def start(self, device_name: str = "") -> bool:
+    # -- opening -----------------------------------------------------
+
+    def cue_before_open(self, device_name: str = "") -> bool:
+        """May the start cue play before the microphone is open?
+
+        Only when the capture will start about as fast as the cue: the
+        stream is already open, or the last real open was quick. A device
+        that takes a few hundred milliseconds (Bluetooth, USB) would
+        otherwise let the cue sound while nothing is listening yet, and
+        the first words would be lost. An install that has never opened a
+        stream has no measurement and takes the careful order.
+        """
+        if self._warm_ready(device_name):
+            return True
+        return 0.0 < self.open_ms_ema < OPEN_FAST_MS
+
+    def _note_open_time(self, milliseconds: float) -> None:
+        previous = self.open_ms_ema
+        self.open_ms_ema = (milliseconds if previous <= 0.0
+                            else previous + OPEN_EMA_ALPHA * (milliseconds - previous))
+        if self.on_open_measured is not None:
+            try:
+                self.on_open_measured(self.open_ms_ema)
+            except Exception:
+                pass
+
+    def _open_stream(self, device_name: str) -> bool:
+        """Open and start the input stream. Caller holds ``_stream_lock``."""
         import sounddevice as sd
 
-        if self._recording:
-            return True
-        self.last_error = None
-        with self._lock:
-            self._chunks = []
-        self._auto_stop_fired = False
-        self._heard_speech = False
-        self._silence_started_at = 0.0
         device_index = resolve_device(device_name)
 
         # 16 kHz first (no resampling to pay for), then the device's own
         # rate, which is the only one WASAPI shared mode will grant.
+        self.trace["device_resolved"] = time.perf_counter_ns()
         native_rate = device_sample_rate(device_index)
+        self.trace["rate_known"] = time.perf_counter_ns()
         candidates = [SAMPLE_RATE] if native_rate == SAMPLE_RATE else [SAMPLE_RATE, native_rate]
+        cached = self._rate_cache.get(device_name)
+        if cached in candidates:
+            candidates.remove(cached)
+            candidates.insert(0, cached)
 
         last_error: Optional[Exception] = None
         for rate in candidates:
@@ -227,40 +284,109 @@ class Recorder:
                     device=device_index,
                     callback=self._callback,
                 )
+                self.trace["stream_created"] = time.perf_counter_ns()
                 stream.start()
+                self.trace["stream_started"] = time.perf_counter_ns()
             except Exception as exc:
                 last_error = exc
                 log.debug("Device rejected %d Hz: %s", rate, exc)
                 continue
             self._stream = stream
+            self._stream_device = device_name
             self._capture_rate = rate
-            break
-        else:
-            self.last_error = str(last_error)
-            log.error("Could not open input stream: %s", last_error)
-            self._stream = None
-            return False
+            self._rate_cache[device_name] = rate
+            self._note_open_time(
+                (self.trace["stream_started"] - self.trace["rate_known"]) / 1e6)
+            return True
 
-        self._open_pending_file()
-        self._started_at = time.monotonic()
-        self._recording = True
-        log.info("Recording started (device=%s, %d Hz%s)",
+        self.last_error = str(last_error)
+        log.error("Could not open input stream: %s", last_error)
+        self._stream = None
+        return False
+
+    def _close_stream(self) -> None:
+        """Caller holds ``_stream_lock``."""
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception as exc:
+                log.warning("Error closing input stream: %s", exc)
+        with self._lock:  # after the last callback has run
+            self._preroll.clear()
+
+    def start(self, device_name: str = "") -> bool:
+        if self._recording:
+            return True
+        self.trace = {"start_call": time.perf_counter_ns()}
+        self.last_error = None
+        self._auto_stop_fired = False
+        self._heard_speech = False
+        self._silence_started_at = 0.0
+
+        with self._stream_lock:
+            self._cancel_idle_timer()
+            if self._warm_ready(device_name):
+                # The stream is already running: take what it heard in the
+                # last fraction of a second too, so a word begun just
+                # before the key went down is not clipped.
+                with self._lock:
+                    # Not the tail of the last clip or its stop cue.
+                    cutoff = self._halted_at + STOP_CUE_GUARD_SECONDS
+                    self._chunks = [block for heard, block in self._preroll
+                                    if heard >= cutoff]
+                    self._preroll.clear()
+                    self._open_pending_file()
+                    for chunk in self._chunks:
+                        self._append_pending(chunk)
+                    self._accepting = True
+                if self._chunks:
+                    self.trace["first_block"] = time.perf_counter_ns()
+                self.trace["warm"] = 1
+            else:
+                self._close_stream()  # a dead or other-device stream
+                with self._lock:
+                    self._chunks = []
+                # Before the stream exists, so not one block of it can be dropped.
+                self._accepting = True
+                if not self._open_stream(device_name):
+                    self._accepting = False
+                    return False
+                self._open_pending_file()
+            self._started_at = time.monotonic()
+            self._recording = True
+        self.trace["start_return"] = time.perf_counter_ns()
+        log.info("Recording started (device=%s, %d Hz%s%s)",
                  device_name or "system default", self._capture_rate,
-                 "" if self._capture_rate == SAMPLE_RATE else ", resampling to 16 kHz")
+                 "" if self._capture_rate == SAMPLE_RATE else ", resampling to 16 kHz",
+                 ", warm stream" if self.trace.get("warm") else "")
         return True
+
+    def halt(self) -> None:
+        """End the clip *now*, without waiting for the stream to close.
+
+        Closing a WASAPI stream and resampling a long clip take tens to
+        hundreds of milliseconds; the stop cue must not wait for them, and
+        must not end up in the clip either. Call stop() afterwards to
+        collect the audio.
+        """
+        self._halted_at = time.monotonic()
+        self._accepting = False
 
     def stop(self) -> np.ndarray:
         if not self._recording:
             return np.zeros(0, dtype=np.float32)
         self._recording = False
-        try:
-            if self._stream is not None:
-                self._stream.stop()
-                self._stream.close()
-        except Exception as exc:
-            log.warning("Error closing input stream: %s", exc)
-        finally:
-            self._stream = None
+        if self._accepting:
+            self.halt()
+        self.trace["stop_call"] = time.perf_counter_ns()
+        with self._stream_lock:
+            if self._warm_mode != "off":
+                self._schedule_idle_close()  # stays open for the next press
+            else:
+                self._close_stream()
+        self.trace["stream_closed"] = time.perf_counter_ns()
 
         self._close_pending_file()
         with self._lock:
@@ -269,7 +395,83 @@ class Recorder:
         if not chunks:
             return np.zeros(0, dtype=np.float32)
         captured = np.concatenate(chunks).astype(np.float32, copy=False)
-        return resample_to_16k(captured, self._capture_rate)
+        out = resample_to_16k(captured, self._capture_rate)
+        self.trace["stop_return"] = time.perf_counter_ns()
+        return out
+
+    # -- instant start (opt-in warm stream) -------------------------------
+    #
+    # With the setting on, the input stream is kept open between
+    # dictations. While no recording runs, the callback keeps only the last
+    # PREROLL_SECONDS in a ring buffer in memory: nothing is written to
+    # disk, nothing is sent anywhere, and the oldest block is overwritten
+    # as the newest arrives. A key press then just starts keeping blocks
+    # (the ring first) instead of opening a device.
+
+    def _warm_ready(self, device_name: str) -> bool:
+        stream = self._stream
+        return (stream is not None and self._stream_device == device_name
+                and bool(getattr(stream, "active", True)))
+
+    def configure_warm(self, mode: str, device_name: str = "") -> None:
+        """Apply the instant-start setting: ``off`` | ``1min`` | ``always``."""
+        if mode not in ("off", "1min", "always"):
+            mode = "off"
+        self._warm_mode = mode
+        self._warm_device = device_name
+        if self._recording:
+            return  # applied when the clip ends
+        if mode == "always":
+            threading.Thread(target=self._warm_up, name="mic-warm-up",
+                             daemon=True).start()
+        else:
+            with self._stream_lock:
+                self._cancel_idle_timer()
+                if mode == "off" or self._stream_device != device_name:
+                    self._close_stream()
+                else:
+                    self._schedule_idle_close()
+
+    def _warm_up(self) -> None:
+        with self._stream_lock:
+            if self._recording or self._warm_mode != "always":
+                return
+            if self._warm_ready(self._warm_device):
+                return
+            self._close_stream()
+            self._accepting = False
+            self.trace = {"start_call": time.perf_counter_ns()}
+            self._open_stream(self._warm_device)
+
+    def _schedule_idle_close(self) -> None:
+        """Caller holds ``_stream_lock``."""
+        self._cancel_idle_timer()
+        seconds = self.warm_idle_seconds.get(self._warm_mode)
+        if seconds is None or self._stream is None:
+            return
+        timer = threading.Timer(seconds, self._idle_close)
+        timer.daemon = True
+        self._idle_timer = timer
+        timer.start()
+
+    def _cancel_idle_timer(self) -> None:
+        timer, self._idle_timer = self._idle_timer, None
+        if timer is not None:
+            timer.cancel()
+
+    def _idle_close(self) -> None:
+        with self._stream_lock:
+            if self._recording:
+                return
+            log.info("Microphone released after being idle")
+            self._close_stream()
+
+    def shutdown(self) -> None:
+        self._warm_mode = "off"
+        with self._stream_lock:
+            self._cancel_idle_timer()
+            if not self._recording:
+                self._close_stream()
 
     def snapshot(self, max_seconds: float = 0.0) -> np.ndarray:
         """Everything captured so far, leaving the recording running.
@@ -301,6 +503,12 @@ class Recorder:
             log.debug("Input stream status: %s", status)
         samples = indata[:, 0].copy()
         with self._lock:
+            if not self._accepting:
+                # Not recording: only the short ring buffer is kept.
+                self._preroll.append((time.monotonic(), samples))
+                return
+            if "first_block" not in self.trace:
+                self.trace["first_block"] = time.perf_counter_ns()
             self._chunks.append(samples)
         self._append_pending(samples)
 

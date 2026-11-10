@@ -11,8 +11,10 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
+from . import audio
 from .hotkeys import (
     MOD_ALT,
     MOD_CTRL,
@@ -2564,6 +2566,310 @@ def test_sync_token_survives_the_rename() -> None:
            b"com.local.superdictate.vocab-sync")
 
 
+# -- recording latency ------------------------------------------------------
+
+
+def test_record_cues_do_not_wait_for_the_microphone() -> None:
+    """The start cue is issued before the (slow) stream open, the stop cue
+    before the (slow) stream close; neither waits for them."""
+    from . import recording_flow
+
+    t0 = time.perf_counter()
+    log: list[tuple[str, float]] = []
+
+    class SlowRecorder:
+        last_error = None
+
+        def cue_before_open(self, device):
+            return True
+
+        def start(self, device):
+            time.sleep(0.15)
+            log.append(("start_done", time.perf_counter() - t0))
+            return True
+
+        def halt(self):
+            log.append(("halt", time.perf_counter() - t0))
+
+        def stop(self):
+            time.sleep(0.15)
+            log.append(("stop_done", time.perf_counter() - t0))
+            return "audio"
+
+    class Sounds:
+        def play(self, event, then=None):
+            log.append((event, time.perf_counter() - t0))
+
+    recorder, sounds = SlowRecorder(), Sounds()
+    _check("flow: begin reports success", recording_flow.begin(recorder, sounds, ""), True)
+    order = [name for name, _ in log]
+    _check("flow: start cue precedes the stream open", order, ["start", "start_done"])
+    _check("flow: start cue is immediate", log[0][1] < 0.05, True)
+
+    log.clear()
+    t0 = time.perf_counter()
+    restored: list[str] = []
+    out = recording_flow.end(recorder, sounds, restore=lambda: restored.append("r"))
+    order = [name for name, _ in log]
+    _check("flow: clip frozen, then cue, then close", order, ["halt", "stop", "stop_done"])
+    _check("flow: stop cue is immediate", log[1][1] < 0.05, True)
+    _check("flow: stop returns the audio", out, "audio")
+    _check("flow: output restored before the stop cue", restored, ["r"])
+
+
+def test_sound_cue_does_not_block_the_caller() -> None:
+    import winsound
+
+    from . import system
+
+    real = winsound.PlaySound
+    winsound.PlaySound = lambda sound, flags: time.sleep(0.3)
+    try:
+        sounds = system.Sounds(True)
+        for event in ("start", "stop", "error"):
+            began = time.perf_counter()
+            sounds.play(event)
+            _check(f"cue {event}: play() returns at once",
+                   time.perf_counter() - began < 0.05, True)
+        _check("cue files are preloaded as bytes",
+               all(isinstance(system._cue_file(e), bytes) and system._cue_file(e)
+                   for e in ("start", "stop")), True)
+    finally:
+        winsound.PlaySound = real
+
+
+def _fake_input_stream(opened: list[int], reject: tuple[int, ...] = (),
+                       burst: int = 0, open_s: float = 0.0):
+    import numpy as np
+
+    class FakeStream:
+        def __init__(self, samplerate, callback, **_kw):
+            opened.append(samplerate)
+            if samplerate in reject:
+                raise RuntimeError("Invalid sample rate")
+            time.sleep(open_s)
+            self._cb, self._rate = callback, samplerate
+            self.closed = False
+            FakeStream.last = self
+            FakeStream.instances.append(self)
+
+        @property
+        def active(self):
+            return not self.closed
+
+        def feed(self, value):
+            block = np.full((512, 1), value, dtype="float32")
+            self._cb(block, 512, None, None)
+
+        def start(self):
+            # Audio the driver delivers while start() is still returning.
+            for i in range(burst):
+                self.feed(float(i + 1))
+
+        def stop(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    FakeStream.instances = []
+    return FakeStream
+
+
+def test_recorder_keeps_the_start_and_ends_at_halt() -> None:
+    import numpy as np
+    import sounddevice as sd
+
+    saved = (sd.InputStream, audio.resolve_device, audio.device_sample_rate,
+             audio.Recorder._open_pending_file)
+    opened: list[int] = []
+    sd.InputStream = _fake_input_stream(opened, burst=2)
+    audio.resolve_device = lambda name: None
+    audio.device_sample_rate = lambda index: audio.SAMPLE_RATE
+    audio.Recorder._open_pending_file = lambda self: None
+    try:
+        recorder = audio.Recorder()
+        _check("recorder: starts", recorder.start(""), True)
+        stream = sd.InputStream.last
+        stream.feed(3.0)
+        recorder.halt()
+        stream.feed(99.0)  # the stop cue, say: must not reach the clip
+        clip = recorder.stop()
+        _check("recorder: blocks delivered during start() are kept, halt() ends the clip",
+               [float(v) for v in clip[::512]], [1.0, 2.0, 3.0])
+        _check("recorder: first block is traced", "first_block" in recorder.trace, True)
+        _check("recorder: restart works", recorder.start(""), True)
+        sd.InputStream.last.feed(7.0)
+        clip = recorder.stop()
+        _check("recorder: a new clip starts clean",
+               [float(v) for v in clip[::512]], [1.0, 2.0, 7.0])
+    finally:
+        (sd.InputStream, audio.resolve_device, audio.device_sample_rate,
+         audio.Recorder._open_pending_file) = saved
+
+
+class _FakeAudio:
+    """Patches sounddevice and the device lookups for a Recorder test."""
+
+    def __init__(self, **stream_kw):
+        self.opened: list[int] = []
+        self.kw = stream_kw
+
+    def __enter__(self):
+        import sounddevice as sd
+
+        self._saved = (sd.InputStream, audio.resolve_device, audio.device_sample_rate,
+                       audio.Recorder._open_pending_file)
+        self.stream = sd.InputStream = _fake_input_stream(self.opened, **self.kw)
+        audio.resolve_device = lambda name: None
+        audio.device_sample_rate = lambda index: audio.SAMPLE_RATE
+        audio.Recorder._open_pending_file = lambda self: None
+        return self
+
+    def __exit__(self, *exc):
+        import sounddevice as sd
+
+        (sd.InputStream, audio.resolve_device, audio.device_sample_rate,
+         audio.Recorder._open_pending_file) = self._saved
+
+
+def _values(clip):
+    return [float(v) for v in clip[::512]]
+
+
+def _wait(predicate, seconds=2.0) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_instant_start_preroll_keeps_the_first_words() -> None:
+    with _FakeAudio() as fake:
+        recorder = audio.Recorder()
+        recorder.configure_warm("always", "")
+        _check("warm: stream opens in the background",
+               _wait(lambda: len(fake.stream.instances) == 1), True)
+        stream = fake.stream.instances[0]
+        for value in (1.0, 2.0):  # spoken before the key went down
+            stream.feed(value)
+        began = time.perf_counter()
+        _check("warm: start succeeds", recorder.start(""), True)
+        _check("warm: start does not open a device",
+               (len(fake.opened), time.perf_counter() - began < 0.05), (1, True))
+        _check("warm: cue may play before the open", recorder.cue_before_open(""), True)
+        stream.feed(3.0)
+        recorder.halt()
+        stream.feed(9.0)  # the stop cue: neither in the clip ...
+        clip = recorder.stop()
+        _check("warm: clip = pre-roll + live blocks", _values(clip), [1.0, 2.0, 3.0])
+        _check("warm: stream stays open after the clip", stream.closed, False)
+        # ... nor in the next clip's pre-roll.
+        recorder.start("")
+        stream.feed(4.0)
+        _check("warm: previous tail is not replayed", _values(recorder.stop()), [4.0])
+        recorder.configure_warm("off", "")
+        _check("warm: switching off releases the microphone", stream.closed, True)
+        recorder.shutdown()
+
+
+def test_instant_start_ring_is_short() -> None:
+    with _FakeAudio() as fake:
+        recorder = audio.Recorder()
+        recorder.configure_warm("always", "")
+        _wait(lambda: len(fake.stream.instances) == 1)
+        stream = fake.stream.instances[0]
+        for value in range(1, 41):
+            stream.feed(float(value))
+        recorder.start("")
+        clip = _values(recorder.stop())
+        _check("warm: only the last ~0.4 s is remembered",
+               (len(clip), clip[-1]), (audio.PREROLL_BLOCKS, 40.0))
+        recorder.shutdown()
+
+
+def test_instant_start_idle_timeout_releases_the_microphone() -> None:
+    with _FakeAudio() as fake:
+        recorder = audio.Recorder()
+        recorder.warm_idle_seconds["1min"] = 0.15
+        recorder.configure_warm("1min", "")
+        recorder.start("")
+        stream = fake.stream.instances[0]
+        time.sleep(0.3)
+        _check("idle: never released during a recording", stream.closed, False)
+        recorder.stop()
+        _check("idle: open right after the dictation", stream.closed, False)
+        _check("idle: released after the timeout", _wait(lambda: stream.closed), True)
+        _check("idle: next press opens a fresh stream",
+               (recorder.start(""), len(fake.opened)), (True, 2))
+        recorder.stop()
+        recorder.shutdown()
+
+        off = audio.Recorder()  # mode off: closed the moment the clip ends
+        off.start("")
+        first = fake.stream.instances[-1]
+        off.stop()
+        _check("off: closed at once", first.closed, True)
+
+
+def test_start_cue_order_adapts_to_the_measured_open_time() -> None:
+    from . import recording_flow
+
+    for open_s, expect_before in ((0.0, True), (0.12, False)):
+        with _FakeAudio(open_s=open_s) as fake:
+            log: list[str] = []
+
+            class Sounds:
+                def play(self, event, then=None):
+                    log.append("cue")
+
+            recorder = audio.Recorder()
+            _check("adapt: never measured -> careful order",
+                   recorder.cue_before_open(""), False)
+            recording_flow.begin(recorder, Sounds(), "")
+            _check(f"adapt({open_s}): first run is cue-after-open", log, ["cue"])
+            _check(f"adapt({open_s}): open time recorded",
+                   recorder.open_ms_ema >= open_s * 1000 * 0.9, True)
+            recorder.stop()
+            _check(f"adapt({open_s}): next run cue-before-open == {expect_before}",
+                   recorder.cue_before_open(""), expect_before)
+
+            seen: list[str] = []
+            real_play = Sounds.play
+            Sounds.play = lambda self, event, then=None: seen.append(
+                "cue@opened=%d" % len(fake.opened))
+            recording_flow.begin(recorder, Sounds(), "")
+            Sounds.play = real_play
+            _check(f"adapt({open_s}): cue order",
+                   seen, ["cue@opened=%d" % (1 if expect_before else 2)])
+            recorder.stop()
+
+
+def test_recorder_remembers_the_rate_that_opened() -> None:
+    import sounddevice as sd
+
+    saved = (sd.InputStream, audio.resolve_device, audio.device_sample_rate,
+             audio.Recorder._open_pending_file)
+    opened: list[int] = []
+    sd.InputStream = _fake_input_stream(opened, reject=(16000,))
+    audio.resolve_device = lambda name: None
+    audio.device_sample_rate = lambda index: 48000
+    audio.Recorder._open_pending_file = lambda self: None
+    try:
+        recorder = audio.Recorder()
+        recorder.start("mic")
+        recorder.stop()
+        recorder.start("mic")
+        recorder.stop()
+        _check("recorder: the rejected 16 kHz attempt is made only once",
+               opened, [16000, 48000, 48000])
+    finally:
+        (sd.InputStream, audio.resolve_device, audio.device_sample_rate,
+         audio.Recorder._open_pending_file) = saved
+
+
 _TESTS = [
     test_toggle_starts_and_stops,
     test_toggle_does_not_flip_when_busy,
@@ -2639,6 +2945,14 @@ _TESTS = [
     test_lexomorph_environment_names,
     test_interface_language_default,
     test_sync_token_survives_the_rename,
+    test_record_cues_do_not_wait_for_the_microphone,
+    test_sound_cue_does_not_block_the_caller,
+    test_recorder_keeps_the_start_and_ends_at_halt,
+    test_recorder_remembers_the_rate_that_opened,
+    test_instant_start_preroll_keeps_the_first_words,
+    test_instant_start_ring_is_short,
+    test_instant_start_idle_timeout_releases_the_microphone,
+    test_start_cue_order_adapts_to_the_measured_open_time,
 ]
 
 

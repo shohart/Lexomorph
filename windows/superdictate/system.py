@@ -301,6 +301,16 @@ def _cue(segments: tuple[tuple[int, int], ...], volume: float = 0.22) -> bytes:
     return buffer.getvalue()
 
 
+@lru_cache(maxsize=4)
+def _cue_file(event: str) -> bytes:
+    """The bundled WAV for ``event``, read once; empty if it is missing."""
+    path = paths.resource_path("assets", Sounds._FILES[event])
+    try:
+        return path.read_bytes()
+    except OSError:
+        return b""
+
+
 class Sounds:
     """Short non-blocking cues for start / stop / error.
 
@@ -326,6 +336,17 @@ class Sounds:
 
     def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled
+        # Read the bundled cues now, not at the first hotkey press.
+        threading.Thread(target=self._preload, name="sound-preload",
+                         daemon=True).start()
+
+    @classmethod
+    def _preload(cls) -> None:
+        for event in cls._FILES:
+            try:
+                _cue_file(event)
+            except Exception as exc:
+                log.debug("Could not preload the %s cue: %s", event, exc)
 
     def play(self, event: str, then: Optional[Callable[[], None]] = None) -> None:
         """Play a cue, and run ``then`` once it has finished sounding.
@@ -355,14 +376,15 @@ class Sounds:
                 # PlaySound returns when the sound is over, which is what
                 # a follow-up action has to wait for.
                 mode = 0 if blocking else winsound.SND_ASYNC
-                name = self._FILES.get(event)
-                if name is not None:
-                    path = paths.resource_path("assets", name)
-                    if path.exists():
-                        winsound.PlaySound(str(path),
-                                           winsound.SND_FILENAME | mode)
+                if event in self._FILES:
+                    data = _cue_file(event)
+                    if data:
+                        # From memory: no disk read between the key press
+                        # and the sound. The lru_cache keeps the buffer
+                        # alive for SND_ASYNC.
+                        winsound.PlaySound(data, winsound.SND_MEMORY | mode)
                         return
-                    log.warning("Cue %s is missing from the build", name)
+                    log.warning("Cue %s is missing from the build", event)
                 segments = self._TONES.get(event)
                 if segments is None:
                     return

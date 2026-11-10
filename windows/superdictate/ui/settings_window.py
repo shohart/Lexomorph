@@ -482,6 +482,12 @@ class SettingsWindow(QDialog):
             capture, "settings_pause_media", "pause_media_while_recording",
             hint=i18n.tr("settings_pause_media_hint"))
         self._sounds = self._checkbox(capture, "settings_sounds", "play_feedback_sounds")
+        self._instant_start = self._combo(
+            capture, "settings_instant_start", "instant_start_mode",
+            [("off", i18n.tr("settings_instant_start_off")),
+             ("1min", i18n.tr("settings_instant_start_1min")),
+             ("always", i18n.tr("settings_instant_start_always"))],
+            hint=i18n.tr("settings_instant_start_hint"))
 
         history = Section(i18n.tr("settings_tab_dictation"))
         limits = [("off", i18n.tr("settings_history_off"))]
