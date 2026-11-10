@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="t d">
+  <title id="t">Personal Vocabulary</title>
+  <desc id="d">Your terms, names and replacements, applied on every dictation.</desc>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5EE7D8"/><stop offset="0.5" stop-color="#5DA9FF"/><stop offset="1" stop-color="#8C7CFF"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5EE7D8"/><stop offset="0.5" stop-color="#5DA9FF"/><stop offset="1" stop-color="#8C7CFF"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="1" r="1">
+      <stop offset="0" stop-color="#5EE7D8" stop-opacity="0.22"/><stop offset="1" stop-color="#5EE7D8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="1" cy="0" r="1">
+      <stop offset="0" stop-color="#8C7CFF" stop-opacity="0.26"/><stop offset="1" stop-color="#8C7CFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="675" fill="#0B1020"/>
+  <rect width="1200" height="675" fill="url(#glowA)"/>
+  <rect width="1200" height="675" fill="url(#glowB)"/>
+  <rect x="22" y="22" width="1156" height="631" rx="40" fill="none" stroke="#5DA9FF" stroke-opacity="0.10" stroke-width="12"/>
+  <rect x="24" y="24" width="1152" height="627" rx="38" fill="#11182B" stroke="url(#g)" stroke-opacity="0.75" stroke-width="2.5"/>
+  <g transform="translate(96 64) scale(1.55)">
+  <g stroke="url(#g)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M60 36C46 24 26 22 8 28v66c18-6 38-4 52 8 14-12 34-14 52-8V28c-18-6-38-4-52 8z"/>
+    <path d="M60 36v66"/>
+  </g>
+  <path d="M82 20h20v34l-10-8-10 8z" fill="#8C7CFF"/>
+  </g>
+  <text x="96" y="356" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="72" font-weight="700" fill="#F3F6FC">Personal Vocabulary</text>
+  <rect x="96" y="382" width="120" height="5" rx="2.5" fill="url(#bar)"/>
+  <text font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="38" fill="#AAB6D3">
+    <tspan x="96" y="464">Your terms, names and replacements,</tspan>
+    <tspan x="96" y="520">applied on every dictation.</tspan>
+  </text>
+  <text x="1104" y="612" text-anchor="end" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="26" font-weight="600" fill="#AAB6D3" fill-opacity="0.7">Lexomorph</text>
+</svg>
