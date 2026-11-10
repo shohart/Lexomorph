@@ -1309,6 +1309,37 @@ final class Settings: @unchecked Sendable {
         }
     }
 
+    /// Saves the user's edits made against `baseline` (the list the editor
+    /// was opened with) into the CURRENT store: only styles the user added,
+    /// changed field by field, or explicitly removed are touched, so a
+    /// stale editor never overwrites or deletes what a sync applied meanwhile.
+    func mergeCustomRewriteStyles(draft: [CustomRewriteStyle], baseline: [CustomRewriteStyle]) {
+        let base = Dictionary(baseline.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let draftIDs = Set(draft.map(\.id))
+        var current = storedCustomRewriteStyles()
+        for edited in draft {
+            guard let original = base[edited.id] else {
+                if let index = current.firstIndex(where: { $0.id == edited.id }) { current[index] = edited } else { current.append(edited) }
+                continue
+            }
+            if edited == original { continue }
+            guard let index = current.firstIndex(where: { $0.id == edited.id }) else {
+                current.append(edited)
+                continue
+            }
+            if edited.name != original.name { current[index].name = edited.name }
+            if edited.colorHex != original.colorHex { current[index].colorHex = edited.colorHex }
+            if edited.instruction != original.instruction { current[index].instruction = edited.instruction }
+            if edited.hotkeyKeycode != original.hotkeyKeycode || edited.hotkeyModifiers != original.hotkeyModifiers {
+                current[index].hotkeyKeycode = edited.hotkeyKeycode
+                current[index].hotkeyModifiers = edited.hotkeyModifiers
+            }
+        }
+        let removed = Set(baseline.map(\.id)).subtracting(draftIDs)
+        current.removeAll { removed.contains($0.id) }
+        customRewriteStyles = current
+    }
+
     /// Styles and tombstones edited at or after `stamp` (empty = all); styles
     /// that predate sync carry the epoch stamp, so they go out on a full push.
     func customStyleSyncChanges(since stamp: String) -> (styles: [CustomRewriteStyle], tombstones: [CustomRewriteStyleTombstone]) {

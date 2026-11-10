@@ -4577,6 +4577,32 @@ enum ParakeySelfTest {
             try expect(notified.value, equals: 0, "no remote application started a sync")
         }
 
+        // A stale Control Panel draft must not overwrite or delete what a sync applied meanwhile.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            settings.customRewriteStyles = [style("c-keep", "Свой"), style("c-gone", "Удаляемый"), style("c-edit", "Правка")]
+            let baseline = settings.customRewriteStyles
+            var draft = baseline
+            draft.removeAll { $0.id == "c-gone" }
+            draft[draft.firstIndex { $0.id == "c-edit" }!].hotkeyKeycode = 33
+            // Meanwhile the agent applies remote changes.
+            settings.applyRemoteCustomStyles([
+                CustomStyleRemoteEntry(id: "c-new", name: "С другого ПК", color: "#00AAFF", instruction: "r",
+                                       deleted: false, updatedAt: "2099-01-01T00:00:00Z"),
+                CustomStyleRemoteEntry(id: "c-edit", name: "Правка удалённо", color: "#00AAFF", instruction: "r2",
+                                       deleted: false, updatedAt: "2099-01-01T00:00:01Z"),
+            ])
+            settings.mergeCustomRewriteStyles(draft: draft, baseline: baseline)
+            let merged = Dictionary(uniqueKeysWithValues: settings.customRewriteStyles.map { ($0.id, $0) })
+            try expect(merged["c-new"]?.name, equals: "С другого ПК", "a style applied by sync survives a stale save")
+            try expect(merged["c-gone"] == nil, equals: true, "an explicit user deletion is applied")
+            try expect(settings.customRewriteStyleTombstones.map(\.id), equals: ["c-gone"], "only the explicit deletion is tombstoned")
+            try expect(merged["c-edit"]?.name, equals: "Правка удалённо", "the remote content edit is not reverted")
+            try expect(merged["c-edit"]?.hotkeyKeycode, equals: 33, "the user's hotkey edit is kept")
+            try expect(merged["c-keep"]?.name, equals: "Свой", "untouched styles stay")
+        }
+
         // Usage: absolute rows of this device, others kept apart, summed without double counting.
         do {
             let (settings, cleanUp) = makeSettings()

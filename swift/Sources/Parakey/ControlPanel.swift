@@ -102,6 +102,10 @@ struct ControlPanelSettingsDraft: Equatable {
     var punctuationModel: PunctuationModel
     var rewriteStyleID: String
     var customRewriteStyles: [CustomRewriteStyle]
+    /// The styles as they were when this draft was taken: the save merges
+    /// only the user's edits relative to it, so styles an account sync
+    /// applied meanwhile are not overwritten or deleted.
+    var customRewriteStylesBaseline: [CustomRewriteStyle]
     var rewriteBundledModel: BundledLLMModel
     /// Per-style rewrite system prompts AS SHOWN IN THE EDITOR — one
     /// independent editable prompt per rewrite mode (built-ins by raw
@@ -162,6 +166,7 @@ struct ControlPanelSettingsDraft: Equatable {
         punctuationModel = settings.punctuationModel
         rewriteStyleID = settings.rewriteStyleID
         customRewriteStyles = settings.customRewriteStyles
+        customRewriteStylesBaseline = customRewriteStyles
         rewriteBundledModel = settings.rewriteBundledModel
         rewriteSystemPrompts = {
             var map: [String: String] = [:]
@@ -4899,7 +4904,8 @@ header.addArrangedSubview(panelLabel(
         settings.punctuationRestorationEnabled = draft.punctuationRestorationEnabled
         settings.punctuationModel = draft.punctuationModel
         settings.rewriteStyleID = draft.rewriteStyleID
-        settings.customRewriteStyles = draft.customRewriteStyles
+        settings.mergeCustomRewriteStyles(draft: draft.customRewriteStyles,
+                                          baseline: draft.customRewriteStylesBaseline)
         settings.rewriteBundledModel = draft.rewriteBundledModel
         settings.rewriteEngineBackend = draft.rewriteEngineBackend
         settings.rewriteCustomBaseURL = draft.rewriteCustomBaseURL
