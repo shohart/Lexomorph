@@ -2,10 +2,9 @@
 
 Kept free of Qt so ``--bench-record-latency`` measures exactly this code.
 
-Both cues are issued *before* the slow part of their step. Opening a
-WASAPI input stream and closing it again (plus resampling a long clip)
-cost tens to hundreds of milliseconds, and the user hears the cue as "it
-registered my key"; it must not wait for them.
+The stop cue is issued *before* the slow part of its step: closing a
+WASAPI stream and resampling a long clip cost tens to hundreds of
+milliseconds. The start cue is adaptive, see :func:`begin`.
 """
 
 from __future__ import annotations
@@ -15,14 +14,22 @@ from typing import Callable, Optional
 
 def begin(recorder, sounds, device: str,
           then: Optional[Callable[[], None]] = None) -> bool:
-    """Start the start cue, then open the microphone.
+    """Start the microphone and the start cue, in the safe order.
 
-    The cue plays on its own thread, so both proceed in parallel. ``then``
-    runs after the cue (the output mute). If the microphone cannot be
-    opened the caller reports the error as usual.
+    When capture will start about as fast as the cue (stream already
+    open, or the last real open was quick) the cue goes out first and the
+    two overlap. When opening is slow, or has never been measured, the cue
+    waits until the stream is running, so hearing it guarantees that
+    speaking is safe. ``then`` runs after the cue (the output mute). If the
+    microphone cannot be opened the caller reports the error as usual.
     """
+    if recorder.cue_before_open(device):
+        sounds.play("start", then=then)
+        return recorder.start(device)
+    if not recorder.start(device):
+        return False
     sounds.play("start", then=then)
-    return recorder.start(device)
+    return True
 
 
 def end(recorder, sounds, restore: Optional[Callable[[], None]] = None):

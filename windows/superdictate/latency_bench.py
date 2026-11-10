@@ -124,7 +124,8 @@ def run(argv: list[str]) -> int:
             i = argv.index(flag)
             _FAKE[key] = float(argv[i + 1])
             del argv[i:i + 2]
-    argv = [a for a in argv if a not in ("--fake-mic", "--legacy-order")]
+    warm = "--warm" in argv
+    argv = [a for a in argv if a not in ("--fake-mic", "--legacy-order", "--warm")]
     runs = int(argv[0]) if argv and argv[0].isdigit() else 20
     device = argv[1] if len(argv) > 1 and not argv[1].isdigit() else ""
     hold = 1.0
@@ -135,6 +136,10 @@ def run(argv: list[str]) -> int:
     sounds = system.Sounds(True)
     marks: dict[str, list[int]] = {}
     _install_playsound_probe(marks)
+    if warm:  # the "Instant start: always" setting
+        recorder.configure_warm("always", device)
+        time.sleep(0.5 + _FAKE["open_ms"] / 1000)
+    cue_first = 0
 
     cols: dict[str, list[float]] = {k: [] for k in (
         "start: handler -> start cue handed to Windows",
@@ -151,6 +156,7 @@ def run(argv: list[str]) -> int:
     failures = 0
     for i in range(runs):
         marks.clear()
+        cue_first += recorder.cue_before_open(device)
         t0 = time.perf_counter_ns()
         ok = (_legacy_begin if legacy else recording_flow.begin)(recorder, sounds, device)
         t_ret = time.perf_counter_ns()
@@ -170,10 +176,12 @@ def run(argv: list[str]) -> int:
         if "first_block" in tr:
             cols["start: handler -> first audio block"].append((tr["first_block"] - t0) / NS)
         cols["start: Qt-thread time spent in handler"].append((t_ret - t0) / NS)
-        cols["start: resolve+rate query"].append((tr["rate_known"] - tr["start_call"]) / NS)
-        cols["start: InputStream() construct"].append(
-            (tr["stream_created"] - tr["rate_known"]) / NS)
-        cols["start: stream.start()"].append((tr["stream_started"] - tr["stream_created"]) / NS)
+        if "stream_started" in tr:  # absent when the warm stream was reused
+            cols["start: resolve+rate query"].append((tr["rate_known"] - tr["start_call"]) / NS)
+            cols["start: InputStream() construct"].append(
+                (tr["stream_created"] - tr["rate_known"]) / NS)
+            cols["start: stream.start()"].append(
+                (tr["stream_started"] - tr["stream_created"]) / NS)
 
         time.sleep(hold)
         marks.clear()
@@ -186,15 +194,19 @@ def run(argv: list[str]) -> int:
             ((stop_play or s0) - s0) / NS)
         cols["stop:  Qt-thread time spent in handler"].append((s_ret - s0) / NS)
         tr = recorder.trace
-        if "stream_closed" in tr:
+        if "stream_closed" in tr and not warm:
             cols["stop:  stream stop+close"].append(
                 (tr["stream_closed"] - tr["stop_call"]) / NS)
         time.sleep(0.4)  # let the cue finish before the next round
 
     print(f"record-latency bench, {runs} runs, device={device or 'system default'}, "
-          f"{('FAKE MIC open=%gms close=%gms' % (_FAKE['open_ms'], _FAKE['close_ms'])) if fake else 'real mic'}, {'legacy order' if legacy else 'current order'}, {failures} failed")
+          f"{('FAKE MIC open=%gms close=%gms' % (_FAKE['open_ms'], _FAKE['close_ms'])) if fake else 'real mic'}, {'legacy order' if legacy else 'current order'}{', INSTANT START (warm stream)' if warm else ''}, {failures} failed")
     for name, values in cols.items():
         print(_row(name, values))
+    if not legacy:
+        print(f"start cue played before the stream was open in {cue_first}/{runs} runs "
+              f"(open time EMA {recorder.open_ms_ema:.0f} ms, threshold {audio.OPEN_FAST_MS:.0f} ms)")
+    recorder.shutdown()
     print("Not covered: hotkey hook -> Qt thread hop, audible output device latency.")
     return 1 if failures == runs else 0
 

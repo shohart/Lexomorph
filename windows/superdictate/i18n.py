@@ -390,6 +390,23 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "Отсчёт начинается только после первых произнесённых слов.",
         "The countdown only starts once you have actually said something.",
     ),
+    "settings_instant_start": ("Мгновенный старт — держать микрофон наготове",
+                               "Instant start — keep microphone ready"),
+    "settings_instant_start_off": ("Выкл", "Off"),
+    "settings_instant_start_1min": ("1 минута после диктовки", "1 minute after a dictation"),
+    "settings_instant_start_always": ("Всегда", "Always"),
+    "settings_instant_start_hint": (
+        "Запись начинается мгновенно и не теряет первых слов, но пока включено, "
+        "Windows показывает индикатор использования микрофона. Звук никуда не "
+        "отправляется: в памяти хранится только последние ~0,4 с, на диск "
+        "ничего не пишется. «1 минута» закрывает микрофон через минуту без "
+        "диктовок; «Выкл» открывает его только на время записи.",
+        "Recording starts instantly and never clips the first words, but "
+        "while it is on Windows shows the microphone-in-use indicator. Nothing "
+        "is sent anywhere: only the last ~0.4 s is held in memory and nothing "
+        "is written to disk. \"1 minute\" releases the microphone after a "
+        "minute without dictating; \"Off\" opens it only while recording.",
+    ),
     "settings_sounds": ("Звуковые сигналы", "Feedback sounds"),
     "settings_autostart": ("Запускать при входе в Windows", "Start at Windows login"),
     "settings_check_updates": ("Проверять обновления", "Check for updates"),

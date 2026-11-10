@@ -235,6 +235,8 @@ class DictationController(QObject):
         )
         self.recorder.silence_stop_enabled = self.settings.stop_on_silence
         self.recorder.silence_stop_seconds = self.settings.silence_stop_seconds
+        self.recorder.open_ms_ema = self.settings.mic_open_ms_ema
+        self.recorder.on_open_measured = self._save_open_time
         self.listener = HotkeyListener(self._on_hotkey_actions)
         self._apply_hotkey_settings()
         self.listener.is_recording_active = lambda: self.state is AppState.RECORDING
@@ -281,6 +283,7 @@ class DictationController(QObject):
         # this app than a stuck Shift.
         self.output_mute.recover()
 
+        self._apply_instant_start()
         self.listener.start()
         if not self.listener.installed:
             log.error("Keyboard hook could not be installed")
@@ -334,6 +337,7 @@ class DictationController(QObject):
                 self.recorder.discard()
         finally:
             self._restore_playback()
+        self.recorder.shutdown()
         self.listener.stop()
         self._jobs.put(None)
         if self._worker is not None:
@@ -400,6 +404,7 @@ class DictationController(QObject):
         self._apply_hotkey_settings()
         self.recorder.silence_stop_enabled = self.settings.stop_on_silence
         self.recorder.silence_stop_seconds = self.settings.silence_stop_seconds
+        self._apply_instant_start()
         self.sounds.enabled = self.settings.play_feedback_sounds
         i18n.set_language(self.settings.interface_language)
         system.set_autostart(self.settings.start_at_login)
@@ -419,6 +424,22 @@ class DictationController(QObject):
         self._warm_up_correction()
         self._warm_up_punctuation()
         self.settings_applied.emit()
+
+    def _apply_instant_start(self) -> None:
+        self.recorder.configure_warm(self.settings.instant_start_mode,
+                                     self.settings.input_device)
+
+    def _save_open_time(self, ema: float) -> None:
+        """Remember how slow the microphone is to open (see cue_before_open).
+
+        Called on the recording path, so the file write is left to a thread,
+        and skipped while the figure has hardly moved.
+        """
+        if abs(ema - self.settings.mic_open_ms_ema) < 5.0:
+            return
+        threading.Thread(
+            target=lambda: self.settings.update_runtime({"mic_open_ms_ema": round(ema, 1)}),
+            name="save-open-time", daemon=True).start()
 
     def _apply_hotkey_settings(self) -> None:
         self.listener.hotkey = self.settings.hotkey

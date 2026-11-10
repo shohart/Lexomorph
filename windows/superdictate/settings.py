@@ -292,6 +292,12 @@ _DEFAULTS: dict[str, Any] = {
     "pause_media_while_recording": False,
     "play_feedback_sounds": True,
     "input_device": "",  # empty = system default
+    # Keep the input stream open between dictations: off | 1min | always.
+    # Off by default, it makes Windows show the microphone-in-use indicator.
+    "instant_start_mode": "off",
+    # EMA of how long opening the stream took, ms (0 = never measured).
+    # Written by the recorder, see _RUNTIME_KEYS.
+    "mic_open_ms_ema": 0.0,
     "check_for_updates": True,
     "dictation_language": "auto",
     "remove_filler_words": False,
@@ -373,6 +379,7 @@ _DEFAULTS: dict[str, Any] = {
 #: draft is a snapshot taken when it opened, and saving that would roll
 #: back a sign-in or the sync cursors that happened meanwhile.
 _RUNTIME_KEYS = frozenset({
+    "mic_open_ms_ema",
     "vocabulary_sync_enabled",
     "vocabulary_sync_email",
     "vocabulary_sync_last_server_revision",
@@ -583,6 +590,18 @@ class Settings:
     @property
     def input_device(self) -> str:
         return str(self._get("input_device") or "")
+
+    @property
+    def instant_start_mode(self) -> str:
+        value = str(self._get("instant_start_mode"))
+        return value if value in ("off", "1min", "always") else "off"
+
+    @property
+    def mic_open_ms_ema(self) -> float:
+        try:
+            return max(0.0, float(self._get("mic_open_ms_ema")))
+        except (TypeError, ValueError):
+            return 0.0
 
     @property
     def check_for_updates(self) -> bool:
