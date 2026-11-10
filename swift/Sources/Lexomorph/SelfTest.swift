@@ -4656,6 +4656,163 @@ enum LexomorphSelfTest {
             try expect(settings.remoteDailyUsage.isEmpty, equals: true, "sign-out forgets other devices' rows")
         }
 
+
+        // Built-in style prompt overrides: stamps, tombstones, LWW, no loop.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            let notified = LockedCounter()
+            settings.onCustomStylesLocalChange = { notified.increment() }
+            settings.setRewriteSystemPromptOverride("", for: .polish)
+            try expect(notified.value, equals: 0, "writing an empty override over an empty one is not a change")
+            settings.setRewriteSystemPromptOverride("Мой промпт", for: .polish)
+            try expect(notified.value, equals: 1, "editing a built-in prompt starts a sync")
+            settings.setRewriteSystemPromptOverride("Мой промпт", for: .polish)
+            try expect(notified.value, equals: 1, "saving the same prompt again is not a change")
+            settings.setRewriteSystemPromptOverride("Кастомный", forStyleID: "c-xyz")
+            try expect(notified.value, equals: 1, "a custom style's prompt is not synced here")
+            var changes = settings.rewritePromptSyncChanges(since: "")
+            try expect(changes.map(\.style), equals: ["polish"], "only the edited built-in is in the push set")
+            try expect(changes.first?.deleted, equals: false, "an override is not a tombstone")
+            settings.setRewriteSystemPromptOverride("", for: .polish)
+            changes = settings.rewritePromptSyncChanges(since: "")
+            try expect(changes.first?.deleted, equals: true, "clearing a non-empty override leaves a tombstone")
+            try expect(notified.value, equals: 2, "a reset starts a sync")
+            try expect(settings.rewritePromptSyncChanges(since: "9999-01-01T00:00:00Z").isEmpty, equals: true,
+                       "stamps older than the cursor are not pushed")
+
+            // An edit made before sync existed gets a stamp on the first sync.
+        }
+        do {
+            let suite = "com.local.lexomorph.selftest.sync-prompts-legacy-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            defaults.set("Правка до синхронизации", forKey: "rewrite_system_prompt_structured_task_v1")
+            let settings = Settings(defaults: defaults, vocabularyStore: .inMemoryFallback())
+            let first = settings.rewritePromptSyncChanges(since: "")
+            try expect(first.map(\.style), equals: ["structured_task"], "an unstamped override uploads")
+            let stamp = first.first?.updatedAt ?? ""
+            try expect(stamp.isEmpty, equals: false, "an unstamped override is stamped on the first sync")
+            try expect(settings.rewritePromptSyncChanges(since: "").first?.updatedAt, equals: stamp, "the stamp is persisted")
+        }
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            let notified = LockedCounter()
+            settings.onCustomStylesLocalChange = { notified.increment() }
+            func remote(_ style: String, _ prompt: String, deleted: Bool = false, at stamp: String) -> RewritePromptRemoteEntry {
+                RewritePromptRemoteEntry(style: style, prompt: prompt, deleted: deleted, updatedAt: stamp)
+            }
+            try expect(settings.applyRemoteRewritePrompts([remote("official", "Удалённый", at: "2026-11-10T10:00:00Z")]),
+                       equals: 1, "a remote prompt is applied")
+            try expect(settings.rewriteSystemPromptOverride(for: .official), equals: "Удалённый",
+                       "the pipeline reads the applied override unchanged")
+            try expect(notified.value, equals: 0, "applying a remote prompt does not start a sync")
+            try expect(settings.rewritePromptSyncChanges(since: "2026-11-10T10:00:01Z").isEmpty, equals: true,
+                       "an applied prompt is not pushed back")
+            try expect(settings.applyRemoteRewritePrompts([remote("official", "Удалённый", at: "2026-11-10T10:00:00Z")]),
+                       equals: 0, "the same row again changes nothing")
+            try expect(settings.applyRemoteRewritePrompts([remote("official", "Старее", at: "2026-11-10T09:00:00Z")]),
+                       equals: 0, "an older remote prompt loses")
+            try expect(settings.applyRemoteRewritePrompts([remote("official", "Тот же момент", at: "2026-11-10T10:00:00Z")]),
+                       equals: 1, "on a tie the server wins")
+            try expect(settings.applyRemoteRewritePrompts([remote("polish", "x", at: "2026-11-10T10:00:00Z"),
+                                                           remote("c-xyz", "y", at: "2026-11-10T10:00:00Z"),
+                                                           remote("official", "  ", at: "2026-11-10T12:00:00Z")]),
+                       equals: 1, "unknown styles and blank prompts are ignored")
+            try expect(settings.applyRemoteRewritePrompts([remote("official", "", deleted: true, at: "2026-11-10T11:00:00Z")]),
+                       equals: 1, "a remote tombstone clears the override")
+            try expect(settings.rewriteSystemPromptOverride(for: .official), equals: "", "the override is back to the default")
+            try expect(settings.applyRemoteRewritePrompts([remote("official", "Воскрес", at: "2026-11-10T10:30:00Z")]),
+                       equals: 0, "an older edit does not resurrect a reset prompt")
+            try expect(notified.value, equals: 0, "no remote application started a sync")
+
+            settings.setRewriteSystemPromptOverride("Локальный", for: .structuredTask)
+            try expect(settings.applyRemoteRewritePrompts([remote("structured_task", "Древний", at: "2000-01-01T00:00:00Z")]),
+                       equals: 0, "a newer local edit beats an older remote row")
+            try expect(settings.rewriteSystemPromptOverride(for: .structuredTask), equals: "Локальный", "the local prompt stays")
+        }
+
+        // Engine passes against a loopback stand-in server.
+        do {
+            let server = try PromptSyncStubServer()
+            defer { server.stop() }
+            func makeDevice() -> (Settings, VocabularySyncEngine, () -> Void) {
+                let suite = "com.local.lexomorph.selftest.sync-prompts-engine-\(UUID().uuidString)"
+                let settings = Settings(defaults: UserDefaults(suiteName: suite)!, vocabularyStore: .inMemoryFallback())
+                settings.setVocabularySyncServerURLOverride(server.url)
+                settings.vocabularySyncEnabled = true
+                settings.vocabularySyncEmail = "prompts@example.com"
+                let tokens = InMemoryVocabularySyncTokenStore()
+                try? tokens.setToken("t", for: "prompts@example.com")
+                let engine = VocabularySyncEngine(settings: settings, tokenStore: tokens, lockFileURL: nil)
+                return (settings, engine, { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) })
+            }
+            func pass(_ engine: VocabularySyncEngine) throws -> VocabularySyncPassSummary {
+                try runParakeetEngineSynchronously { try await engine.runPass() }
+            }
+
+            let (a, engineA, cleanA) = makeDevice()
+            let (b, engineB, cleanB) = makeDevice()
+            defer { cleanA(); cleanB() }
+            let notifiedB = LockedCounter()
+            b.onCustomStylesLocalChange = { notifiedB.increment() }
+
+            // Roundtrip A -> server -> B, wire shape of the push body.
+            a.setRewriteSystemPromptOverride("Промпт A", for: .polish)
+            let first = try pass(engineA)
+            try expect(first.pushed, equals: 1, "the edited prompt is pushed")
+            let row = (server.pushedBodies.last?["prompts"] as? [[String: Any]])?.first
+            try expect(row?["style"] as? String, equals: "polish", "wire: style")
+            try expect(row?["prompt"] as? String, equals: "Промпт A", "wire: prompt")
+            try expect(row?["deleted"] as? Bool, equals: false, "wire: deleted")
+            try expect((row?["updated_at"] as? String)?.hasSuffix("Z"), equals: true, "wire: ISO-8601 UTC updated_at")
+            _ = try pass(engineB)
+            try expect(b.rewriteSystemPromptOverride(for: .polish), equals: "Промпт A", "the prompt reaches B")
+            try expect(notifiedB.value, equals: 0, "applying it on B is not a local change (no loop)")
+            // The cursor filter is inclusive, so the newest row is re-sent as a
+            // harmless tie (same as corrections); it must change nothing anywhere.
+            _ = try pass(engineB)
+            _ = try pass(engineB)
+            try expect(server.stored("polish")?["prompt"] as? String, equals: "Промпт A", "the echo does not change the server")
+            try expect(notifiedB.value, equals: 0, "passes on B never fire the local-change callback")
+            try expect(b.rewriteSystemPromptOverride(for: .polish), equals: "Промпт A", "the echo does not change B")
+
+            // Reset on B (a later second) travels as a tombstone.
+            Thread.sleep(forTimeInterval: 1.1)
+            b.setRewriteSystemPromptOverride("", for: .polish)
+            _ = try pass(engineB)
+            let tomb = (server.pushedBodies.last?["prompts"] as? [[String: Any]])?.first
+            try expect(tomb?["deleted"] as? Bool, equals: true, "a reset is pushed as deleted")
+            _ = try pass(engineA)
+            try expect(a.rewriteSystemPromptOverride(for: .polish), equals: "", "the reset reaches A")
+
+            // Over-long prompts are not pushed.
+            Thread.sleep(forTimeInterval: 1.1)
+            a.setRewriteSystemPromptOverride(String(repeating: "я", count: 16001), for: .official)
+            _ = try pass(engineA)
+            let sentStyles = server.pushedBodies.flatMap { ($0["prompts"] as? [[String: Any]]) ?? [] }.compactMap { $0["style"] as? String }
+            try expect(sentStyles.contains("official"), equals: false, "a prompt over 16000 characters is not pushed")
+            try expect(server.stored("official") == nil, equals: true, "the server never sees it")
+
+            // Old server: no `prompts` in the answer; the cursor stays so the prompt is retried.
+            server.storesPrompts = false
+            let (c, engineC, cleanC) = makeDevice()
+            defer { cleanC() }
+            c.setRewriteSystemPromptOverride("Для старого сервера", for: .structuredTask)
+            let oldFirst = try pass(engineC)
+            try expect(oldFirst.pushed, equals: 1, "the prompt is sent to the old server")
+            try expect(c.vocabularySyncLastPushedLocalStamp, equals: "", "an old server does not advance the cursor")
+            let oldSecond = try pass(engineC)
+            try expect(oldSecond.pushed, equals: 1, "the prompt is pushed again later")
+            server.storesPrompts = true
+            let upgraded = try pass(engineC)
+            try expect(upgraded.pushed, equals: 1, "after the upgrade the prompt is stored")
+            try expect(server.stored("structured_task")?["prompt"] as? String, equals: "Для старого сервера",
+                       "the upgraded server holds it")
+            try expect(c.vocabularySyncLastPushedLocalStamp.isEmpty, equals: false, "the cursor then advances")
+        }
+
         // Wire compatibility.
         do {
             let old = Data(#"{"revision":5,"entries":[],"hotwords":[]}"#.utf8)
@@ -4681,6 +4838,25 @@ enum LexomorphSelfTest {
             let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
             try expect(object?["audio_seconds"] as? Double, equals: 210.5, "usage uses snake_case keys")
             try expect(object?["updated_at"] as? String, equals: "2026-11-10T12:00:00Z", "usage carries updated_at")
+
+            // `prompts`: encode shape, decode, and a response lacking the field.
+            let promptsResponse = Data(#"""
+            {"revision":10,"entries":[],"hotwords":[],"styles":[],"usage":[],
+             "prompts":[{"style":"official","prompt":"P","deleted":false,"updated_at":"2026-11-10T12:00:00Z","revision":7},
+                        {"style":"polish","prompt":"","deleted":true,"updated_at":"2026-11-10T12:00:01Z","revision":8}]}
+            """#.utf8)
+            let withPrompts = try JSONDecoder().decode(VocabularySyncResponse.self, from: promptsResponse)
+            try expect(withPrompts.serverStoresPrompts, equals: true, "prompts detected")
+            try expect(withPrompts.prompts.map(\.style), equals: ["official", "polish"], "prompt rows decode")
+            try expect(withPrompts.prompts.first?.revision, equals: 7, "the revision decodes")
+            try expect(withPrompts.prompts.last?.deleted, equals: true, "a tombstone row decodes")
+            try expect(decoded.serverStoresPrompts, equals: false, "a response lacking prompts is an old server")
+            try expect(decoded.prompts.isEmpty, equals: true, "absent prompts are empty")
+            let promptObject = try JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(VocabularySyncPromptEntry(style: "polish", prompt: "p", deleted: false,
+                                                                     updatedAt: "2026-11-10T12:00:00Z"))) as? [String: Any]
+            try expect(promptObject?["updated_at"] as? String, equals: "2026-11-10T12:00:00Z", "prompt uses snake_case updated_at")
+            try expect(promptObject?["revision"] == nil, equals: true, "a pushed row carries no revision")
         }
     }
 
@@ -10724,6 +10900,118 @@ enum LexomorphSelfTest {
 
 
 /// A thread-safe counter for callbacks that may fire on any thread.
+/// In-process loopback stand-in for the sync server's `prompts` collection
+/// (the real server is built separately). Last-writer-wins by `updated_at`,
+/// a tie keeps the stored (server) row. `storesPrompts == false` imitates a
+/// server that predates the collection: it ignores it and omits it.
+private final class PromptSyncStubServer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var rows: [String: [String: Any]] = [:]
+    private var bodies: [[String: Any]] = []
+    private var revision = 0
+    private var stores = true
+    private var listener: Int32 = -1
+    let port: UInt16
+
+    init() throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw SelfTestFailure.failed("stub: socket") }
+        var yes: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        addr.sin_port = 0
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, listen(fd, 16) == 0 else { close(fd); throw SelfTestFailure.failed("stub: bind") }
+        var out = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &out) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+        }
+        port = UInt16(bigEndian: out.sin_port)
+        listener = fd
+        Thread.detachNewThread { [self] in acceptLoop() }
+    }
+
+    var url: String { "http://127.0.0.1:\(port)" }
+    var storesPrompts: Bool {
+        get { lock.withLock { stores } }
+        set { lock.withLock { stores = newValue } }
+    }
+    var pushedBodies: [[String: Any]] { lock.withLock { bodies } }
+    func stored(_ style: String) -> [String: Any]? { lock.withLock { rows[style] } }
+    func seed(style: String, prompt: String, deleted: Bool = false, at stamp: String) {
+        lock.withLock {
+            revision += 1
+            rows[style] = ["style": style, "prompt": prompt, "deleted": deleted, "updated_at": stamp, "revision": revision]
+        }
+    }
+    func stop() { if listener >= 0 { close(listener); listener = -1 } }
+
+    private func acceptLoop() {
+        while true {
+            let fd = accept(listener, nil, nil)
+            if fd < 0 { return }
+            handle(fd)
+            close(fd)
+        }
+    }
+
+    private func handle(_ fd: Int32) {
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        var headerEnd: Range<Data.Index>?
+        var needed = 0
+        while true {
+            if headerEnd == nil, let range = data.range(of: Data("\r\n\r\n".utf8)) {
+                headerEnd = range
+                let head = String(decoding: data[..<range.lowerBound], as: UTF8.self).lowercased()
+                if let line = head.split(separator: "\r\n").first(where: { $0.hasPrefix("content-length:") }) {
+                    needed = Int(line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) ?? 0
+                }
+            }
+            if let headerEnd, data.count - headerEnd.upperBound >= needed { break }
+            let n = read(fd, &buffer, buffer.count)
+            if n <= 0 { break }
+            data.append(contentsOf: buffer[0..<n])
+        }
+        guard let headerEnd else { return }
+        let isPost = String(decoding: data.prefix(4), as: UTF8.self) == "POST"
+        let body = data[headerEnd.upperBound...]
+        lock.withLock {
+            if isPost, let object = (try? JSONSerialization.jsonObject(with: Data(body))) as? [String: Any] {
+                bodies.append(object)
+                if stores, let incoming = object["prompts"] as? [[String: Any]] {
+                    for row in incoming {
+                        guard let style = row["style"] as? String, let at = row["updated_at"] as? String else { continue }
+                        if let existing = rows[style]?["updated_at"] as? String, existing >= at { continue }
+                        revision += 1
+                        var stored = row
+                        stored["revision"] = revision
+                        rows[style] = stored
+                    }
+                }
+            }
+            var response: [String: Any] = ["revision": revision, "entries": [], "hotwords": []]
+            if stores { response["prompts"] = Array(rows.values) }
+            let json = (try? JSONSerialization.data(withJSONObject: response)) ?? Data("{}".utf8)
+            var reply = Data("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(json.count)\r\nConnection: close\r\n\r\n".utf8)
+            reply.append(json)
+            reply.withUnsafeBytes { raw in
+                var offset = 0
+                while offset < raw.count {
+                    let n = write(fd, raw.baseAddress! + offset, raw.count - offset)
+                    if n <= 0 { break }
+                    offset += n
+                }
+            }
+        }
+    }
+}
+
 private final class LockedCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0

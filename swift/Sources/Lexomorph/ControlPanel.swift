@@ -112,6 +112,9 @@ struct ControlPanelSettingsDraft: Equatable {
     /// value, customs by `c-<uuid>` id), each pre-filled with its
     /// built-in default when no override is stored.
     var rewriteSystemPrompts: [String: String]
+    /// The prompts as loaded, to save only what the user actually edited
+    /// (a stale panel must not revert a prompt a sync applied meanwhile).
+    var rewriteSystemPromptsBaseline: [String: String] = [:]
     var rewriteEngineBackend: LLMEngineBackend
     var rewriteCustomBaseURL: String
     var rewriteCustomAPIKey: String
@@ -184,6 +187,7 @@ struct ControlPanelSettingsDraft: Equatable {
             }
             return map
         }()
+        rewriteSystemPromptsBaseline = rewriteSystemPrompts
         rewriteEngineBackend = settings.rewriteEngineBackend
         rewriteCustomBaseURL = settings.rewriteCustomBaseURL
         rewriteCustomAPIKey = settings.rewriteCustomAPIKey
@@ -4893,6 +4897,11 @@ header.addArrangedSubview(panelLabel(
             RewriteStyle.allCases.map { ($0.rawValue, defaultRewriteSystemPrompt(for: $0)) }
             + draft.customRewriteStyles.map { ($0.id, LLMRewritePrompt.systemPrompt(custom: $0)) }
         for styleEntry in allStyles {
+            if RewriteStyle(rawValue: styleEntry.id) != nil,
+               let loaded = draft.rewriteSystemPromptsBaseline[styleEntry.id],
+               draft.rewriteSystemPrompts[styleEntry.id] == loaded {
+                continue
+            }
             let styleDefault = styleEntry.defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
             let styleText = (draft.rewriteSystemPrompts[styleEntry.id] ?? styleEntry.defaultPrompt)
                 .trimmingCharacters(in: .whitespacesAndNewlines)

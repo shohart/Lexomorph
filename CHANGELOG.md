@@ -9,7 +9,8 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 ## Unreleased
 
 ### Added
-- **Sync of the full system prompts of the built-in rewrite styles (Windows client).** The prompt you write for Polish, Structured task or Official in Settings now travels through the account like custom modes (new optional `prompts` list in the sync push and response; last write wins by time, the server wins ties). Resetting a prompt to the built-in default syncs too. An existing edit uploads on the first sync after the update. Prompts over 16000 characters stay on the machine. Hotkeys and the active mode stay local. Until the server is upgraded the prompts stay local and are retried on later syncs.
+- **Sync of the full system prompts of the built-in rewrite styles (Windows and macOS clients, server collection `prompts`).** The prompt you write for Polish, Structured task or Official in Settings now travels through the account like custom modes (new optional `prompts` list in the sync push and response; last write wins by time, the server wins ties). Resetting a prompt to the built-in default syncs too. An existing edit uploads on the first sync after the update. Prompts over 16000 characters stay on the machine. Hotkeys and the active mode stay local. Until the server is upgraded the prompts stay local and are retried on later syncs.
+- Account sync now also carries the full system prompts you edit for the three built-in rewrite styles (polish, structured task, official). The newest edit wins; resetting a prompt to the default syncs too. Active mode and hotkeys stay local. An older sync server is detected and the prompts are sent again once it is upgraded.
 
 ## 1.0.0 (2026-11-10)
 

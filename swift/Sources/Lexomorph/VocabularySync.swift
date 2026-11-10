@@ -149,6 +149,39 @@ struct VocabularySyncStyleEntry: Codable, Equatable, Sendable {
     }
 }
 
+/// A built-in style's full system prompt override on the wire (`prompts`
+/// collection). `deleted` = the override was reset to the built-in default
+/// (`prompt` may then be empty). `revision` is present in responses only.
+struct VocabularySyncPromptEntry: Codable, Equatable, Sendable {
+    let style: String
+    let prompt: String
+    let deleted: Bool
+    let updatedAt: String
+    let revision: Int?
+
+    init(style: String, prompt: String, deleted: Bool, updatedAt: String, revision: Int? = nil) {
+        self.style = style
+        self.prompt = prompt
+        self.deleted = deleted
+        self.updatedAt = updatedAt
+        self.revision = revision
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case style, prompt, deleted, revision
+        case updatedAt = "updated_at"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(style, forKey: .style)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encode(deleted, forKey: .deleted)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(revision, forKey: .revision)
+    }
+}
+
 /// One (day, device) usage row on the wire (`usage` collection; spec §3.2).
 /// `words` and `asr_seconds` are optional: the other platform may not count them.
 struct VocabularySyncUsageEntry: Codable, Equatable, Sendable {
@@ -176,20 +209,26 @@ struct VocabularySyncResponse: Codable, Sendable {
     let hotwords: [VocabularySyncHotwordEntry]
     let styles: [VocabularySyncStyleEntry]
     let usage: [VocabularySyncUsageEntry]
+    let prompts: [VocabularySyncPromptEntry]
     /// False when the answer has no `hotwords` field: that server dropped
     /// the hotwords it was sent, so they must be pushed again later.
     let serverStoresHotwords: Bool
     /// Same for `styles` and `usage` (servers before the modes/usage sync).
     let serverStoresStyles: Bool
     let serverStoresUsage: Bool
+    /// Same for `prompts` (servers before the built-in prompt sync).
+    let serverStoresPrompts: Bool
 
     init(revision: Int, entries: [VocabularySyncWireEntry], hotwords: [VocabularySyncHotwordEntry] = [],
-         styles: [VocabularySyncStyleEntry] = [], usage: [VocabularySyncUsageEntry] = []) {
+         styles: [VocabularySyncStyleEntry] = [], usage: [VocabularySyncUsageEntry] = [],
+         prompts: [VocabularySyncPromptEntry] = []) {
         self.revision = revision
         self.entries = entries
         self.hotwords = hotwords
         self.styles = styles
         self.usage = usage
+        self.prompts = prompts
+        serverStoresPrompts = true
         serverStoresHotwords = true
         serverStoresStyles = true
         serverStoresUsage = true
@@ -208,9 +247,12 @@ struct VocabularySyncResponse: Codable, Sendable {
         let decodedUsage = try container.decodeIfPresent([VocabularySyncUsageEntry].self, forKey: .usage)
         usage = decodedUsage ?? []
         serverStoresUsage = decodedUsage != nil
+        let decodedPrompts = try container.decodeIfPresent([VocabularySyncPromptEntry].self, forKey: .prompts)
+        prompts = decodedPrompts ?? []
+        serverStoresPrompts = decodedPrompts != nil
     }
 
-    enum CodingKeys: String, CodingKey { case revision, entries, hotwords, styles, usage }
+    enum CodingKeys: String, CodingKey { case revision, entries, hotwords, styles, usage, prompts }
 }
 
 struct VocabularySyncAuthResult: Codable, Sendable {
@@ -231,6 +273,7 @@ struct VocabularySyncClient: Sendable {
         let hotwords: [VocabularySyncHotwordEntry]
         let styles: [VocabularySyncStyleEntry]
         let usage: [VocabularySyncUsageEntry]
+        let prompts: [VocabularySyncPromptEntry]
         let client: ClientInfo
     }
 
@@ -316,9 +359,11 @@ struct VocabularySyncClient: Sendable {
     func push(token: String, since: Int, changes: [VocabularySyncWireEntry],
               hotwords: [VocabularySyncHotwordEntry] = [],
               styles: [VocabularySyncStyleEntry] = [],
-              usage: [VocabularySyncUsageEntry] = []) async throws -> VocabularySyncResponse {
+              usage: [VocabularySyncUsageEntry] = [],
+              prompts: [VocabularySyncPromptEntry] = []) async throws -> VocabularySyncResponse {
         let body = try JSONEncoder().encode(PushRequest(since: since, changes: changes, hotwords: hotwords,
-                                                        styles: styles, usage: usage, client: Self.clientInfo))
+                                                        styles: styles, usage: usage, prompts: prompts,
+                                                        client: Self.clientInfo))
         return try decodeSync(try await send(jsonRequest("v1/vocabulary", method: "POST", token: token, body: body)))
     }
 
@@ -355,6 +400,7 @@ actor VocabularySyncEngine {
     let tokenStore: any VocabularySyncTokenStore
     private let lockFileURL: URL?
     private var running = false
+    private var reportedOversizedPrompts = Set<String>()
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(settings: Settings, tokenStore: any VocabularySyncTokenStore, lockFileURL: URL?) {
@@ -563,6 +609,23 @@ actor VocabularySyncEngine {
             newestPushed = max(newestPushed, tombstone.deletedAt)
         }
 
+        // Built-in style prompt overrides share the cursor stamp too.
+        var promptChanges: [VocabularySyncPromptEntry] = []
+        for record in settings.rewritePromptSyncChanges(since: cursorStamp) {
+            if !record.deleted {
+                guard !record.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      record.prompt.unicodeScalars.count <= Settings.maxRewritePromptLength else {
+                    if reportedOversizedPrompts.insert(record.style).inserted {
+                        log("vocabulary sync: prompt of style \(record.style) not pushed (blank or longer than \(Settings.maxRewritePromptLength) characters)")
+                    }
+                    continue
+                }
+            }
+            promptChanges.append(VocabularySyncPromptEntry(style: record.style, prompt: record.prompt,
+                                                           deleted: record.deleted, updatedAt: record.updatedAt))
+            newestPushed = max(newestPushed, record.updatedAt)
+        }
+
         // Usage: this device's rows as absolute per-day values. Only days that
         // differ from what the server last confirmed are sent; the cursor is
         // not involved (idempotent, no conflicts between devices).
@@ -573,7 +636,8 @@ actor VocabularySyncEngine {
 
         var summary = VocabularySyncPassSummary()
         var since = settings.vocabularySyncLastServerRevision
-        if changes.isEmpty && hotwordChanges.isEmpty && styleChanges.isEmpty && usageChanges.isEmpty {
+        if changes.isEmpty && hotwordChanges.isEmpty && styleChanges.isEmpty
+            && promptChanges.isEmpty && usageChanges.isEmpty {
             let response = try await client.pull(token: token, since: since)
             summary.applied += try apply(response)
             since = response.revision
@@ -583,11 +647,14 @@ actor VocabularySyncEngine {
             var hotwordStart = 0
             var styleStart = 0
             var usageStart = 0
+            var promptStart = 0
+            var promptsDropped = false
             var hotwordsDropped = false
             var stylesDropped = false
             var usageDropped = false
             while start < changes.count || hotwordStart < hotwordChanges.count
-                    || styleStart < styleChanges.count || usageStart < usageChanges.count {
+                    || styleStart < styleChanges.count || usageStart < usageChanges.count
+                    || promptStart < promptChanges.count {
                 let batch = Array(changes[start..<min(start + Self.maxChangesPerPush, changes.count)])
                 let hotwordBatch = Array(hotwordChanges[hotwordStart..<min(hotwordStart + Self.maxChangesPerPush,
                                                                            hotwordChanges.count)])
@@ -595,27 +662,33 @@ actor VocabularySyncEngine {
                                                                      styleChanges.count)])
                 let usageBatch = Array(usageChanges[usageStart..<min(usageStart + Self.maxChangesPerPush,
                                                                      usageChanges.count)])
+                let promptBatch = Array(promptChanges[promptStart..<min(promptStart + Self.maxChangesPerPush,
+                                                                        promptChanges.count)])
                 let response = try await client.push(token: token, since: since, changes: batch,
-                                                     hotwords: hotwordBatch, styles: styleBatch, usage: usageBatch)
+                                                     hotwords: hotwordBatch, styles: styleBatch, usage: usageBatch,
+                                                     prompts: promptBatch)
                 summary.applied += try apply(response)
                 summary.pushed += batch.count + hotwordBatch.count + styleBatch.count + usageBatch.count
+                    + promptBatch.count
                 if !hotwordBatch.isEmpty && !response.serverStoresHotwords { hotwordsDropped = true }
                 if !styleBatch.isEmpty && !response.serverStoresStyles { stylesDropped = true }
                 if !usageBatch.isEmpty && !response.serverStoresUsage { usageDropped = true }
+                if !promptBatch.isEmpty && !response.serverStoresPrompts { promptsDropped = true }
                 since = response.revision
                 settings.vocabularySyncLastServerRevision = since
                 start += batch.count
                 hotwordStart += hotwordBatch.count
                 styleStart += styleBatch.count
                 usageStart += usageBatch.count
+                promptStart += promptBatch.count
             }
             // Never ahead of this device's own clock: a remote stamp from a
             // device whose clock runs fast must not hide later local edits.
             // An old server ignored the hotwords or styles: keep the cursor so
             // they go out again once it is upgraded (re-pushed corrections
             // tie and change nothing there).
-            if hotwordsDropped || stylesDropped {
-                log("vocabulary sync: the server does not store hotwords or styles yet; will push them again")
+            if hotwordsDropped || stylesDropped || promptsDropped {
+                log("vocabulary sync: the server does not store hotwords, styles or prompts yet; will push them again")
             } else {
                 settings.vocabularySyncLastPushedLocalStamp = min(newestPushed, passStart)
             }
@@ -643,6 +716,10 @@ actor VocabularySyncEngine {
             CustomStyleRemoteEntry(id: entry.id, name: entry.name, color: entry.color,
                                    instruction: entry.instruction, deleted: entry.deleted, updatedAt: entry.updatedAt)
         }
+        let prompts = response.prompts.map { entry in
+            RewritePromptRemoteEntry(style: entry.style, prompt: entry.prompt, deleted: entry.deleted,
+                                     updatedAt: entry.updatedAt)
+        }
         let usage = response.usage.map { entry in
             DeviceDictationUsage(day: entry.day, device: entry.device, dictationCount: max(0, entry.dictations),
                                  characterCount: max(0, entry.characters), wordCount: max(0, entry.words ?? 0),
@@ -652,7 +729,8 @@ actor VocabularySyncEngine {
         }
         do {
             return try store.applyRemote(entries) + store.applyRemoteHotwords(hotwords)
-                + settings.applyRemoteCustomStyles(styles) + settings.applyRemoteUsage(usage)
+                + settings.applyRemoteCustomStyles(styles) + settings.applyRemoteRewritePrompts(prompts)
+                + settings.applyRemoteUsage(usage)
         } catch {
             log("vocabulary sync: applying server entries failed: \(error)")
             throw VocabularySyncFailure.busy
