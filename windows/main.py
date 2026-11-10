@@ -51,6 +51,11 @@ def main(argv: list[str]) -> int:
         from superdictate.selftest import run_all
 
         return 0 if run_all() else 1
+    if "--bench-record-latency" in argv:
+        from superdictate.latency_bench import run
+
+        index = argv.index("--bench-record-latency")
+        return run(argv[index + 1:])
     if "--benchmark-transcribe" in argv:
         from superdictate.diagnostics import benchmark_transcribe
 

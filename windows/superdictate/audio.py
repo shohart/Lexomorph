@@ -173,10 +173,19 @@ class Recorder:
         self._lock = threading.Lock()
         self._started_at = 0.0
         self._recording = False
+        # False from halt() on: the clip ends there, whatever the stream
+        # still delivers while it is being closed (the stop cue, say).
+        self._accepting = False
         self._pending_handle = None
+        # Rate that opened last time, per device name: skips the 16 kHz
+        # attempt that WASAPI shared mode rejects for most endpoints.
+        self._rate_cache: dict[str, int] = {}
         self._auto_stop_fired = False
         self._capture_rate = SAMPLE_RATE
         self.last_error: Optional[str] = None
+        # perf_counter_ns marks of the last start()/stop(), for the
+        # --bench-record-latency diagnostic. Four dict writes: free.
+        self.trace: dict[str, int] = {}
 
         # Stop-on-silence. Counting only starts once the speaker has
         # actually said something, so a pause before the first word never
@@ -203,9 +212,12 @@ class Recorder:
 
         if self._recording:
             return True
+        self.trace = {"start_call": time.perf_counter_ns()}
         self.last_error = None
         with self._lock:
             self._chunks = []
+        # Before the stream exists, so not one block of it can be dropped.
+        self._accepting = True
         self._auto_stop_fired = False
         self._heard_speech = False
         self._silence_started_at = 0.0
@@ -213,8 +225,14 @@ class Recorder:
 
         # 16 kHz first (no resampling to pay for), then the device's own
         # rate, which is the only one WASAPI shared mode will grant.
+        self.trace["device_resolved"] = time.perf_counter_ns()
         native_rate = device_sample_rate(device_index)
+        self.trace["rate_known"] = time.perf_counter_ns()
         candidates = [SAMPLE_RATE] if native_rate == SAMPLE_RATE else [SAMPLE_RATE, native_rate]
+        cached = self._rate_cache.get(device_name)
+        if cached in candidates:
+            candidates.remove(cached)
+            candidates.insert(0, cached)
 
         last_error: Optional[Exception] = None
         for rate in candidates:
@@ -227,15 +245,19 @@ class Recorder:
                     device=device_index,
                     callback=self._callback,
                 )
+                self.trace["stream_created"] = time.perf_counter_ns()
                 stream.start()
+                self.trace["stream_started"] = time.perf_counter_ns()
             except Exception as exc:
                 last_error = exc
                 log.debug("Device rejected %d Hz: %s", rate, exc)
                 continue
             self._stream = stream
             self._capture_rate = rate
+            self._rate_cache[device_name] = rate
             break
         else:
+            self._accepting = False
             self.last_error = str(last_error)
             log.error("Could not open input stream: %s", last_error)
             self._stream = None
@@ -244,15 +266,28 @@ class Recorder:
         self._open_pending_file()
         self._started_at = time.monotonic()
         self._recording = True
+        self.trace["start_return"] = time.perf_counter_ns()
         log.info("Recording started (device=%s, %d Hz%s)",
                  device_name or "system default", self._capture_rate,
                  "" if self._capture_rate == SAMPLE_RATE else ", resampling to 16 kHz")
         return True
 
+    def halt(self) -> None:
+        """End the clip *now*, without waiting for the stream to close.
+
+        Closing a WASAPI stream and resampling a long clip take tens to
+        hundreds of milliseconds; the stop cue must not wait for them, and
+        must not end up in the clip either. Call stop() afterwards to
+        collect the audio.
+        """
+        self._accepting = False
+
     def stop(self) -> np.ndarray:
         if not self._recording:
             return np.zeros(0, dtype=np.float32)
         self._recording = False
+        self._accepting = False
+        self.trace["stop_call"] = time.perf_counter_ns()
         try:
             if self._stream is not None:
                 self._stream.stop()
@@ -262,6 +297,7 @@ class Recorder:
         finally:
             self._stream = None
 
+        self.trace["stream_closed"] = time.perf_counter_ns()
         self._close_pending_file()
         with self._lock:
             chunks = self._chunks
@@ -269,7 +305,9 @@ class Recorder:
         if not chunks:
             return np.zeros(0, dtype=np.float32)
         captured = np.concatenate(chunks).astype(np.float32, copy=False)
-        return resample_to_16k(captured, self._capture_rate)
+        out = resample_to_16k(captured, self._capture_rate)
+        self.trace["stop_return"] = time.perf_counter_ns()
+        return out
 
     def snapshot(self, max_seconds: float = 0.0) -> np.ndarray:
         """Everything captured so far, leaving the recording running.
@@ -299,7 +337,11 @@ class Recorder:
     def _callback(self, indata, frames, time_info, status) -> None:
         if status:
             log.debug("Input stream status: %s", status)
+        if not self._accepting:
+            return
         samples = indata[:, 0].copy()
+        if "first_block" not in self.trace:
+            self.trace["first_block"] = time.perf_counter_ns()
         with self._lock:
             self._chunks.append(samples)
         self._append_pending(samples)
