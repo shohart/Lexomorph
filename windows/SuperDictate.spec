@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build for SuperDictate.
+"""PyInstaller build for Lexomorph (formerly SuperDictate; file names are kept).
 
 One-folder rather than one-file: Qt, ONNX Runtime and the engine hosts
 are large native DLLs, and a one-file build would unpack them to a
@@ -30,6 +30,34 @@ from PyInstaller.utils.hooks import (collect_data_files, collect_dynamic_libs,  
 
 if not os.path.isfile(os.path.join("onnx-asr", "SuperDictateOnnxHost.exe")):
     raise SystemExit("onnx-asr\\ is not staged: run tools\\build-onnx-host.ps1 first")
+
+# Version resource of the executables (Explorer "Details" tab). Product name
+# is Lexomorph; the file names themselves stay SuperDictate*.exe.
+import re as _re
+_version = _re.search(r'VERSION = "([\d.]+)"',
+                      open(os.path.join("superdictate", "version.py"), encoding="utf-8").read()).group(1)
+_numbers = tuple(int(n) for n in _version.split(".")) + (0,) * 4
+_numbers = _numbers[:4]
+from PyInstaller.utils.win32.versioninfo import (  # noqa: E402
+    FixedFileInfo, StringFileInfo, StringStruct, StringTable, VarFileInfo, VarStruct, VSVersionInfo)
+
+
+def _version_info(description, original):
+    return VSVersionInfo(
+        ffi=FixedFileInfo(filevers=_numbers, prodvers=_numbers),
+        kids=[
+            StringFileInfo([StringTable("040904B0", [
+                StringStruct("CompanyName", "Lexomorph"),
+                StringStruct("FileDescription", description),
+                StringStruct("FileVersion", _version),
+                StringStruct("InternalName", original),
+                StringStruct("OriginalFilename", original + ".exe"),
+                StringStruct("ProductName", "Lexomorph"),
+                StringStruct("ProductVersion", _version),
+            ])]),
+            VarFileInfo([VarStruct("Translation", [1033, 1200])]),
+        ])
+
 
 datas = []
 # The tray icon is drawn from the product mark at runtime, so the PNG has
@@ -145,6 +173,7 @@ ov_exe = EXE(
     console=True,           # real stdin/stdout for the IPC frames
     disable_windowed_traceback=False,
     icon="assets/SuperDictate.ico",
+    version=_version_info("Lexomorph NPU speech host", "SuperDictateOvHost"),
 )
 
 exe = EXE(
@@ -160,6 +189,7 @@ exe = EXE(
     console=False,          # tray app: a console window would flash on login
     disable_windowed_traceback=False,
     icon="assets/SuperDictate.ico",
+    version=_version_info("Lexomorph", "SuperDictate"),
 )
 
 coll = COLLECT(

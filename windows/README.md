@@ -1,12 +1,16 @@
-# SuperDictate для Windows
+# Lexomorph для Windows (ранее SuperDictate)
 
 Локальная диктовка по горячей клавише: нажали, сказали, текст появился в
 активном поле ввода. Ничего не уходит в сеть.
 
-Это Windows-версия [SuperDictate Next](../README.md) — та же модель
+Это Windows-версия [Lexomorph](../README.md) (ранее SuperDictate Next) — та же модель
 распознавания, те же настройки, те же промпты постобработки. Код свой:
 Python + PySide6 вместо Swift + AppKit, но поведение и имена настроек
 общие, чтобы одинаковое означало одинаковое на обеих платформах.
+
+Имена внутренних частей (каталог данных `%LOCALAPPDATA%\SuperDictate`,
+`SuperDictate.exe`, хосты `SuperDictate*Host`, пакет `superdictate`) сохранены
+намеренно ради совместимости с установленными копиями.
 
 Происхождение и что взято за основу — в [PROVENANCE.md](PROVENANCE.md),
 цепочка авторства — в [NOTICE.md](NOTICE.md).

@@ -12,7 +12,7 @@ _LANGUAGE = "ru"
 
 _STRINGS: dict[str, tuple[str, str]] = {
     # -- status ------------------------------------------------------
-    "app_name": ("SuperDictate", "SuperDictate"),
+    "app_name": ("Lexomorph", "Lexomorph"),
     "status_starting": ("Запуск…", "Starting…"),
     "status_downloading": ("Загрузка модели", "Downloading model"),
     "status_loading": ("Загрузка модели в память", "Loading model"),
@@ -592,9 +592,9 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "sync_sign_in": ("Войти", "Sign in"),
     "sync_signing_in": ("Вход…", "Signing in…"),
     "sync_consent": (
-        "Словарь будет храниться на сервере SuperDictate и использоваться для "
+        "Словарь будет храниться на сервере синхронизации Lexomorph и использоваться для "
         "улучшения распознавания речи.",
-        "Your vocabulary is stored on the SuperDictate server and used to "
+        "Your vocabulary is stored on the Lexomorph sync server and used to "
         "improve speech recognition."),
     "sync_new_account_note": (
         "Если для этой почты ещё нет аккаунта, он будет создан.",

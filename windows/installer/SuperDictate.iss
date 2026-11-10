@@ -1,4 +1,4 @@
-; Inno Setup script for SuperDictate (Windows).
+; Inno Setup script for Lexomorph (Windows; formerly SuperDictate).
 ;
 ; Builds a per-user installer: the app writes only to %LOCALAPPDATA% and
 ; needs no driver or service, so requiring an admin prompt would buy
@@ -7,9 +7,14 @@
 ; Compile after `build.ps1` has produced dist\SuperDictate\:
 ;   & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\SuperDictate.iss
 
-#define AppName        "SuperDictate"
+; AppDirName is the identifier behind the install directory, the Start-menu
+; group of earlier releases and the autostart value: it must stay
+; "SuperDictate". AppDisplayName is what people read (wizard, Start menu,
+; Apps & features).
+#define AppDirName     "SuperDictate"
+#define AppDisplayName "Lexomorph"
 #define AppVersion     "0.9.7"
-#define AppPublisher   "SuperDictate Next"
+#define AppPublisher   "Lexomorph (formerly SuperDictate Next)"
 #define AppURL         "https://github.com/shohart/SuperDictate-Next"
 #define AppExeName     "SuperDictate.exe"
 ; Must match superdictate.system.APP_USER_MODEL_ID, or the taskbar treats a
@@ -18,15 +23,16 @@
 
 [Setup]
 AppId={{2271EBB1-D4F4-4FCA-949C-F03C760A700A}
-AppName={#AppName}
+AppName={#AppDisplayName}
 AppVersion={#AppVersion}
-AppVerName={#AppName} {#AppVersion}
+AppVerName={#AppDisplayName} {#AppVersion}
+UninstallDisplayName={#AppDisplayName}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
-DefaultDirName={autopf}\{#AppName}
-DefaultGroupName={#AppName}
+DefaultDirName={autopf}\{#AppDirName}
+DefaultGroupName={#AppDisplayName}
 DisableProgramGroupPage=yes
 ; A NEW AppId, deliberately: this is a different product from a different
 ; publisher than the "Dictation" fork this port grew out of, and reusing
@@ -69,11 +75,11 @@ Name: "autostart"; Description: "{cm:AutoStartDescription}"; \
 
 [CustomMessages]
 russian.AutoStartGroup=Автозапуск:
-russian.AutoStartDescription=Запускать SuperDictate при входе в Windows
-russian.LaunchApp=Запустить SuperDictate
+russian.AutoStartDescription=Запускать Lexomorph при входе в Windows
+russian.LaunchApp=Запустить Lexomorph
 english.AutoStartGroup=Startup:
-english.AutoStartDescription=Start SuperDictate when I sign in to Windows
-english.LaunchApp=Launch SuperDictate
+english.AutoStartDescription=Start Lexomorph when I sign in to Windows
+english.LaunchApp=Launch Lexomorph
 
 [Files]
 Source: "..\dist\SuperDictate\*"; DestDir: "{app}"; \
@@ -89,19 +95,22 @@ Type: files; Name: "{autodesktop}\D1CT.lnk"
 ; 0.8.3 shipped llama.cpp's llama-server here; from 0.8.3.1 the local LLM
 ; host is engines\superdictate-llm-host.exe, so the old 83 MB goes.
 Type: filesandordirs; Name: "{app}\_internal\engines\llama"
+; The desktop shortcut was named SuperDictate until the product became
+; Lexomorph (the old Start-menu folder is removed in CurStepChanged).
+Type: files; Name: "{autodesktop}\SuperDictate.lnk"
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; \
+Name: "{group}\{#AppDisplayName}"; Filename: "{app}\{#AppExeName}"; \
     AppUserModelID: "{#AppUserModelID}"
-Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; \
+Name: "{group}\{cm:UninstallProgram,{#AppDisplayName}}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#AppDisplayName}"; Filename: "{app}\{#AppExeName}"; \
     AppUserModelID: "{#AppUserModelID}"; Tasks: desktopicon
 
 [Registry]
 ; --minimized so an autostarted copy goes straight to the tray instead of
 ; throwing its control panel at you every login.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
-    ValueType: string; ValueName: "{#AppName}"; \
+    ValueType: string; ValueName: "{#AppDirName}"; \
     ValueData: """{app}\{#AppExeName}"" --minimized"; \
     Flags: uninsdeletevalue; Tasks: autostart
 ; The app was called D1CT before 1.8.0 and SuperDictate before 1.5.0. Those
@@ -165,6 +174,12 @@ begin
       DelTree(LegacyDir, True, True, True);
 
     LegacyGroup := ExpandConstant('{userprograms}\D1CT');
+    if DirExists(LegacyGroup) and
+       (CompareText(LegacyGroup, ExpandConstant('{group}')) <> 0) then
+      DelTree(LegacyGroup, True, True, True);
+
+    // The Start-menu folder was "SuperDictate" before the Lexomorph name.
+    LegacyGroup := ExpandConstant('{userprograms}\SuperDictate');
     if DirExists(LegacyGroup) and
        (CompareText(LegacyGroup, ExpandConstant('{group}')) <> 0) then
       DelTree(LegacyGroup, True, True, True);
