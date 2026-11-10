@@ -1074,7 +1074,7 @@ enum ParakeySelfTest {
             ),
             equals: .rolledBack(
                 previous: f5,
-                message: "Parakey could not save that hotkey, so it kept F5."
+                message: "Lexomorph could not save that hotkey, so it kept F5."
             ),
             "hotkey preference update should roll back when persisted settings disagree"
         )
