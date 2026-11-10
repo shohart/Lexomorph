@@ -63,7 +63,7 @@ Once those clients have updated, they list releases themselves and plain
 On the Windows build machine, from `windows\`:
 
 1. Bump `superdictate/version.py` and `AppVersion` in
-   `installer/SuperDictate.iss` (the port follows the macOS version).
+   `installer/Lexomorph.iss` (the port follows the macOS version).
 2. `.\build.ps1` (self-tests, the speech host, Silero VAD, PyInstaller),
    then `ISCC.exe installer\SuperDictate.iss` → `dist\SuperDictate-X.Y.Z-setup.exe`.
 3. `gh release create win-vX.Y.Z Lexomorph-Setup-X.Y.Z.exe --target <full sha> --latest=false`
