@@ -62,7 +62,7 @@ can use its own backend.
 
 | Platform | Requirements | How you get it |
 |---|---|---|
-| macOS | macOS 14 or newer, Apple Silicon or Intel. Verified by hand on one Intel machine; CI runs on Apple Silicon only. | One-line installer (below). The published `SuperDictate.zip` is built for **Intel (x86_64)**; on Apple Silicon, build from source with the same installer. |
+| macOS | macOS 14 or newer, Apple Silicon or Intel. Verified by hand on one Intel machine; CI runs on Apple Silicon only. | One-line installer (below). The published `Lexomorph.zip` is built for **Intel (x86_64)**; on Apple Silicon, build from source with the same installer. |
 | Windows | Windows 10 version 1809 (build 17763) or newer, 64-bit. Per-user install, no administrator rights needed. | `SuperDictate-X.Y.Z-setup.exe` from a `win-v*` entry on the [Releases page](https://github.com/shohart/SuperDictate-Next/releases). There is no Windows CI; Windows builds are checked by hand. |
 
 Linux is not supported. On Intel laptops with an NPU, the Windows version can
@@ -88,9 +88,9 @@ turn on. Nothing here is "offline by default": the first run downloads models.
 Where the records live (paths keep the old name, see
 [below](#compatibility-names-that-stayed)):
 
-- macOS: `~/Library/Application Support/SuperDictate` (history, settings,
-  `corrections.sqlite`, models), `~/Library/Logs/SuperDictate*`, and the
-  LaunchAgent `~/Library/LaunchAgents/com.local.superdictate.agent.plist`.
+- macOS: `~/Library/Application Support/Lexomorph` (history, settings,
+  `corrections.sqlite`, models), `~/Library/Logs/Lexomorph-*`, and the
+  LaunchAgent `~/Library/LaunchAgents/com.local.lexomorph.agent.plist`.
 - Windows: `%LOCALAPPDATA%\SuperDictate`.
 - History keeps the dictated text. `DictationTrace.jsonl` records, for the last
   2000 to 4000 dictations, what recognition wrote, the text after the rules and
@@ -111,11 +111,11 @@ Open Terminal, paste, press Enter:
 curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | /bin/bash
 ```
 
-The installer downloads `SuperDictate.zip` from
+The installer downloads `Lexomorph.zip` from
 [GitHub Releases](https://github.com/shohart/SuperDictate-Next/releases),
 verifies a pinned SHA-256, the version, the bundle ID, the architecture, the
 code signature and the microphone entitlements, then replaces
-`/Applications/SuperDictate.app` and opens it. Xcode is not needed. Your
+`/Applications/Lexomorph.app` and opens it. Xcode is not needed. Your
 history, settings and downloaded models are kept.
 
 Release builds are signed with a developer certificate ("PolterType Dev") and
@@ -127,7 +127,7 @@ with `scripts/build-app.sh` are signed ad-hoc unless you pass `SIGN_IDENTITY`.
 it. Build from source with the same script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | SUPERDICTATE_BUILD_FROM_SOURCE=1 /bin/bash
+curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | LEXOMORPH_BUILD_FROM_SOURCE=1 /bin/bash
 ```
 
 This needs the free Apple Command Line Tools; if they are missing, the
@@ -150,7 +150,7 @@ it. Windows releases are never marked "latest", so the badge above and the
   checks when opened; the automatic background check is **off by default** on
   macOS and can be enabled in the settings.
 - **macOS, from Terminal:** run the install command again. It replaces only
-  `/Applications/SuperDictate.app`.
+  `/Applications/Lexomorph.app`.
 - **Windows:** the app checks for updates by default (can be turned off) and
   opens the release page when a newer `win-v*` exists. It does not download or
   run anything by itself; you run the new `setup.exe`.
@@ -270,9 +270,9 @@ that server, so they leave the device.
 ## Architecture
 
 - **macOS:** Swift and AppKit, SwiftPM package in [swift/](swift); recognition in
-  the helper process `SuperDictateOnnxHost` (C++ core in
+  the helper process `LexomorphOnnxHost` (C++ core in
   [native/asr-runtime](native/asr-runtime), ONNX Runtime 1.23.2, CPU); LLM in
-  `SuperDictateLLMHost` (llama.cpp, loopback HTTP).
+  `LexomorphLLMHost` (llama.cpp, loopback HTTP).
 - **Windows:** Python and PySide6 in [windows/](windows), the same ONNX host.
 - **Sync server:** FastAPI and SQLite in [server/vocab-sync](server/vocab-sync).
 - Specs: [docs/specs](docs/specs). Release process: [docs/RELEASING.md](docs/RELEASING.md).
@@ -304,12 +304,12 @@ Manual build for development (macOS):
 xcode-select --install
 git clone https://github.com/shohart/SuperDictate-Next.git
 cd SuperDictate-Next
-swift run -c debug --package-path swift Parakey --self-test all
-./scripts/build-app.sh ./dist/SuperDictate.app
+swift run -c debug --package-path swift Lexomorph --self-test all
+./scripts/build-app.sh ./dist/Lexomorph.app
 ```
 
 Do not launch the copied or test bundle. The only runnable installed bundle is
-`/Applications/SuperDictate.app`; for local installation use
+`/Applications/Lexomorph.app`; for local installation use
 `scripts/install-local.sh`. `--self-test` can stop the production background
 agent; check that it is running afterwards. Windows: see
 [windows/README.md](windows/README.md).
@@ -338,17 +338,20 @@ agent; check that it is running afterwards. Windows: see
   peaks at about 2.2 GB resident (mapped model pages included); the app process
   stays around 40 to 60 MB.
 
-Logs: `~/Library/Logs/SuperDictate*` on macOS, `%LOCALAPPDATA%\SuperDictate` on
+Logs: `~/Library/Logs/Lexomorph-*` on macOS, `%LOCALAPPDATA%\SuperDictate` on
 Windows. Do not paste transcripts or audio into public issues.
 
 ## Compatibility: names that stayed
 
-Only the user-visible product name changes. These keep the name SuperDictate,
-deliberately, so that updates and your data keep working: the repository
-`shohart/SuperDictate-Next` and its release tags, `/Applications/SuperDictate.app`,
-bundle ID `com.local.superdictate`, the LaunchAgent label, data and log paths,
-the `SuperDictate.zip` and `SuperDictate-X.Y.Z-setup.exe` file names, the sync
-server address, the `SUPERDICTATE_*` variables, and the SwiftPM target `Parakey`.
+Since 0.10.0 the macOS identifiers carry the new name too: `/Applications/Lexomorph.app`,
+bundle ID `com.local.lexomorph`, LaunchAgent `com.local.lexomorph.agent`, data and
+log paths, the `Lexomorph.zip` asset, the `LEXOMORPH_*` variables and the SwiftPM
+target `Lexomorph`. Because macOS sees a new app, grant the Microphone,
+Accessibility and Input Monitoring permissions again; on first launch your
+settings, vocabulary and models are carried over, and the old SuperDictate data
+is left untouched for rollback. Still named SuperDictate on purpose: the
+repository `shohart/SuperDictate-Next`, the sync server address, and the
+Windows build (`SuperDictate-X.Y.Z-setup.exe`, `%LOCALAPPDATA%\SuperDictate`).
 Details and reasons: [docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md).
 Brand rules: [docs/branding/BRAND_GUIDELINES.md](docs/branding/BRAND_GUIDELINES.md).
 
@@ -360,8 +363,8 @@ Checks before a pull request:
 
 ```bash
 ./scripts/check.sh
-swift run -c debug --package-path swift Parakey --self-test all
-./scripts/build-app.sh ./dist/SuperDictate.app
+swift run -c debug --package-path swift Lexomorph --self-test all
+./scripts/build-app.sh ./dist/Lexomorph.app
 ```
 
 ## License and credits

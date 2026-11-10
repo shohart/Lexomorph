@@ -62,7 +62,7 @@ Lexomorph — персональный адаптивный движок пис�
 
 | Платформа | Требования | Как получить |
 |---|---|---|
-| macOS | macOS 14 и новее, Apple Silicon или Intel. Проверено вручную на одной Intel-машине; CI работает только на Apple Silicon. | Установка одной командой (ниже). Опубликованный `SuperDictate.zip` собран под **Intel (x86_64)**; на Apple Silicon собирайте из исходников тем же установщиком. |
+| macOS | macOS 14 и новее, Apple Silicon или Intel. Проверено вручную на одной Intel-машине; CI работает только на Apple Silicon. | Установка одной командой (ниже). Опубликованный `Lexomorph.zip` собран под **Intel (x86_64)**; на Apple Silicon собирайте из исходников тем же установщиком. |
 | Windows | Windows 10 версии 1809 (сборка 17763) и новее, 64-разрядная. Установка для текущего пользователя, права администратора не нужны. | `SuperDictate-X.Y.Z-setup.exe` из записи `win-v*` на [странице релизов](https://github.com/shohart/SuperDictate-Next/releases). CI для Windows нет; сборки проверяются вручную. |
 
 Linux не поддерживается. На ноутбуках Intel с NPU версия для Windows умеет
@@ -89,9 +89,9 @@ Linux не поддерживается. На ноутбуках Intel с NPU в
 Где лежат записи (пути сохраняют старое имя, см.
 [ниже](#совместимость-имена-которые-остались)):
 
-- macOS: `~/Library/Application Support/SuperDictate` (история, настройки,
-  `corrections.sqlite`, модели), `~/Library/Logs/SuperDictate*` и LaunchAgent
-  `~/Library/LaunchAgents/com.local.superdictate.agent.plist`.
+- macOS: `~/Library/Application Support/Lexomorph` (история, настройки,
+  `corrections.sqlite`, модели), `~/Library/Logs/Lexomorph-*` и LaunchAgent
+  `~/Library/LaunchAgents/com.local.lexomorph.agent.plist`.
 - Windows: `%LOCALAPPDATA%\SuperDictate`.
 - История хранит диктуемый текст. `DictationTrace.jsonl` для последних 2000–4000
   диктовок записывает, что выдало распознавание, текст после правил и итоговый
@@ -112,10 +112,10 @@ Linux не поддерживается. На ноутбуках Intel с NPU в
 curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | /bin/bash
 ```
 
-Установщик скачивает `SuperDictate.zip` из
+Установщик скачивает `Lexomorph.zip` из
 [GitHub Releases](https://github.com/shohart/SuperDictate-Next/releases),
 проверяет закреплённую SHA-256, версию, bundle ID, архитектуру, подпись кода и
-права на микрофон, затем заменяет `/Applications/SuperDictate.app` и открывает
+права на микрофон, затем заменяет `/Applications/Lexomorph.app` и открывает
 приложение. Xcode не нужен. История, настройки и скачанные модели сохраняются.
 
 Релизные сборки подписаны сертификатом разработчика («PolterType Dev») и **не
@@ -127,7 +127,7 @@ curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/inst
 отклонит. Соберите из исходников тем же скриптом:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | SUPERDICTATE_BUILD_FROM_SOURCE=1 /bin/bash
+curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/install.sh | LEXOMORPH_BUILD_FROM_SOURCE=1 /bin/bash
 ```
 
 Нужны бесплатные Command Line Tools от Apple; если их нет, установщик откроет
@@ -151,7 +151,7 @@ curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/inst
   обновления при открытии; автоматическая фоновая проверка **по умолчанию
   выключена** и включается в настройках.
 - **macOS, из Terminal:** снова выполните команду установки. Она заменяет только
-  `/Applications/SuperDictate.app`.
+  `/Applications/Lexomorph.app`.
 - **Windows:** приложение по умолчанию проверяет обновления (можно выключить) и
   открывает страницу релиза, когда есть более новый `win-v*`. Само оно ничего
   не скачивает и не запускает; новый `setup.exe` вы запускаете сами.
@@ -272,9 +272,9 @@ Windows используйте «Приложения и возможности�
 ## Архитектура
 
 - **macOS:** Swift и AppKit, пакет SwiftPM в [swift/](swift); распознавание в
-  процессе-хосте `SuperDictateOnnxHost` (C++-ядро в
+  процессе-хосте `LexomorphOnnxHost` (C++-ядро в
   [native/asr-runtime](native/asr-runtime), ONNX Runtime 1.23.2, CPU); LLM в
-  `SuperDictateLLMHost` (llama.cpp, loopback HTTP).
+  `LexomorphLLMHost` (llama.cpp, loopback HTTP).
 - **Windows:** Python и PySide6 в [windows/](windows), тот же ONNX-хост.
 - **Сервер синхронизации:** FastAPI и SQLite в [server/vocab-sync](server/vocab-sync).
 - Спецификации: [docs/specs](docs/specs). Порядок релизов: [docs/RELEASING.md](docs/RELEASING.md).
@@ -306,12 +306,12 @@ Windows используйте «Приложения и возможности�
 xcode-select --install
 git clone https://github.com/shohart/SuperDictate-Next.git
 cd SuperDictate-Next
-swift run -c debug --package-path swift Parakey --self-test all
-./scripts/build-app.sh ./dist/SuperDictate.app
+swift run -c debug --package-path swift Lexomorph --self-test all
+./scripts/build-app.sh ./dist/Lexomorph.app
 ```
 
 Скопированный или тестовый бандл запускать нельзя. Единственный запускаемый
-установленный бандл — `/Applications/SuperDictate.app`; для локальной установки
+установленный бандл — `/Applications/Lexomorph.app`; для локальной установки
 используйте `scripts/install-local.sh`. `--self-test` может остановить рабочий
 фоновый агент; после него проверьте, что агент запущен. Windows: см.
 [windows/README.md](windows/README.md).
@@ -341,17 +341,20 @@ swift run -c debug --package-path swift Parakey --self-test all
   2,2 ГБ резидентной памяти (с отображёнными страницами модели); сам процесс
   приложения держится около 40–60 МБ.
 
-Журналы: `~/Library/Logs/SuperDictate*` на macOS, `%LOCALAPPDATA%\SuperDictate` в
+Журналы: `~/Library/Logs/Lexomorph-*` на macOS, `%LOCALAPPDATA%\SuperDictate` в
 Windows. Не вставляйте транскрипты и аудио в публичные issue.
 
 ## Совместимость: имена, которые остались
 
-Меняется только видимое пользователю название продукта. Прежнее имя SuperDictate
-сохранено намеренно, чтобы работали обновления и ваши данные: репозиторий
-`shohart/SuperDictate-Next` и теги релизов, `/Applications/SuperDictate.app`,
-bundle ID `com.local.superdictate`, метка LaunchAgent, пути данных и журналов,
-имена файлов `SuperDictate.zip` и `SuperDictate-X.Y.Z-setup.exe`, адрес сервера
-синхронизации, переменные `SUPERDICTATE_*` и таргет SwiftPM `Parakey`.
+С версии 0.10.0 идентификаторы macOS тоже получили новое имя: `/Applications/Lexomorph.app`,
+bundle ID `com.local.lexomorph`, LaunchAgent `com.local.lexomorph.agent`, пути данных и
+журналов, ассет `Lexomorph.zip`, переменные `LEXOMORPH_*` и таргет SwiftPM `Lexomorph`.
+Для macOS это новое приложение, поэтому разрешения (микрофон, универсальный доступ,
+мониторинг ввода) нужно выдать заново; при первом запуске настройки, словарь и модели
+переносятся, а старые данные SuperDictate остаются нетронутыми для отката.
+Под прежним именем сознательно остаются: репозиторий `shohart/SuperDictate-Next`,
+адрес сервера синхронизации и сборка для Windows (`SuperDictate-X.Y.Z-setup.exe`,
+`%LOCALAPPDATA%\SuperDictate`).
 Подробности и причины: [docs/branding/MIGRATION_NOTES.md](docs/branding/MIGRATION_NOTES.md).
 Правила бренда: [docs/branding/BRAND_GUIDELINES.md](docs/branding/BRAND_GUIDELINES.md).
 
@@ -363,8 +366,8 @@ Issue и pull request приветствуются: [CONTRIBUTING.md](CONTRIBUTI
 
 ```bash
 ./scripts/check.sh
-swift run -c debug --package-path swift Parakey --self-test all
-./scripts/build-app.sh ./dist/SuperDictate.app
+swift run -c debug --package-path swift Lexomorph --self-test all
+./scripts/build-app.sh ./dist/Lexomorph.app
 ```
 
 ## Лицензия и авторство

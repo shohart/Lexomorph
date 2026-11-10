@@ -11,7 +11,7 @@ Some file and folder names still say "SuperDictate" on purpose; see
   transcription service. Recognition runs in a helper process on your CPU (on
   Windows with a supported Intel NPU, optionally on the NPU).
 - **Transcripts are stored locally, in readable form.** The dictation history
-  and settings are kept in `~/Library/Application Support/SuperDictate` (macOS)
+  and settings are kept in `~/Library/Application Support/Lexomorph` (macOS)
   or `%LOCALAPPDATA%\SuperDictate` (Windows). The history contains the dictated
   text.
 - **`DictationTrace.jsonl`.** Since 0.9.7 a local file records, for the last
@@ -19,7 +19,7 @@ Some file and folder names still say "SuperDictate" on purpose; see
   and the final text. It stays on your computer. Delete it if you do not want it.
 - **Replacement dictionary and ASR terms** are stored locally
   (`corrections.sqlite` on macOS).
-- **Diagnostic logs** are in `~/Library/Logs/SuperDictate*` (macOS). They are
+- **Diagnostic logs** are in `~/Library/Logs/Lexomorph-*` (macOS). They are
   not guaranteed to be free of transcript text; do not paste logs publicly
   without reading them.
 - **Interrupted recordings.** If the app crashes, the unfinished audio is kept
