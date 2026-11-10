@@ -29,7 +29,7 @@ What you expected to happen.
 
 ## 📋 Logs
 
-Please attach relevant excerpts from `~/Library/Logs/Lexomorph-*` (macOS) or `%LOCALAPPDATA%\SuperDictate` (Windows, the Windows folder keeps the old name).
+Please attach relevant excerpts from `~/Library/Logs/Lexomorph-*` (macOS) or `%LOCALAPPDATA%\Lexomorph\Logs` (Windows).
 
 ⚠️ **Do not paste transcript text, audio, or anything private** — see
 [SECURITY.md](../../SECURITY.md) and [PRIVACY.md](../../PRIVACY.md).

@@ -1,13 +1,16 @@
 # 📜 Attribution
 
-SuperDictate is derived from
+Lexomorph (formerly SuperDictate Next, and before that SuperDictate-Intel and
+SuperDictate) is derived from
 [Parakey](https://github.com/rcourtman/parakey), originally created by
-Richard Courtman and distributed under the MIT License.
+Richard Courtman and distributed under the MIT License. The intermediate fork,
+[SuperDictate](https://github.com/shlgd/SuperDictate), is by shlgd. The product
+was renamed to Lexomorph in 0.10.0; the credits do not change with the name.
 
 The original copyright notice and license are preserved in `LICENSE`.
-SuperDictate includes substantial product, interface, service-management,
-history, statistics, and dictation-workflow modifications by the SuperDictate
-contributors.
+Lexomorph includes substantial product, interface, service-management,
+history, statistics, and dictation-workflow modifications by the SuperDictate and
+Lexomorph contributors.
 
 Speech recognition runs locally through ONNX Runtime (see the ONNX ASR
 runtime section below). Pause detection uses the Silero VAD port from
