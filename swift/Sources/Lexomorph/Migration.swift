@@ -357,7 +357,7 @@ enum LegacyMigration {
 
 /// Runs before any delegate (and so `Settings.shared`) exists.
 func runLegacyMigrationAtLaunch() {
-    guard let config = LegacyMigration.production() else { return }
+    guard let config = LegacyMigrationConfig.production() else { return }
     let report = LegacyMigration.run(config)
     if report.lockTimedOut {
         log("migration: another process holds the migration lock; continuing without migrating")
@@ -369,9 +369,9 @@ func runLegacyMigrationAtLaunch() {
 
 /// Agent only: Keychain token on a background queue, then the one-time notice.
 func startLegacyMigrationFollowUps(language: @escaping @Sendable () -> InterfaceLanguage) {
-    guard LegacyMigration.production() != nil else { return }
+    guard LegacyMigrationConfig.production() != nil else { return }
     DispatchQueue.global(qos: .utility).async {
-        guard let config = LegacyMigration.production() else { return }
+        guard let config = LegacyMigrationConfig.production() else { return }
         let outcome = LegacyMigration.migrateKeychain(
             config,
             legacyStore: KeychainVocabularySyncTokenStore(service: LegacyIdentifiers.keychainService),
@@ -380,7 +380,7 @@ func startLegacyMigrationFollowUps(language: @escaping @Sendable () -> Interface
         log("migration: sync token \(outcome)")
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-        guard let config = LegacyMigration.production(),
+        guard let config = LegacyMigrationConfig.production(),
               LegacyMigration.consumeFirstRunNotice(config) else { return }
         MainActor.assumeIsolated {
             presentLegacyMigrationNotice(language: language())
