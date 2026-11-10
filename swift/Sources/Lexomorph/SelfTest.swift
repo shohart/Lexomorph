@@ -1,0 +1,10711 @@
+// Lexomorph — push-to-talk dictation for macOS.
+//
+// Swift menu-bar app. The runtime covers hotkey capture (`CGEventTap`), audio capture
+// (`AVAudioEngine`), transcription (Parakeet via ONNX Runtime in the
+// LexomorphOnnxHost helper, CPU only — the GPU is for the LLM host),
+// paste-at-cursor (`NSPasteboard` + `CGEvent`),
+// system-audio mute (`NSAppleScript`), menu-bar UI, settings,
+// rolling history, in-app updater, and permission guidance.
+//
+// Section comments (`// MARK: -`) tag every major region; Cmd+Ctrl+Up
+// in Xcode jumps between them. Keep them honest as you edit.
+//
+// Architectural invariants the build relies on are documented in
+// ../../../AGENTS.md — read that before refactoring concurrency,
+// resource loading, or codesigning. In particular:
+//   - `AudioCapture` is *not* @MainActor (AVAudioEngine tap fires on
+//     an audio thread; main-actor entry would SIGTRAP under Swift 6
+//     strict concurrency).
+//   - `AVAudioConverter` inputBlock must return .noDataNow, never
+//     .endOfStream — the latter puts the converter in a terminal
+//     state and every press after the first captures silence.
+//   - Resources are loaded via `Bundle.main`, never `Bundle.module`
+//     — SwiftPM's auto-generated resource bundle has no Info.plist
+//     and breaks `codesign --deep`.
+
+import AppKit
+import AVFoundation
+import AudioToolbox
+import Foundation
+import CoreGraphics
+import silero_vad
+import SQLite3
+import CryptoKit
+import Darwin
+import ApplicationServices
+import IOKit
+import QuartzCore
+import ServiceManagement
+import UniformTypeIdentifiers
+
+#if DEBUG
+private enum SelfTestFailure: Error, CustomStringConvertible {
+    case failed(String)
+
+    var description: String {
+        switch self {
+        case .failed(let message): return message
+        }
+    }
+}
+
+enum LexomorphSelfTest {
+    static func run(arguments: [String]) -> Int32? {
+        guard arguments.count >= 2, arguments[0] == "--self-test" else { return nil }
+        guard arguments.count == 2 else { return fail("usage") }
+
+        switch arguments[1] {
+        case "hotkey":
+            return runSuite("hotkey", testHotkey)
+        case "readiness":
+            return runSuite("readiness", testReadiness)
+        case "paste":
+            return runSuite("paste", testPasteSuffixFormatting)
+        case "paste-transient-marking":
+            return runSuite("paste-transient-marking", testClipboardPasteInserterTransientMarking)
+        case "paste-confirmation":
+            return runSuite("paste-confirmation", testPasteConfirmationPoller)
+        case "paste-restore":
+            return runSuite("paste-restore", testClipboardPasteInserterRestore)
+        case "history":
+            return runSuite("history", testRecentTranscriptLimit)
+        case "statistics":
+            return runSuite("statistics", testDictationUsageStatistics)
+        case "corrections":
+            return runSuite("corrections", testTranscriptCorrections)
+        case "vocabulary-store":
+            return runSuite("vocabulary-store", testVocabularyStore)
+        case "asr-hotwords":
+            return runSuite("asr-hotwords", testAsrHotwords)
+        case "hotword-sync":
+            return runSuite("hotword-sync", testHotwordSync)
+        case "sync-modes-usage":
+            return runSuite("sync-modes-usage", testSyncModesAndUsage)
+        case "vocabulary-hygiene":
+            return runSuite("vocabulary-hygiene", testVocabularyHygiene)
+        case "vocabulary-cleanup-dry-run":
+            // Prints the cleanup plan for a COPY of a corrections.sqlite
+            // at SD_VOCAB_CLEANUP_DB; never applies it. Not part of `all`.
+            return runSuite("vocabulary-cleanup-dry-run", testVocabularyCleanupDryRun)
+        case "vocabulary-sync":
+            // Needs a local server-side instance (server/vocab-sync) at
+            // SD_VOCAB_SYNC_TEST_URL; not part of `all`.
+            return runSuite("vocabulary-sync", testVocabularySync)
+        case "llm-prompt-dump":
+            // Writes the correction prompt as JSON to SD_LLM_PROMPT_DUMP, for
+            // replaying texts against a running host; not part of `all`.
+            return runSuite("llm-prompt-dump", dumpCorrectionPrompt)
+        case "dictation-trace":
+            return runSuite("dictation-trace", testDictationTrace)
+        case "hotword-window":
+            return runSuite("hotword-window", testHotwordWindow)
+        case "hotword-sync-cross":
+            // Against a real server and account from the environment, for a
+            // check with the Windows client; not part of `all`.
+            return runSuite("hotword-sync-cross", testHotwordSyncCross)
+        case "vocabulary-learning":
+            return runSuite("vocabulary-learning", testLearnCandidateDetector)
+        case "insertion-anchor":
+            return runSuite("insertion-anchor", testInsertionAnchor)
+        case "fillers":
+            return runSuite("fillers", testFillerWordRemoval)
+        case "filler-word-presets-custom-words":
+            return runSuite("filler-word-presets-custom-words", testFillerWordRemoverPresetsAndCustomWords)
+        case "audio-level":
+            return runSuite("audio-level", testAudioLevelMetering)
+        case "audio-conversion":
+            return runSuite("audio-conversion", testAudioConversion)
+        case "audio-input":
+            return runSuite("audio-input", testAudioInputDeviceFiltering)
+        case "audio-input-live":
+            return runSuite("audio-input-live", testLiveAudioInputEnumeration)
+        case "model-status":
+            return runSuite("model-status", testSpeechModelStartupStatus)
+        case "audio-route":
+            return runSuite("audio-route", testAudioRouteChangeDecision)
+        case "recording-lifecycle":
+            return runSuite("recording-lifecycle", testRecordingLifecycle)
+        case "power-state":
+            return runSuite("power-state", testPowerStateRecoveryDecision)
+        case "model-integrity":
+            return runSuite("model-integrity", testModelIntegrity)
+        case "update":
+            return runSuite("update", testUpdate)
+        case "hostile-env":
+            return runSuite("hostile-env", testHostileRegistryEnvDetection)
+        case "logging":
+            return runSuite("logging", testPrivateLogAppend)
+        case "diagnostics":
+            return runSuite("diagnostics", testDiagnostics)
+        case "agent-identity":
+            return runSuite("agent-identity", testAgentIdentity)
+        case "legacy-migration":
+            return runSuite("legacy-migration", testLegacyMigration)
+        case "interface-language-default":
+            return runSuite("interface-language-default", testInterfaceLanguageDefault)
+        case "insertion-target":
+            return runSuite("insertion-target", testInsertionTargetTracking)
+        case "insertion-target-live":
+            return runSuite("insertion-target-live", testLiveInsertionTargetProbe)
+        case "insertion-target-ax-override":
+            return runSuite("insertion-target-ax-override", testInsertionTargetAXOverride)
+        case "pid-debouncer":
+            return runSuite("pid-debouncer", testPIDDebouncer)
+        case "text-insertion-target-store":
+            return runSuite("text-insertion-target-store", testPendingTextInsertionTargetStore)
+        case "text-insertion-routing":
+            return runSuite("text-insertion-routing", testTextInsertionRouting)
+        case "asr-thread-policy":
+            return runSuite("asr-thread-policy", testASRThreadPolicy)
+        case "llm-gpu-probe":
+            return runSuite("llm-gpu-probe", testLLMGPUProbe)
+        case "silero-vad-bridge":
+            return runSuite("silero-vad-bridge", testSileroVadBridge)
+        case "silero-vad-real":
+            return runSuite("silero-vad-real", testSileroVadRealModel)
+        case "pause-segmentation":
+            return runSuite("pause-segmentation", testPauseSegmentation)
+        case "incremental-transcription":
+            return runSuite("incremental-transcription", testIncrementalTranscription)
+        case "overlap-windowing":
+            return runSuite("overlap-windowing", testOverlapWindowing)
+        case "segmented-transcription":
+            return runSuite("segmented-transcription", testSegmentedTranscription)
+        case "seam-dedup":
+            return runSuite("seam-dedup", testSeamDedup)
+        case "overlap-assembly":
+            return runSuite("overlap-assembly", testOverlapAssembly)
+        case "overlap-transcription-real":
+            return runSuite("overlap-transcription-real", testOverlapTranscriptionRealModel)
+        case "boundary-oracle":
+            return runSuite("boundary-oracle", testBoundaryOracle)
+        case "vad-boundary-oracle":
+            return runSuite("vad-boundary-oracle", testVadBoundaryOracle)
+        case "vad-boundary-oracle-real":
+            return runSuite("vad-boundary-oracle-real", testVadBoundaryOracleRealModel)
+        case "parakeet-text-repair":
+            return runSuite("parakeet-text-repair", testParakeetTranscriptRepair)
+        case "russian-number-itn-cardinal":
+            return runSuite("russian-number-itn-cardinal", testRussianNumberITNCardinal)
+        case "russian-number-itn-ordinal":
+            return runSuite("russian-number-itn-ordinal", testRussianNumberITNOrdinal)
+        case "russian-number-itn-context":
+            return runSuite("russian-number-itn-context", testRussianNumberITNContext)
+        case "russian-number-itn-punctuation":
+            return runSuite("russian-number-itn-punctuation", testRussianNumberITNPunctuation)
+        case "russian-number-itn-pipeline":
+            return runSuite("russian-number-itn-pipeline", testProcessedDictationTextITN)
+        case "token-transcription-decode":
+            return runSuite("token-transcription-decode", testTokenTranscriptionDecode)
+        case "recording-hud-display-mode":
+            return runSuite("recording-hud-display-mode", testRecordingHUDDisplayMode)
+        case "recording-hud-elapsed-format":
+            return runSuite("recording-hud-elapsed-format", testFormatRecordingHUDElapsed)
+        case "recording-hud-outline-path":
+            return runSuite("recording-hud-outline-path", testRecordingHUDOutlineFillPath)
+        case "filler-word-preset-defaults":
+            return runSuite("filler-word-preset-defaults", testFillerWordPresetDefaults)
+        case "enabled-filler-preset-keys-setting":
+            return runSuite("enabled-filler-preset-keys-setting", testEnabledFillerPresetKeysSetting)
+        case "silence-auto-stop-tracker":
+            return runSuite("silence-auto-stop-tracker", testSilenceAutoStopTracker)
+        case "disabled-custom-filler-words":
+            return runSuite("disabled-custom-filler-words", testDisabledCustomFillerWords)
+        case "recording-hud-accent-color-resolved":
+            return runSuite("recording-hud-accent-color-resolved", testRecordingHUDAccentColorResolvedColor)
+        case "asr-thread-policy":
+            return runSuite("asr-thread-policy", testASRThreadPolicy)
+        case "llm-unload-delay":
+            return runSuite("llm-unload-delay", testLLMPostprocessingDelayedUnload)
+        case "llm-guardrail":
+            return runSuite("llm-guardrail", testLLMCorrectionGuardrail)
+        case "llm-rewrite-settings":
+            return runSuite("llm-rewrite-settings", testRewriteAndTierSettings)
+        case "llm-proxy-policy":
+            return runSuite("llm-proxy-policy", testLLMProxyPolicy)
+        case "punctuation-settings":
+            return runSuite("punctuation-settings", testPunctuationSettings)
+        case "punctuation-real":
+            return runSuite("punctuation-real", testPunctuationRestorationReal)
+        case "llm-gec":
+            return runSuite("llm-gec", testLLMGECIntegration)
+        case "llm-rewrite":
+            return runSuite("llm-rewrite", testLLMRewriteIntegration)
+        case "llm-prefix-primer":
+            return runSuite("llm-prefix-primer", testLLMPrefixPrimer)
+        case "full-pipeline":
+            return runSuite("full-pipeline", testFullDictationPipelineWithLLMCorrection)
+        case "silero-vad-download":
+            return runSuite("silero-vad-download", testSileroVadModelDownload)
+        case "onnx-asr":
+            return runSuite("onnx-asr", testOnnxAsr)
+        case "onnx-asr-real":
+            return runSuite("onnx-asr-real", testOnnxAsrRealModel)
+        case "all":
+            return runSuite("all", testAll)
+        default:
+            return fail("unknown")
+        }
+    }
+
+    private static func runSuite(_ name: String, _ body: () throws -> Void) -> Int32 {
+        do {
+            try body()
+            print("PASS \(name)")
+            return EXIT_SUCCESS
+        } catch {
+            print("FAIL \(name): \(error)")
+            return EXIT_FAILURE
+        }
+    }
+
+    private static func fail(_ message: String) -> Int32 {
+        print("FAIL self-test: \(message)")
+        return EXIT_FAILURE
+    }
+
+    private static func testAll() throws {
+        try testHotkey()
+        try testAgentIdentity()
+        try testLegacyMigration()
+        try testInterfaceLanguageDefault()
+        try testOnnxAsr()
+        try testReadiness()
+        try testPasteSuffixFormatting()
+        try testClipboardPasteInserterTransientMarking()
+        try testPasteConfirmationPoller()
+        try testClipboardPasteInserterRestore()
+        try testRecentTranscriptLimit()
+        try testRecordingHUDDisplayMode()
+        try testFormatRecordingHUDElapsed()
+        try testRecordingHUDOutlineFillPath()
+        try testDictationUsageStatistics()
+        try testTranscriptCorrections()
+        try testVocabularyStore()
+        try testAsrHotwords()
+        try testHotwordSync()
+        try testSyncModesAndUsage()
+        try testHotwordWindow()
+        try testDictationTrace()
+        try testVocabularyHygiene()
+        try testLearnCandidateDetector()
+        try testFillerWordRemoval()
+        try testFillerWordRemoverPresetsAndCustomWords()
+        try testFillerWordPresetDefaults()
+        try testEnabledFillerPresetKeysSetting()
+        try testSilenceAutoStopTracker()
+        try testDisabledCustomFillerWords()
+        try testRecordingHUDAccentColorResolvedColor()
+        try testAudioLevelMetering()
+        try testAudioConversion()
+        try testAudioInputDeviceFiltering()
+        try testSpeechModelStartupStatus()
+        try testAudioRouteChangeDecision()
+        try testRecordingLifecycle()
+        try testPowerStateRecoveryDecision()
+        try testModelIntegrity()
+        try testUpdate()
+        try testHostileRegistryEnvDetection()
+        try testPrivateLogAppend()
+        try testDiagnostics()
+        try testInsertionTargetTracking()
+        try testPendingTextInsertionTargetStore()
+        try testInsertionTargetAXOverride()
+        try testPIDDebouncer()
+        try testTextInsertionRouting()
+        try testParakeetTranscriptRepair()
+        try testLLMPostprocessingDelayedUnload()
+        try testLLMCorrectionGuardrail()
+        try testRewriteAndTierSettings()
+        try testLLMProxyPolicy()
+        try testPunctuationSettings()
+        try testRussianNumberITNCardinal()
+        try testRussianNumberITNOrdinal()
+        try testRussianNumberITNContext()
+        try testRussianNumberITNPunctuation()
+        try testProcessedDictationTextITN()
+        try testASRThreadPolicy()
+        try testLLMGPUProbe()
+        try testSileroVadBridge()
+        try testPauseSegmentation()
+        try testOverlapWindowing()
+        try testIncrementalTranscription()
+        try testSegmentedTranscription()
+        try testSeamDedup()
+        try testOverlapAssembly()
+        try testTokenTranscriptionDecode()
+        try testBoundaryOracle()
+        try testVadBoundaryOracle()
+    }
+
+    /// Covers `textInsertionRoute(for:targetElementStillValid:)` — the
+    /// actual decision logic handleRelease() runs after trying
+    /// TextInsertionService, including the case a prior version of this
+    /// integration got wrong: `.noSupportedInsertionMethod` with a dead AX
+    /// element (the SwiftBar-popover-closed case, where the *process*
+    /// stays alive so `TextInsertionService` itself reports
+    /// `.noSupportedInsertionMethod` rather than `.targetNoLongerValid`)
+    /// must abort to clipboard, not fall back to the global mechanism —
+    /// falling back there would silently insert into whatever app is now
+    /// frontmost.
+    private static func testTextInsertionRouting() throws {
+        try expect(textInsertionRoute(for: nil, targetElementStillValid: true), equals: .fallBackToGlobalInsertion,
+                   "no resolved target at all should go straight to the global mechanism")
+
+        for success: TextInsertionResult in [.insertedUsingSelectedText, .insertedUsingValueAndRange, .insertedUsingKeyboardEvents] {
+            try expect(textInsertionRoute(for: success, targetElementStillValid: true), equals: .usedFocusedTarget,
+                       "a successful tier result should be treated as success regardless of element-liveness")
+        }
+
+        try expect(textInsertionRoute(for: .failed(.targetNoLongerValid), targetElementStillValid: true),
+                   equals: .abortToClipboard,
+                   "TextInsertionService's own targetNoLongerValid (dead process) must abort, not fall back")
+
+        try expect(textInsertionRoute(for: .failed(.noSupportedInsertionMethod), targetElementStillValid: false),
+                   equals: .abortToClipboard,
+                   "all tiers failing against a dead AX element (process alive, element gone — the SwiftBar popover-closed case) must abort, not fall back")
+
+        try expect(textInsertionRoute(for: .failed(.noSupportedInsertionMethod), targetElementStillValid: true),
+                   equals: .fallBackToGlobalInsertion,
+                   "all tiers failing against a still-live element (e.g. a read-only field) should fall back, not abort")
+
+        try expect(textInsertionRoute(for: .failed(.accessibilityError(operation: "test", error: .failure)), targetElementStillValid: true),
+                   equals: .fallBackToGlobalInsertion,
+                   "a live-element AX error other than targetNoLongerValid should fall back")
+        try expect(textInsertionRoute(for: .failed(.accessibilityError(operation: "test", error: .failure)), targetElementStillValid: false),
+                   equals: .abortToClipboard,
+                   "a dead-element AX error other than targetNoLongerValid should still abort")
+    }
+
+    /// Covers the press → release lifecycle of `pendingTextInsertionTarget`
+    /// (LexomorphApp): captured on hotkey press, consumed exactly once at
+    /// insertion time, and cleared afterward so a stale/previous session's
+    /// target can never leak into the next dictation. Exercises
+    /// `PendingTextInsertionTargetStore` directly rather than going through
+    /// `LexomorphApp.handlePress`/`handleRelease`, which pull in the audio
+    /// engine, hotkey registration, and menu bar — not something a headless
+    /// self-test should stand up. `AXUIElementCreateSystemWide()` needs no
+    /// Accessibility permission to construct (only to query attributes on
+    /// it), so this runs unconditionally, unlike `insertion-target-live`.
+    private static func testPendingTextInsertionTargetStore() throws {
+        let systemWide = AXUIElementCreateSystemWide()
+        let fakeTarget = FocusedTextTarget(
+            application: systemWide,
+            element: systemWide,
+            applicationPID: 4242,
+            elementPID: 4242,
+            applicationName: "self-test",
+            role: "AXTextArea",
+            subrole: nil
+        )
+
+        var store = PendingTextInsertionTargetStore()
+        try expect(store.target == nil, equals: true,
+                   "a freshly constructed store should start empty (nothing captured yet)")
+
+        // handlePress(): resolver succeeds, target captured.
+        store.capture(fakeTarget)
+        guard let capturedTarget = store.target else {
+            throw SelfTestFailure.failed("capture() should store the resolved target for handleRelease() to consume")
+        }
+        try expect(capturedTarget.applicationPID, equals: fakeTarget.applicationPID,
+                   "captured target should match what was passed to capture()")
+
+        // handleRelease(): consume() hands the target to the insertion call
+        // site and clears it in the same step — a one-shot use per
+        // dictation, per the bug report's explicit requirement not to
+        // reuse a stale target for a later, unrelated dictation.
+        guard let consumed = store.consume() else {
+            throw SelfTestFailure.failed("consume() should return the target captured at press time")
+        }
+        try expect(consumed.applicationPID, equals: fakeTarget.applicationPID,
+                   "consume() should return the same target that was captured")
+        try expect(store.target == nil, equals: true,
+                   "consume() must clear the store as a side effect")
+
+        // A second consume() (e.g. a stray retry) must not resurrect the
+        // already-used target.
+        try expect(store.consume() == nil, equals: true,
+                   "consuming an already-emptied store should yield nil, not the previous target")
+
+        // handlePress() for the NEXT dictation: capture(nil) is what
+        // captureTextInsertionTargetForNextDictation() does immediately,
+        // before the async AX resolution completes — simulates the
+        // resolver failing/still-in-flight case, which must fall back to
+        // the pre-existing global-post mechanism rather than reusing
+        // anything from the previous session.
+        store.capture(nil)
+        try expect(store.consume() == nil, equals: true,
+                   "a press with no resolved target must leave nothing for release to consume")
+    }
+
+    /// Covers `insertionTargetQueryContext(overriding:withAXFocusedApplication:)`
+    /// -- the pure merge decision behind the SwiftBar-popover HUD fix -- with
+    /// synthetic pid/name/bundleIdentifier values, so it needs neither real
+    /// Accessibility permission nor a live focus-divergent target (that's
+    /// what `insertion-target-live` is for). See
+    /// `FocusedInsertionTargetTracker.query` for the real caller.
+    private static func testInsertionTargetAXOverride() throws {
+        func baseContext(pid: pid_t = 111, clickPoint: NSPoint? = NSPoint(x: 10, y: 20)) -> InsertionTargetQueryContext {
+            InsertionTargetQueryContext(
+                applicationPID: pid,
+                applicationName: "Terminal",
+                bundleIdentifier: "com.apple.Terminal",
+                screens: [],
+                coordinateReferenceMaxY: 1_080,
+                lastClickPoint: clickPoint
+            )
+        }
+
+        // No AX resolution available (permission missing, resolver threw,
+        // etc.) -- must fall back to the NSWorkspace-derived context
+        // completely unchanged, including its lastClickPoint.
+        let noResolution = insertionTargetQueryContext(overriding: baseContext(), withAXFocusedApplication: nil)
+        try expect(noResolution.applicationPID, equals: 111,
+                   "nil AX resolution must leave context untouched")
+        try expect(noResolution.lastClickPoint != nil, equals: true,
+                   "nil AX resolution must not drop the click-point cache")
+
+        // AX-resolved app agrees with NSWorkspace's frontmost app -- the
+        // common, non-popover case. Must also pass through unchanged,
+        // confirming this fix cannot alter behavior when there's no
+        // divergence to correct.
+        let agreeing = insertionTargetQueryContext(
+            overriding: baseContext(),
+            withAXFocusedApplication: (pid: 111, name: "Terminal", bundleIdentifier: "com.apple.Terminal")
+        )
+        try expect(agreeing.applicationPID, equals: 111, "agreeing AX resolution must leave context untouched")
+        try expect(agreeing.lastClickPoint != nil, equals: true,
+                   "agreeing AX resolution must not drop the click-point cache")
+
+        // AX-resolved app DISAGREES with NSWorkspace's frontmost app -- the
+        // SwiftBar-popover case: NSWorkspace still reports the previously
+        // frontmost app (here, "Terminal", pid 111) while AX focus has
+        // moved to the popover (pid 222). The override must win, and the
+        // stale click-point cache (captured against pid 111) must be
+        // dropped rather than hit-tested against the wrong window.
+        let overridden = insertionTargetQueryContext(
+            overriding: baseContext(),
+            withAXFocusedApplication: (pid: 222, name: "SwiftBar", bundleIdentifier: "com.ameba.SwiftBar")
+        )
+        try expect(overridden.applicationPID, equals: 222,
+                   "diverging AX resolution should override the NSWorkspace-derived pid")
+        try expect(overridden.applicationName, equals: "SwiftBar",
+                   "diverging AX resolution should override the application name")
+        try expect(overridden.bundleIdentifier, equals: "com.ameba.SwiftBar",
+                   "diverging AX resolution should override the bundle identifier")
+        try expect(overridden.lastClickPoint == nil, equals: true,
+                   "an overridden context must drop the click-point cache -- it was captured against the wrong (pre-override) pid")
+        try expect(overridden.screens.count, equals: baseContext().screens.count,
+                   "overriding application identity must not disturb the screen geometry carried over from context")
+        try expect(overridden.coordinateReferenceMaxY, equals: baseContext().coordinateReferenceMaxY,
+                   "overriding application identity must not disturb coordinateReferenceMaxY carried over from context")
+
+        // Resolved name/bundleIdentifier can themselves be nil (e.g.
+        // NSRunningApplication lookup failed) even though the pid
+        // genuinely differs -- must still override the pid, falling back
+        // to context's own name/bundleIdentifier for the fields AX/NSRunningApplication
+        // couldn't supply, rather than losing the override entirely.
+        let partialResolution = insertionTargetQueryContext(
+            overriding: baseContext(),
+            withAXFocusedApplication: (pid: 222, name: nil, bundleIdentifier: nil)
+        )
+        try expect(partialResolution.applicationPID, equals: 222,
+                   "a pid-only AX resolution should still override, even without name/bundleIdentifier")
+        try expect(partialResolution.applicationName, equals: "Terminal",
+                   "missing resolved name should fall back to context's own name")
+        try expect(partialResolution.bundleIdentifier, equals: "com.apple.Terminal",
+                   "missing resolved bundleIdentifier should fall back to context's own bundleIdentifier")
+    }
+
+    /// Covers `PIDDebouncer` -- the hysteresis behind
+    /// `FocusedInsertionTargetTracker`'s AX-override, which must not react
+    /// to a single, transient diverging pid observation (see the review
+    /// finding it was added for: without it, a one-off AX focus blip could
+    /// yank the HUD away from an already-correct target mid-recording).
+    private static func testPIDDebouncer() throws {
+        var debouncer = PIDDebouncer(requiredConsecutiveMatches: 2)
+
+        try expect(debouncer.observe(222) == nil, equals: true,
+                   "a single observation must not confirm yet -- requires 2 consecutive matches")
+        try expect(debouncer.observe(222) == 222, equals: true,
+                   "the same pid observed twice in a row should confirm")
+        try expect(debouncer.observe(222) == 222, equals: true,
+                   "once confirmed, continuing to observe the same pid should keep confirming it")
+
+        // A transient blip to a DIFFERENT pid, then back to the original --
+        // must not spuriously confirm the blip, and returning to the
+        // original pid afterward must start its confirmation progress
+        // over from scratch, not resume from wherever it left off before
+        // the blip.
+        debouncer.reset()
+        try expect(debouncer.observe(111) == nil, equals: true, "first observation of a new pid never confirms immediately")
+        try expect(debouncer.observe(333) == nil, equals: true,
+                   "a single-tick blip to a different pid must not confirm -- it resets progress toward the original pid too")
+        try expect(debouncer.observe(111) == nil, equals: true,
+                   "returning to the original pid after a blip is a fresh first observation, not a continuation -- must not confirm immediately")
+        try expect(debouncer.observe(111) == 111, equals: true,
+                   "the original pid confirms once it's been seen twice in a row again, after the blip")
+
+        // A genuine, sustained switch to a different pid (no return to the
+        // original) -- the new pid must confirm after its own 2
+        // consecutive observations, exactly like any other pid.
+        debouncer.reset()
+        try expect(debouncer.observe(444) == nil, equals: true, "first observation before a sustained switch")
+        try expect(debouncer.observe(666) == nil, equals: true,
+                   "switching to a different pid must not confirm immediately -- it resets progress toward the new pid too")
+        try expect(debouncer.observe(666) == 666, equals: true,
+                   "the new pid confirms once it's been seen twice in a row")
+
+        // nil observation (AX resolution failed, or agreement with
+        // context -- both surfaced as nil by the caller) must reset
+        // progress, not be silently ignored.
+        debouncer.reset()
+        _ = debouncer.observe(444)
+        try expect(debouncer.observe(nil) == nil, equals: true, "a nil observation never confirms")
+        try expect(debouncer.observe(444) == nil, equals: true,
+                   "a nil observation in between must reset progress -- this is the pid's first observation again, not its second")
+        try expect(debouncer.observe(444) == 444, equals: true,
+                   "444 confirms after being seen twice in a row following the reset")
+
+        // Explicit reset() (called at the start of each new recording)
+        // must clear any lingering progress from a previous session.
+        debouncer.reset()
+        _ = debouncer.observe(555)
+        debouncer.reset()
+        try expect(debouncer.observe(555) == nil, equals: true,
+                   "reset() must clear prior progress -- 555 needs 2 fresh observations, not 1, after a reset")
+        try expect(debouncer.observe(555) == 555, equals: true, "555 confirms on its second observation after the reset")
+    }
+
+    private static func testInsertionTargetTracking() throws {
+        func target(pid: pid_t, window: UInt, element: UInt) -> FocusedInsertionTargetFrame {
+            FocusedInsertionTargetFrame(
+                frame: NSRect(x: 100, y: 100, width: 2, height: 18),
+                visualFrame: NSRect(x: 80, y: 80, width: 300, height: 48),
+                resolutionKind: "self-test",
+                identity: FocusedInsertionTargetIdentity(
+                    applicationPID: pid,
+                    windowToken: window,
+                    elementToken: element
+                )
+            )
+        }
+
+        let first = target(pid: 10, window: 1, element: 1)
+        let secondField = target(pid: 10, window: 1, element: 2)
+        let otherApp = target(pid: 20, window: 2, element: 1)
+        var stabilizer = RecordingHUDTargetStabilizer()
+        stabilizer.reset(initialApplicationPID: 10)
+
+        switch stabilizer.observe(first) {
+        case .switchTarget(let accepted):
+            try expect(accepted.identity, equals: first.identity,
+                       "initial target from the starting app should be accepted immediately")
+        default:
+            throw SelfTestFailure.failed("initial insertion target was not accepted")
+        }
+
+        switch stabilizer.observe(first) {
+        case .update(let accepted):
+            try expect(accepted.identity, equals: first.identity,
+                       "the confirmed insertion target should update without another switch")
+        default:
+            throw SelfTestFailure.failed("confirmed insertion target did not produce an update")
+        }
+
+        if case .none = stabilizer.observe(secondField) {
+            // Expected: a new field in the same app needs two matching observations.
+        } else {
+            throw SelfTestFailure.failed("same-app target switched without confirmation")
+        }
+        switch stabilizer.observe(secondField) {
+        case .switchTarget(let accepted):
+            try expect(accepted.identity, equals: secondField.identity,
+                       "same-app target should switch after confirmation")
+        default:
+            throw SelfTestFailure.failed("same-app target did not switch after confirmation")
+        }
+
+        for attempt in 1...2 {
+            if case .none = stabilizer.observe(otherApp) {
+                continue
+            }
+            throw SelfTestFailure.failed("cross-app target switched on observation \(attempt)")
+        }
+        switch stabilizer.observe(otherApp) {
+        case .switchTarget(let accepted):
+            try expect(accepted.identity, equals: otherApp.identity,
+                       "cross-app target should switch after three stable observations")
+        default:
+            throw SelfTestFailure.failed("cross-app target did not switch after confirmation")
+        }
+
+        if case .none = stabilizer.observe(nil) {
+            // A missing AX sample must not discard the confirmed target.
+        } else {
+            throw SelfTestFailure.failed("missing target unexpectedly changed HUD ownership")
+        }
+        switch stabilizer.observe(otherApp) {
+        case .update:
+            break
+        default:
+            throw SelfTestFailure.failed("confirmed target was lost after one missing AX sample")
+        }
+
+        let screen = InsertionTargetScreenGeometry(
+            frame: NSRect(x: 0, y: 0, width: 1_920, height: 1_080),
+            visibleFrame: NSRect(x: 0, y: 0, width: 1_920, height: 1_055)
+        )
+        let context = InsertionTargetQueryContext(
+            applicationPID: 10,
+            applicationName: "self-test",
+            bundleIdentifier: "self-test",
+            screens: [screen],
+            coordinateReferenceMaxY: screen.frame.maxY,
+            lastClickPoint: nil
+        )
+        let documentFrame = NSRect(x: 560, y: 150, width: 946, height: 698)
+        let caretFrame = NSRect(x: 582, y: 419, width: 2, height: 17)
+        let documentVisualFrame = FocusedInsertionTargetLocator.visualTargetFrame(
+            elementFrame: documentFrame,
+            caretFrame: caretFrame,
+            context: context
+        )
+        try expect(documentVisualFrame.minX, equals: documentFrame.minX,
+                   "large editors should retain their block's left edge")
+        try expect(documentVisualFrame.minY, equals: caretFrame.minY,
+                   "large editors should anchor vertically to the caret line")
+        try expect(documentVisualFrame.height, equals: caretFrame.height,
+                   "large editors should not place the HUD above the whole document")
+
+        let compactFrame = NSRect(x: 700, y: 120, width: 720, height: 96)
+        try expect(
+            FocusedInsertionTargetLocator.visualTargetFrame(
+                elementFrame: compactFrame,
+                caretFrame: NSRect(x: 720, y: 150, width: 2, height: 18),
+                context: context
+            ),
+            equals: compactFrame,
+            "compact composers should keep the HUD above the whole input block"
+        )
+    }
+
+    private static func testLiveInsertionTargetProbe() throws {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            throw SelfTestFailure.failed("frontmost application unavailable")
+        }
+        let screens = NSScreen.screens.map {
+            InsertionTargetScreenGeometry(frame: $0.frame, visibleFrame: $0.visibleFrame)
+        }
+        let context = InsertionTargetQueryContext(
+            applicationPID: app.processIdentifier,
+            applicationName: app.localizedName ?? "unknown",
+            bundleIdentifier: app.bundleIdentifier ?? "unknown",
+            screens: screens,
+            coordinateReferenceMaxY: screens.first?.frame.maxY ?? 0,
+            lastClickPoint: nil
+        )
+        let result = FocusedInsertionTargetLocator.query(context: context)
+        try expect(result.applicationPID, equals: app.processIdentifier,
+                   "live target query should preserve the requested application")
+        try expect(result.diagnostic.isEmpty, equals: false,
+                   "live target query should always explain its result")
+        let targetSummary = result.target.map {
+            "\($0.resolutionKind) frame=\(NSStringFromRect($0.frame)) visual=\(NSStringFromRect($0.visualFrame))"
+        } ?? "unavailable"
+        print("AX_PROBE \(result.applicationName) (\(result.bundleIdentifier)): \(targetSummary); \(result.diagnostic)")
+    }
+
+    private static func testPrivateLogAppend() throws {
+        try expect(
+            privacySafeLogPath("/Users/example/Documents/Lexomorph Diagnostics.txt"),
+            equals: "Lexomorph Diagnostics.txt",
+            "log path labels should omit parent directories"
+        )
+        try expect(
+            privacySafeLogPath("/"),
+            equals: "<local path>",
+            "log path labels should fall back when no filename is available"
+        )
+        try expect(
+            privacySafeBundlePath("/Applications/Lexomorph.app"),
+            equals: "/Applications/Lexomorph.app",
+            "bundle path labels should keep the canonical install path"
+        )
+        try expect(
+            privacySafeBundlePath("/Users/example/Downloads/Lexomorph.app"),
+            equals: "Lexomorph.app",
+            "bundle path labels should omit parent directories for nonstandard installs"
+        )
+
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lexomorph-log-test-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: root) }
+
+        let logFile = root.appendingPathComponent("Lexomorph.log")
+        try appendPrivateLogData(Data("one\n".utf8), to: logFile)
+        try appendPrivateLogData(Data("two\n".utf8), to: logFile)
+
+        let attrs = try fm.attributesOfItem(atPath: logFile.path)
+        let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        try expect(permissions & 0o777,
+                   equals: 0o600,
+                   "log file should be private to the current user")
+        try expect(
+            String(data: try Data(contentsOf: logFile), encoding: .utf8),
+            equals: "one\ntwo\n",
+            "log appends should preserve existing content"
+        )
+
+        let target = root.appendingPathComponent("target.log")
+        try Data("target\n".utf8).write(to: target)
+        let link = root.appendingPathComponent("link.log")
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+
+        var symlinkRejected = false
+        do {
+            try appendPrivateLogData(Data("bad\n".utf8), to: link)
+        } catch {
+            symlinkRejected = true
+        }
+        try expect(symlinkRejected,
+                   equals: true,
+                   "log appends should reject leaf symlinks")
+        try expect(
+            String(data: try Data(contentsOf: target), encoding: .utf8),
+            equals: "target\n",
+            "log symlink rejection should leave the target untouched"
+        )
+
+        let hardlinkTarget = root.appendingPathComponent("hardlink-target.log")
+        try Data("hardlink target\n".utf8).write(to: hardlinkTarget)
+        let hardlink = root.appendingPathComponent("hardlink.log")
+        guard Darwin.link(hardlinkTarget.path, hardlink.path) == 0 else {
+            throw currentPOSIXError()
+        }
+
+        var hardlinkRejected = false
+        do {
+            try appendPrivateLogData(Data("bad\n".utf8), to: hardlink)
+        } catch {
+            hardlinkRejected = true
+        }
+        try expect(hardlinkRejected,
+                   equals: true,
+                   "log appends should reject hard-linked files")
+        try expect(
+            String(data: try Data(contentsOf: hardlinkTarget), encoding: .utf8),
+            equals: "hardlink target\n",
+            "log hard-link rejection should leave the target untouched"
+        )
+    }
+
+    /// A side-by-side test bundle must never reuse the production
+    /// LaunchAgent label or agent state files (see AGENT_INSTANCE_SUFFIX).
+    private static func testAgentIdentity() throws {
+        try expect(agentInstanceSuffix(bundleIdentifier: nil), equals: "", "unbundled binary is production")
+        try expect(agentInstanceSuffix(bundleIdentifier: PRODUCTION_BUNDLE_IDENTIFIER), equals: "", "production bundle")
+        try expect(agentInstanceSuffix(bundleIdentifier: "com.local.lexomorph.test"), equals: "test", "test bundle")
+        try expect(agentInstanceSuffix(bundleIdentifier: "com.local.lexomorph.llm-gec"), equals: "llm-gec", "labelled test bundle")
+        try expect(agentInstanceSuffix(bundleIdentifier: "com.local.lexomorphx"), equals: "", "lookalike prefix")
+        try expect(agentInstanceSuffix(bundleIdentifier: "com.local.lexomorph."), equals: "", "empty suffix")
+        try expect(agentInstanceSuffix(bundleIdentifier: "com.local.lexomorph.a/b"), equals: "", "unsafe suffix")
+        if Bundle.main.bundleIdentifier == nil {
+            try expect(AGENT_LABEL, equals: "com.local.lexomorph.agent", "unbundled self-test keeps the production label")
+            try expect(AGENT_STATUS_FILE_NAME, equals: "AgentStatus.json", "unbundled self-test keeps the production state file")
+        } else if Bundle.main.bundleIdentifier != PRODUCTION_BUNDLE_IDENTIFIER {
+            try expect(AGENT_LABEL == "com.local.lexomorph.agent", equals: false, "test bundle must not use the production label")
+        }
+    }
+
+    private static func testDiagnostics() throws {
+        let transcriptSecret = "secret dictated phrase 58A03D"
+        let correctionSecret = "private correction replacement 9F42"
+        let report = diagnosticsReportText(
+            from: DiagnosticsReportSnapshot(
+                generated: "2026-05-28T10:00:00Z",
+                appVersion: "9.8.7",
+                appBuild: "123",
+                macOS: "Version 26.0",
+                bundleID: "com.local.lexomorph",
+                bundlePath: "/Applications/Lexomorph.app",
+                installKind: "Applications app",
+                status: "Hold Right Option to dictate",
+                startup: "Runtime ready",
+                speechModelReady: true,
+                coreRuntimeReady: true,
+                readyForDictation: true,
+                recordingActive: false,
+                transcribing: false,
+                memoryLines: ["Resident: 100 MB"],
+                permissionLines: ["Microphone: granted", "Accessibility: granted", "Input Monitoring: granted"],
+                settingLines: [
+                    "Speech model: Parakeet TDT 0.6B v3",
+                    "Language: Auto-detect",
+                    "Recent transcripts: Last 5 (1 in memory)",
+                    "Text corrections: 1 configured",
+                    "Text correction sync: configured",
+                ],
+                updateLines: ["Pending update: none"],
+                microphoneLines: ["Selected: System default", "Available inputs: none reported"],
+                logPath: "~/Library/Logs/Lexomorph.log",
+                recentLogLines: ["[10:00:00] release: 1.23 s captured, transcribing"]
+            )
+        )
+        try expect(report.contains(transcriptSecret), equals: false,
+                   "diagnostics report should not include transcript contents")
+        try expect(report.contains(correctionSecret), equals: false,
+                   "diagnostics report should not include text correction contents")
+        try expect(report.contains("Text corrections: 1 configured"), equals: true,
+                   "diagnostics report should include correction counts")
+        try expect(report.contains("Speech model: Parakeet TDT 0.6B v3"), equals: true,
+                   "diagnostics report should include the speech model")
+        try expect(report.contains("Recent log lines:"), equals: true,
+                   "diagnostics report should include the recent log section")
+        try expect(report.contains("Privacy: transcript text and text-correction contents are not included."),
+                   equals: true,
+                   "diagnostics report should state the privacy boundary")
+
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lexomorph-diagnostics-test-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: root) }
+
+        let logFile = root.appendingPathComponent("Lexomorph.log")
+        for line in 1...6 {
+            try appendPrivateLogData(Data("[10:00:0\(line)] line \(line)\n".utf8), to: logFile)
+        }
+        try expect(
+            try recentDiagnosticLogLines(from: logFile, maxBytes: 4096, maxLines: 3),
+            equals: ["[10:00:04] line 4", "[10:00:05] line 5", "[10:00:06] line 6"],
+            "diagnostic log tail should return the newest bounded lines"
+        )
+
+        let target = root.appendingPathComponent("target.log")
+        try Data("[10:00:00] target\n".utf8).write(to: target)
+        let symlink = root.appendingPathComponent("symlink.log")
+        try fm.createSymbolicLink(at: symlink, withDestinationURL: target)
+        var symlinkRejected = false
+        do {
+            _ = try recentDiagnosticLogLines(from: symlink, maxBytes: 4096, maxLines: 3)
+        } catch {
+            symlinkRejected = true
+        }
+        try expect(symlinkRejected, equals: true,
+                   "diagnostic log tail should reject leaf symlinks")
+
+        let hardlink = root.appendingPathComponent("hardlink.log")
+        guard Darwin.link(target.path, hardlink.path) == 0 else {
+            throw currentPOSIXError()
+        }
+        var hardlinkRejected = false
+        do {
+            _ = try recentDiagnosticLogLines(from: hardlink, maxBytes: 4096, maxLines: 3)
+        } catch {
+            hardlinkRejected = true
+        }
+        try expect(hardlinkRejected, equals: true,
+                   "diagnostic log tail should reject hard-linked files")
+    }
+
+    private static func testHotkey() throws {
+        try testHotkeyPreferenceNormalization()
+        try testHotkeyPreferenceUpdateResults()
+        try testHotkeyRecorderCaptureFlow()
+        try testHotkeyRecorderRestartActions()
+        try testHandledHotkeySuppression()
+        try testCustomShortcutMatching()
+        try testModifierOnlyChordMatching()
+        try testConfigurableEnterShortcut()
+        try testEnterChordBuiltOnHeldPrimaryModifier()
+        try testCommandModifierEnterShortcutWithPrimaryCommand()
+        try testFKeyAutoRepeatSuppressesWithoutAction()
+        try testRightModifierReleaseWithLeftFlagStillSet()
+        try testHistoryChordShowsOverlay()
+        try testConfigurableHistoryShortcut()
+        try testConfigurableCorrectionShortcut()
+        try testConfigurableRewriteShortcuts()
+        try testCustomRewriteStyles()
+        try testOptionCommandEnterChordStopsWithEnter()
+        try testEnterShortcutModeSelection()
+        try testTogglePressFlipsOnceAndReleaseIsNoOp()
+        try testToggleGatedPressDoesNotFlipToggleState()
+        try testEscapePassesThroughWhenNotRecording()
+        try testEscapeSuppressesCancelRepeatAndKeyUpWhileRecording()
+    }
+
+    private static func testHotkeyPreferenceNormalization() throws {
+        try expect(
+            normalizedHotkeyKeycode(storedValue: NSNumber(value: Int(DEFAULT_HOTKEY_KEYCODE))),
+            equals: DEFAULT_HOTKEY_KEYCODE,
+            "stored hotkey normalization should keep supported numeric keycodes"
+        )
+        try expect(
+            normalizedHotkeyKeycode(storedValue: " 96\n"),
+            equals: CGKeyCode(96),
+            "stored hotkey normalization should accept legacy string keycodes"
+        )
+        try expect(
+            normalizedHotkeyKeycode(storedValue: NSNumber(value: 98)),
+            equals: CGKeyCode(98),
+            "stored hotkey normalization should accept recorded F-key keycodes"
+        )
+        try expect(
+            hotkeyChoice(forKeycode: CGKeyCode(98)),
+            equals: HotkeyChoice(name: "F7", keycode: 98, isModifier: false, modifierFlag: nil),
+            "recorded F-key choices should get a stable display name"
+        )
+        try expect(
+            localizedHotkeyName(hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE),
+                                language: .russian),
+            equals: "Правый Command",
+            "Russian UI should localize a modifier-only shortcut"
+        )
+        try expect(
+            localizedHotkeyName(hotkeyChoice(forKeycode: 49, modifiers: .maskAlternate),
+                                language: .russian),
+            equals: "⌥Пробел",
+            "Russian UI should localize a chord key name"
+        )
+        try expect(
+            normalizedHotkeyKeycode(storedValue: NSNumber(value: 999)),
+            equals: nil,
+            "stored hotkey normalization should reject unsupported keycodes"
+        )
+        try expect(
+            normalizedHotkeyKeycode(storedValue: NSNumber(value: -1)),
+            equals: nil,
+            "stored hotkey normalization should reject negative keycodes"
+        )
+        try expect(
+            hotkeyChoice(forKeycode: CGKeyCode(999)),
+            equals: hotkeyChoice(forKeycode: DEFAULT_HOTKEY_KEYCODE),
+            "unknown hotkey choices should fall back to the default"
+        )
+
+        try expect(
+            hotkeyRecordingDecision(for: event(.keyDown, keycode: 98)),
+            equals: .accept(HotkeyChoice(name: "F7", keycode: 98, isModifier: false, modifierFlag: nil)),
+            "hotkey recorder should accept F-key presses outside the quick-pick list"
+        )
+        try expect(
+            hotkeyRecordingDecision(for: event(.keyDown, keycode: 0)),
+            equals: .accept(HotkeyChoice(name: "A", keycode: 0, isModifier: false, modifierFlag: nil)),
+            "hotkey recorder should accept a single typing key"
+        )
+        try expect(
+            hotkeyRecordingDecision(for: event(.keyDown,
+                                               keycode: 40,
+                                               flags: CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue)),
+            equals: .accept(HotkeyChoice(name: "⇧⌘K",
+                                         keycode: 40,
+                                         isModifier: false,
+                                         modifierFlag: nil,
+                                         requiredModifiers: [.maskCommand, .maskShift])),
+            "hotkey recorder should accept multi-key shortcuts"
+        )
+        try expect(
+            hotkeyRecordingDecision(for: event(.keyDown, keycode: 98, isAutoRepeat: true)),
+            equals: .ignore,
+            "hotkey recorder should ignore auto-repeat"
+        )
+        try expect(
+            hotkeyRecordingDecision(for: event(.flagsChanged,
+                                               keycode: 61,
+                                               flags: CGEventFlags.maskAlternate.rawValue)),
+            equals: .ignore,
+            "hotkey recorder should not accept a modifier on press (chords capture on release)"
+        )
+        try expect(
+            hotkeyRecordingDecision(for: event(.flagsChanged, keycode: 61)),
+            equals: .accept(HotkeyChoice(name: "Right Option",
+                                         keycode: 61,
+                                         isModifier: true,
+                                         modifierFlag: .maskAlternate)),
+            "hotkey recorder should accept a bare right-side modifier on release"
+        )
+        try expect(
+            hotkeyRecordingDecision(for: event(
+                .flagsChanged,
+                keycode: RIGHT_COMMAND_KEYCODE,
+                flags: CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskCommand.rawValue
+            )),
+            equals: .ignore,
+            "hotkey recorder should keep waiting while a modifier chord is still being pressed"
+        )
+        try expect(
+            hotkeyRecordingDecision(for: event(
+                .flagsChanged,
+                keycode: RIGHT_COMMAND_KEYCODE,
+                flags: CGEventFlags.maskAlternate.rawValue
+            )),
+            equals: .accept(hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE,
+                                         modifiers: [.maskAlternate])),
+            "hotkey recorder should accept modifier-only chords on release (other chord keys still held)"
+        )
+    }
+
+    private static func testHotkeyPreferenceUpdateResults() throws {
+        let f5 = hotkeyChoice(forKeycode: 96)
+        let f7 = hotkeyChoice(forKeycode: 98)
+        let invalid = HotkeyChoice(name: "Escape", keycode: ESCAPE_KEYCODE, isModifier: false, modifierFlag: nil)
+
+        try expect(
+            hotkeyPreferenceUpdateResult(
+                requested: f7,
+                previous: f5,
+                persisted: f7
+            ),
+            equals: .saved(f7),
+            "hotkey preference update should save supported keys after persistence confirms them"
+        )
+        try expect(
+            hotkeyPreferenceUpdateResult(
+                requested: invalid,
+                previous: f5,
+                persisted: f5
+            ),
+            equals: .rejected("That key cannot be used for dictation."),
+            "hotkey preference update should reject unsupported keys before mutating settings"
+        )
+        try expect(
+            hotkeyPreferenceUpdateResult(
+                requested: f7,
+                previous: f5,
+                persisted: f5
+            ),
+            equals: .rolledBack(
+                previous: f5,
+                message: "Lexomorph could not save that hotkey, so it kept F5."
+            ),
+            "hotkey preference update should roll back when persisted settings disagree"
+        )
+    }
+
+    private static func testHotkeyRecorderCaptureFlow() throws {
+        try expect(
+            hotkeyFlags(from: [.command, .option]),
+            equals: [.maskCommand, .maskAlternate],
+            "recorder should translate AppKit modifier flags without relying on an optional CGEvent"
+        )
+
+        var singleCommand = HotkeyRecorderCaptureState()
+        let commandDown = event(.flagsChanged,
+                                keycode: RIGHT_COMMAND_KEYCODE,
+                                flags: CGEventFlags.maskCommand.rawValue)
+        let rightCommand = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE)
+        try expect(
+            singleCommand.consume(commandDown),
+            equals: .ignore,
+            "pressing Right Command alone should keep the recorder waiting"
+        )
+        try expect(
+            singleCommand.consume(event(.flagsChanged, keycode: RIGHT_COMMAND_KEYCODE)),
+            equals: .candidate(rightCommand),
+            "releasing Right Command with nothing else held should select it as a one-key shortcut"
+        )
+
+        var singleModifier = HotkeyRecorderCaptureState()
+        let optionDown = event(.flagsChanged,
+                               keycode: 58,
+                               flags: CGEventFlags.maskAlternate.rawValue)
+        let leftOption = hotkeyChoice(forKeycode: 58)
+        try expect(
+            singleModifier.consume(optionDown),
+            equals: .ignore,
+            "pressing Option alone should keep the recorder waiting"
+        )
+        try expect(
+            singleModifier.consume(event(.flagsChanged, keycode: 58)),
+            equals: .candidate(leftOption),
+            "releasing Option with nothing else held should select it as a one-key shortcut"
+        )
+
+        for (keycode, flags, label) in [
+            (CGKeyCode(55), CGEventFlags.maskCommand, "Left Command"),
+            (CGKeyCode(59), CGEventFlags.maskControl, "Left Control"),
+            (FN_KEYCODE, CGEventFlags.maskSecondaryFn, "Fn"),
+        ] {
+            var modifier = HotkeyRecorderCaptureState()
+            try expect(
+                modifier.consume(event(.flagsChanged,
+                                       keycode: keycode,
+                                       flags: flags.rawValue)),
+                equals: .ignore,
+                "pressing \(label) should keep the recorder waiting"
+            )
+            try expect(
+                modifier.consume(event(.flagsChanged, keycode: keycode)),
+                equals: .candidate(hotkeyChoice(forKeycode: keycode)),
+                "releasing \(label) with nothing else held should select it"
+            )
+        }
+
+        var chord = HotkeyRecorderCaptureState()
+        _ = chord.consume(optionDown)
+        try expect(
+            chord.consume(event(.keyDown,
+                                keycode: 40,
+                                flags: CGEventFlags.maskAlternate.rawValue)),
+            equals: .candidate(hotkeyChoice(forKeycode: 40,
+                                            modifiers: .maskAlternate)),
+            "pressing a regular key while a modifier is held should select the full chord"
+        )
+
+        var modifierChord = HotkeyRecorderCaptureState()
+        _ = modifierChord.consume(optionDown)
+        _ = modifierChord.consume(event(
+            .flagsChanged,
+            keycode: RIGHT_COMMAND_KEYCODE,
+            flags: CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskCommand.rawValue
+        ))
+        try expect(
+            modifierChord.consume(event(
+                .flagsChanged,
+                keycode: RIGHT_COMMAND_KEYCODE,
+                flags: CGEventFlags.maskAlternate.rawValue
+            )),
+            equals: .candidate(hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE,
+                                            modifiers: [.maskAlternate, .maskCommand])),
+            "releasing one chord key while the other stays held should select the full modifier chord"
+        )
+        try expect(
+            modifierChord.consume(event(.flagsChanged, keycode: 58)),
+            equals: .ignore,
+            "the trailing release of the remaining chord key must not overwrite the captured chord with a bare key"
+        )
+
+        var controlCommandChord = HotkeyRecorderCaptureState()
+        _ = controlCommandChord.consume(event(.flagsChanged,
+                                              keycode: LEFT_CONTROL_KEYCODE,
+                                              flags: CGEventFlags.maskControl.rawValue))
+        _ = controlCommandChord.consume(event(.flagsChanged,
+                                              keycode: RIGHT_COMMAND_KEYCODE,
+                                              flags: CGEventFlags.maskControl.rawValue | CGEventFlags.maskCommand.rawValue))
+        try expect(
+            controlCommandChord.consume(event(.flagsChanged,
+                                              keycode: LEFT_CONTROL_KEYCODE,
+                                              flags: CGEventFlags.maskCommand.rawValue)),
+            equals: .candidate(hotkeyChoice(forKeycode: LEFT_CONTROL_KEYCODE,
+                                            modifiers: [.maskControl, .maskCommand])),
+            "Ctrl+Cmd pressed, Ctrl released first: the full chord should be captured"
+        )
+        try expect(
+            controlCommandChord.consume(event(.flagsChanged, keycode: RIGHT_COMMAND_KEYCODE)),
+            equals: .ignore,
+            "the trailing Right Command release must not overwrite the captured Ctrl+Cmd chord"
+        )
+
+        var singleKey = HotkeyRecorderCaptureState()
+        try expect(
+            singleKey.consume(event(.keyDown, keycode: 96)),
+            equals: .candidate(hotkeyChoice(forKeycode: 96)),
+            "pressing one regular key should select it for confirmation"
+        )
+
+        var canceled = HotkeyRecorderCaptureState()
+        try expect(
+            canceled.consume(event(.keyDown, keycode: ESCAPE_KEYCODE)),
+            equals: .cancel,
+            "Escape should cancel shortcut recording"
+        )
+    }
+
+    private static func testHotkeyRecorderRestartActions() throws {
+        try expect(
+            hotkeyRecorderRestartAction(
+                shouldRestoreHotkeyTap: false,
+                isTerminating: false,
+                restartSucceeded: false
+            ),
+            equals: .none,
+            "hotkey recorder should not start a listener that was not active"
+        )
+        try expect(
+            hotkeyRecorderRestartAction(
+                shouldRestoreHotkeyTap: true,
+                isTerminating: true,
+                restartSucceeded: false
+            ),
+            equals: .none,
+            "hotkey recorder should not restart the listener during termination"
+        )
+        try expect(
+            hotkeyRecorderRestartAction(
+                shouldRestoreHotkeyTap: true,
+                isTerminating: false,
+                restartSucceeded: true
+            ),
+            equals: .restoredListener,
+            "hotkey recorder should treat a successful restart as recovered"
+        )
+        try expect(
+            hotkeyRecorderRestartAction(
+                shouldRestoreHotkeyTap: true,
+                isTerminating: false,
+                restartSucceeded: false
+            ),
+            equals: .recordFailure,
+            "hotkey recorder should surface restart failure after an active listener was paused"
+        )
+    }
+
+    private static func testReadiness() throws {
+        try expect(
+            readinessTransition(isReady: false,
+                                isCoreRuntimeReady: false,
+                                missingPermissions: []),
+            equals: .rebuildMenuOnly,
+            "not-ready app without core runtime should wait and rebuild only"
+        )
+        try expect(
+            readinessTransition(isReady: false,
+                                isCoreRuntimeReady: true,
+                                missingPermissions: [.microphone]),
+            equals: .blockForPermissions([.microphone]),
+            "core-ready app with missing microphone should block"
+        )
+        try expect(
+            readinessTransition(isReady: true,
+                                isCoreRuntimeReady: true,
+                                missingPermissions: [.accessibility]),
+            equals: .blockForPermissions([.accessibility]),
+            "ready app with missing accessibility should block"
+        )
+        try expect(
+            readinessTransition(isReady: false,
+                                isCoreRuntimeReady: true,
+                                missingPermissions: []),
+            equals: .startHotkeyListener,
+            "core-ready app with all permissions should start hotkey"
+        )
+        try expect(
+            readinessTransition(isReady: true,
+                                isCoreRuntimeReady: true,
+                                missingPermissions: []),
+            equals: .rebuildMenuOnly,
+            "ready app with all permissions should remain ready and rebuild only"
+        )
+
+        try expect(
+            productionSpeechModelProfile(rawValue: nil),
+            equals: .parakeetUltraOnnx,
+            "missing speech model setting should use the production default"
+        )
+        try expect(
+            productionSpeechModelProfile(rawValue: SpeechModelProfile.parakeetUltraOnnx.rawValue),
+            equals: .parakeetUltraOnnx,
+            "stored ONNX speech model should remain valid"
+        )
+        for retired in ["parakeet_tdt_v3", "whisper_large_v3_turbo_russian", "whisper_large_v3_turbo_russian_codeswitch"] {
+            try expect(
+                productionSpeechModelProfile(rawValue: retired),
+                equals: .parakeetUltraOnnx,
+                "retired \(retired) speech model setting should migrate to the ONNX profile"
+            )
+        }
+        try expect(
+            productionSpeechModelProfile(rawValue: "english_unified"),
+            equals: .parakeetUltraOnnx,
+            "old deprecated/legacy speech model setting should migrate to the ONNX profile"
+        )
+        try expect(
+            productionSpeechModelProfile(rawValue: "multilingual_v3"),
+            equals: .parakeetUltraOnnx,
+            "old pre-migration Whisper speech model setting should migrate to the ONNX profile"
+        )
+        try expect(
+            productionSpeechModelProfile(rawValue: "unknown_model"),
+            equals: .parakeetUltraOnnx,
+            "unknown speech model setting should migrate to the ONNX profile"
+        )
+
+        try expect(
+            speechModelSetupRowState(profile: .parakeetUltraOnnx,
+                                     isSpeechModelReady: false,
+                                     isStartupInProgress: true,
+                                     startupStatusTitle: "Downloading speech model… 50%",
+                                     failure: nil),
+            equals: SetupChecklistRowState(detail: "Downloading speech model… 50%",
+                                           status: "Loading",
+                                           buttonTitle: nil),
+            "setup checklist should show speech model progress"
+        )
+        try expect(
+            speechModelSetupRowState(profile: .parakeetUltraOnnx,
+                                     isSpeechModelReady: false,
+                                     isStartupInProgress: false,
+                                     startupStatusTitle: "Loading speech model…",
+                                     failure: StartupFailure(stage: .speechModel, detail: "download failed")),
+            equals: SetupChecklistRowState(detail: "download failed",
+                                           status: "Needs retry",
+                                           buttonTitle: "Retry"),
+            "setup checklist should offer retry for speech model failures"
+        )
+        try expect(
+            speechModelSetupRowState(profile: .parakeetUltraOnnx,
+                                     isSpeechModelReady: true,
+                                     isStartupInProgress: false,
+                                     startupStatusTitle: "Loading speech model…",
+                                     failure: nil),
+            equals: SetupChecklistRowState(detail: "Parakeet Ultra 0.6B (ONNX) is loaded locally.",
+                                           status: "Ready",
+                                           buttonTitle: nil),
+            "setup checklist should show the speech model when ready"
+        )
+        try expect(
+            audioInputSetupRowState(isSpeechModelReady: true,
+                                    isCoreRuntimeReady: false,
+                                    isStartupInProgress: false,
+                                    failure: StartupFailure(stage: .audioInput, detail: "no input device")),
+            equals: SetupChecklistRowState(detail: "no input device",
+                                           status: "Needs retry",
+                                           buttonTitle: "Retry"),
+            "setup checklist should offer retry for audio input failures"
+        )
+        try expect(
+            audioInputSetupRowState(isSpeechModelReady: false,
+                                    isCoreRuntimeReady: false,
+                                    isStartupInProgress: true,
+                                    failure: nil),
+            equals: SetupChecklistRowState(detail: "Available after the speech model loads.",
+                                           status: "Waiting",
+                                           buttonTitle: nil),
+            "setup checklist should not start audio before the speech model is ready"
+        )
+        try expect(
+            hotkeySetupRowState(isReady: false,
+                                hotkeyTestSucceeded: false,
+                                triggerMode: .hold,
+                                hotkeyName: "Right Option",
+                                failure: StartupFailure(stage: .hotkeyListener, detail: "event tap failed")),
+            equals: SetupChecklistRowState(detail: "event tap failed",
+                                           status: "Needs retry",
+                                           buttonTitle: "Retry"),
+            "setup checklist should offer retry for hotkey listener failures"
+        )
+        try expect(
+            hotkeySetupRowState(isReady: true,
+                                hotkeyTestSucceeded: true,
+                                triggerMode: .toggle,
+                                hotkeyName: "F5",
+                                failure: nil),
+            equals: SetupChecklistRowState(detail: "Press F5 to dictate.",
+                                           status: "Detected",
+                                           buttonTitle: nil),
+            "setup checklist should show detected hotkey state"
+        )
+
+        try expect(
+            previousExitNoticeAction(previousRunWasActive: false),
+            equals: .none,
+            "clean previous exits should not show the abnormal-exit notice"
+        )
+        try expect(
+            previousExitNoticeAction(previousRunWasActive: true),
+            equals: .showNotice,
+            "active run markers should show the abnormal-exit notice on next launch"
+        )
+        try expect(
+            speechModelFailureDetail(errorDescription: "SHA-256 mismatch").contains("Reset Speech Model Cache"),
+            equals: true,
+            "speech model integrity failures should point to cache reset"
+        )
+        try expect(
+            speechModelFailureDetail(errorDescription: "download timed out").contains("audio is not uploaded"),
+            equals: true,
+            "speech model download failures should preserve the local-audio privacy boundary"
+        )
+        try expect(
+            speechModelFailureDetail(errorDescription: "Free some disk space, then retry loading the speech model."),
+            equals: "Free some disk space, then retry loading the speech model.",
+            "disk-space failures should not add unrelated reset-cache guidance"
+        )
+        try expect(
+            startupFailureDetail(stage: .audioInput, errorDescription: "no input device"),
+            equals: "no input device",
+            "non-model startup failures should keep their original detail"
+        )
+
+        let coreAudioStopError = NSError(
+            domain: "com.apple.coreaudio.avfaudio",
+            code: 1_937_010_544,
+            userInfo: ["failed call": "PerformCommand(*ioNode, kAUStartIO, NULL, 0)"]
+        )
+        let coreAudioErrorDescription = audioStartupErrorDescription(coreAudioStopError)
+        try expect(
+            coreAudioErrorDescription.contains("OSStatus 1937010544"),
+            equals: true,
+            "CoreAudio startup errors should include the decimal OSStatus"
+        )
+        try expect(
+            coreAudioErrorDescription.contains("0x73746f70"),
+            equals: true,
+            "CoreAudio startup errors should include the hex OSStatus"
+        )
+        try expect(
+            coreAudioErrorDescription.contains("'stop'"),
+            equals: true,
+            "CoreAudio startup errors should include printable four-character codes"
+        )
+        try expect(
+            coreAudioErrorDescription.contains("PerformCommand(*ioNode, kAUStartIO, NULL, 0)"),
+            equals: true,
+            "CoreAudio startup errors should preserve the failed AVFAudio call"
+        )
+        try expect(
+            startupFailureDetail(stage: .audioInput, error: coreAudioStopError).contains("restart CoreAudio"),
+            equals: true,
+            "exhausted CoreAudio startup failures should give OS recovery guidance"
+        )
+    }
+
+    private static func testPasteSuffixFormatting() throws {
+        try expect(
+            pastedText(from: "hello world", suffix: .appendSpace),
+            equals: "hello world ",
+            "append-space suffix should preserve the existing default"
+        )
+        try expect(
+            pastedText(from: "hello world", suffix: .none),
+            equals: "hello world",
+            "no suffix should paste corrected transcript unchanged"
+        )
+        try expect(
+            pastedText(from: "hello world", suffix: .appendNewline),
+            equals: "hello world\n",
+            "append-newline suffix should add a single newline"
+        )
+        try expect(
+            pastedText(from: "hello world ", suffix: .appendSpace),
+            equals: "hello world  ",
+            "suffix formatting should not trim or rewrite corrected text"
+        )
+        try expect(
+            TextInserter.defaultStrategy,
+            equals: .clipboardPaste,
+            "clipboard paste should remain the default insertion strategy"
+        )
+        try expect(
+            textInsertionStrategyChain(primary: .clipboardPaste),
+            equals: [.clipboardPaste, .directUnicode],
+            "clipboard paste should fall back to direct Unicode insertion"
+        )
+        try expect(
+            textInsertionStrategyChain(primary: .directUnicode),
+            equals: [.directUnicode],
+            "direct Unicode insertion should not loop back to clipboard paste"
+        )
+        try expect(
+            TextInserter.defaultStrategyDescription,
+            equals: "Clipboard paste with Direct Unicode typing fallback",
+            "diagnostics should describe the insertion fallback chain"
+        )
+        let unicodeChunks = unicodeInsertionChunks(for: "ab👩‍💻cd", maxUTF16UnitsPerEvent: 4)
+            .map { String(decoding: $0, as: UTF16.self) }
+        try expect(
+            unicodeChunks,
+            equals: ["ab", "👩‍💻", "cd"],
+            "direct Unicode insertion should keep extended grapheme clusters together while chunking"
+        )
+        try expect(
+            unicodeInsertionChunks(for: "abc", maxUTF16UnitsPerEvent: 0),
+            equals: [],
+            "direct Unicode chunking should reject invalid chunk sizes"
+        )
+        try expect(
+            clipboardPasteKeyboardEventSteps(commandKey: 0x37, pasteKey: 0x09),
+            equals: [
+                KeyboardEventStep(virtualKey: 0x37, keyDown: true, flags: .maskCommand),
+                KeyboardEventStep(virtualKey: 0x09, keyDown: true, flags: .maskCommand),
+                KeyboardEventStep(virtualKey: 0x09, keyDown: false, flags: .maskCommand),
+                KeyboardEventStep(virtualKey: 0x37, keyDown: false, flags: []),
+            ],
+            "clipboard paste should synthesize a full Command+V key sequence"
+        )
+
+        let pasteboardProbe = MainActor.assumeIsolated {
+            let pasteboardName = NSPasteboard.Name("com.local.lexomorph.self-test.\(UUID().uuidString)")
+            let pasteboard = NSPasteboard(name: pasteboardName)
+            let wrote = ClipboardPasteInserter.write("pasteboard probe", to: pasteboard)
+            let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+            _ = ClipboardPasteInserter.write("temporary dictation", to: pasteboard)
+            snapshot.restore(to: pasteboard)
+            return (wrote: wrote, stored: pasteboard.string(forType: .string))
+        }
+        try expect(
+            pasteboardProbe.wrote,
+            equals: true,
+            "clipboard paste should report pasteboard write success"
+        )
+        try expect(
+            pasteboardProbe.stored,
+            equals: "pasteboard probe",
+            "clipboard paste should write the intended string before posting Cmd+V"
+        )
+    }
+
+    // Covers the org.nspasteboard.TransientType marking added to mitigate
+    // Universal Clipboard interference (docs/superpowers/specs/2026-08-20-
+    // universal-clipboard-interference-design.md): a `transient: true`
+    // write must carry the marker type without disturbing the readable
+    // .string payload, and the default (non-transient) write — used by the
+    // "save transcript after target disappeared" safety net and this
+    // suite's own probe above — must never carry it.
+    private static func testClipboardPasteInserterTransientMarking() throws {
+        let probe = MainActor.assumeIsolated { () -> (transientTypes: [NSPasteboard.PasteboardType], transientString: String?, permanentTypes: [NSPasteboard.PasteboardType], permanentString: String?) in
+            let pasteboardName = NSPasteboard.Name("com.local.lexomorph.self-test.transient.\(UUID().uuidString)")
+            let pasteboard = NSPasteboard(name: pasteboardName)
+
+            _ = ClipboardPasteInserter.write("dictated text", to: pasteboard, transient: true)
+            let transientTypes = pasteboard.pasteboardItems?.first?.types ?? []
+            let transientString = pasteboard.string(forType: .string)
+
+            _ = ClipboardPasteInserter.write("saved transcript", to: pasteboard)
+            let permanentTypes = pasteboard.pasteboardItems?.first?.types ?? []
+            let permanentString = pasteboard.string(forType: .string)
+
+            return (transientTypes, transientString, permanentTypes, permanentString)
+        }
+        let markerType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+
+        try expect(
+            probe.transientTypes.contains(markerType),
+            equals: true,
+            "a transient: true write should carry org.nspasteboard.TransientType"
+        )
+        try expect(
+            probe.transientString,
+            equals: "dictated text",
+            "a transient: true write should still expose its text via the standard .string type"
+        )
+        try expect(
+            probe.permanentTypes.contains(markerType),
+            equals: false,
+            "the default (non-transient) write must not carry org.nspasteboard.TransientType"
+        )
+        try expect(
+            probe.permanentString,
+            equals: "saved transcript",
+            "the default (non-transient) write should still write the intended text"
+        )
+    }
+
+    // Covers PasteConfirmationPoller.waitForPasteConfirmation's pure polling
+    // logic with injected valueReaders, so this suite needs neither real AX
+    // permission nor a real paste event.
+    private static func testPasteConfirmationPoller() throws {
+        // A plain captured `var` closure isn't convertible to
+        // waitForPasteConfirmation's `@Sendable` valueReader parameter
+        // (verified with a real Swift 6 compiler in a Docker
+        // swift:6.0-jammy container: "converting non-sendable function
+        // value to '@Sendable () -> String?' may introduce data races").
+        // A reference-type counter sidesteps that, same pattern as
+        // RestoreTestState below.
+        final class CallCountBox: @unchecked Sendable {
+            var count = 0
+        }
+        let callCountBox = CallCountBox()
+        let values = ["", "старое ", "старое текст"]
+        let appearsEventually: @Sendable () -> String? = {
+            defer { callCountBox.count += 1 }
+            let callCount = callCountBox.count
+            return callCount < values.count ? values[callCount] : values.last
+        }
+        let confirmedWhenAppears = PasteConfirmationPoller.waitForPasteConfirmation(
+            expectedSubstring: "текст",
+            baselineValue: "",
+            pollInterval: 0.001,
+            timeout: 1.0,
+            valueReader: appearsEventually
+        )
+        try expect(confirmedWhenAppears, equals: true,
+                   "poller should confirm as soon as the expected substring appears")
+        try expect(callCountBox.count < values.count + 1, equals: true,
+                   "poller should stop polling once confirmed instead of running to the timeout")
+
+        let confirmedOnTimeout = PasteConfirmationPoller.waitForPasteConfirmation(
+            expectedSubstring: "текст",
+            baselineValue: nil,
+            pollInterval: 0.005,
+            timeout: 0.05,
+            valueReader: { "unrelated value" }
+        )
+        try expect(confirmedOnTimeout, equals: false,
+                   "poller should give up and report false once the timeout elapses")
+
+        let confirmedWithNilReader = PasteConfirmationPoller.waitForPasteConfirmation(
+            expectedSubstring: "текст",
+            baselineValue: nil,
+            pollInterval: 0.005,
+            timeout: 0.05,
+            valueReader: { nil }
+        )
+        try expect(confirmedWithNilReader, equals: false,
+                   "poller should treat a reader that always returns nil as never-confirmed")
+
+        let confirmedWithEmptyExpectation = PasteConfirmationPoller.waitForPasteConfirmation(
+            expectedSubstring: "",
+            baselineValue: nil,
+            pollInterval: 0.005,
+            timeout: 0.05,
+            valueReader: { nil }
+        )
+        try expect(confirmedWithEmptyExpectation, equals: true,
+                   "an empty expected substring should confirm immediately without polling")
+
+        // Regression test for the premature-restore race: a field that
+        // ALREADY contains the expected substring before this paste's poll
+        // even starts (e.g. dictating the same short phrase twice into the
+        // same field) must not confirm on tick one just because
+        // `contains(expectedSubstring)` is trivially true against the
+        // pre-existing baseline -- it must wait for the value to actually
+        // change away from that baseline.
+        final class ChangeAfterFewTicksBox: @unchecked Sendable {
+            var tick = 0
+        }
+        let changeBox = ChangeAfterFewTicksBox()
+        let alreadyContainsSubstringThenChanges: @Sendable () -> String? = {
+            defer { changeBox.tick += 1 }
+            // First several ticks report the exact same value as the
+            // baseline (which already contains "текст"); only later does it
+            // change to reflect the new paste actually landing.
+            return changeBox.tick < 3 ? "старый текст" : "новый текст"
+        }
+        let confirmedOnlyAfterValueChangesFromBaseline = PasteConfirmationPoller.waitForPasteConfirmation(
+            expectedSubstring: "текст",
+            baselineValue: "старый текст",
+            pollInterval: 0.001,
+            timeout: 1.0,
+            valueReader: alreadyContainsSubstringThenChanges
+        )
+        try expect(confirmedOnlyAfterValueChangesFromBaseline, equals: true,
+                   "poller should eventually confirm once the value changes away from the baseline")
+        try expect(changeBox.tick > 3, equals: true,
+                   "poller must not confirm on tick one just because the pre-existing baseline already contains the expected substring")
+
+        let neverConfirmsIfValueNeverChangesFromBaseline = PasteConfirmationPoller.waitForPasteConfirmation(
+            expectedSubstring: "текст",
+            baselineValue: "старый текст",
+            pollInterval: 0.005,
+            timeout: 0.05,
+            valueReader: { "старый текст" }
+        )
+        try expect(neverConfirmsIfValueNeverChangesFromBaseline, equals: false,
+                   "poller must not confirm against a value that's identical to the pre-paste baseline, even though it contains the expected substring")
+
+        // Regression test for the early-bailout-on-unreadable-value fix: an
+        // app whose AX tree never exposes a readable value at all must not
+        // burn the full `timeout` -- it should give up around
+        // `unreadableValueBailout` instead.
+        let bailoutStart = Date()
+        let neverReadable = PasteConfirmationPoller.waitForPasteConfirmation(
+            expectedSubstring: "текст",
+            baselineValue: nil,
+            pollInterval: 0.005,
+            timeout: 5.0,
+            unreadableValueBailout: 0.05,
+            valueReader: { nil }
+        )
+        let bailoutElapsed = Date().timeIntervalSince(bailoutStart)
+        try expect(neverReadable, equals: false,
+                   "poller should report false when the value is never readable at all")
+        try expect(bailoutElapsed < 1.0, equals: true,
+                   "poller should give up around unreadableValueBailout (0.05s) rather than waiting the full 5.0s timeout when the value is never readable")
+
+        // Once at least one readable (even if non-matching) value has been
+        // observed, the early unreadable-value bailout must no longer apply
+        // -- the target clearly CAN expose a value, so the full timeout
+        // should still be honored while waiting for it to change.
+        final class ReadableThenNilBox: @unchecked Sendable {
+            var tick = 0
+        }
+        let readableThenNilBox = ReadableThenNilBox()
+        let readableOnceThenNil: @Sendable () -> String? = {
+            defer { readableThenNilBox.tick += 1 }
+            return readableThenNilBox.tick == 0 ? "unrelated value" : nil
+        }
+        let stillWaitsFullTimeoutAfterOneReadableValue = PasteConfirmationPoller.waitForPasteConfirmation(
+            expectedSubstring: "текст",
+            baselineValue: nil,
+            pollInterval: 0.01,
+            timeout: 0.08,
+            unreadableValueBailout: 0.02,
+            valueReader: readableOnceThenNil
+        )
+        try expect(stillWaitsFullTimeoutAfterOneReadableValue, equals: false,
+                   "poller should still report false (never matched) once its own timeout elapses")
+        try expect(readableThenNilBox.tick > 3, equals: true,
+                   "once a readable value has been seen even once, the unreadable-value early bailout must not cut the wait short")
+    }
+
+    // Covers ClipboardPasteInserter's real (fileprivate, not module-public)
+    // `restorePasteboard` directly -- not a hand-duplicated copy of its
+    // guard logic -- with an injected `confirm` closure standing in for
+    // PasteConfirmationPoller, so this needs neither real Accessibility
+    // permission nor a real paste event. Calling the production function
+    // itself means a later edit to its guard (e.g. dropping the changeCount
+    // check) will actually break this suite, instead of silently keeping a
+    // separately-maintained copy green.
+    // NOTE: this deliberately does NOT use a blocking DispatchSemaphore.wait()
+    // to wait for `completion`, unlike this file's other self-test semaphore
+    // bridges (e.g. runParakeetEngineSynchronously above). Those signal from
+    // work dispatched off the main thread; restorePasteboard's completion is
+    // delivered via DispatchQueue.main.async, which cannot run while the main
+    // thread (where this self-test itself executes) is blocked inside a
+    // synchronous semaphore.wait() — that would deadlock. Pumping the run
+    // loop instead lets the pending main-queue block execute.
+    private static func waitUntilMainQueueCallback(timeout: TimeInterval, isDone: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !isDone(), Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+    }
+
+    private static func testClipboardPasteInserterRestore() throws {
+        final class RestoreTestState: @unchecked Sendable {
+            var done = false
+            var confirmWasCalledWithExpectedText: String?
+        }
+
+        // Shared setup mirroring exactly what ClipboardPasteInserter.insert(_:)
+        // does before calling restorePasteboard: snapshot the "previous"
+        // clipboard contents, then write the dictated text as the transient
+        // clipboard payload.
+        @MainActor
+        func setUpTransientPaste(previousText: String, dictatedText: String, on pasteboard: NSPasteboard) -> (snapshot: PasteboardSnapshot, changeCount: Int) {
+            pasteboard.clearContents()
+            _ = pasteboard.setString(previousText, forType: .string)
+            let snapshot = PasteboardSnapshot.capture(from: pasteboard)
+            pasteboard.clearContents()
+            _ = pasteboard.setString(dictatedText, forType: .string)
+            return (snapshot, pasteboard.changeCount)
+        }
+
+        let restoresAfterConfirmSucceeds = MainActor.assumeIsolated { () -> (calledWith: String?, restored: String?) in
+            let pasteboard = NSPasteboard.withUniqueName()
+            defer { pasteboard.releaseGlobally() }
+            let (snapshot, changeCount) = setUpTransientPaste(previousText: "previous clipboard content",
+                                                              dictatedText: "dictated text",
+                                                              on: pasteboard)
+
+            let state = RestoreTestState()
+
+            ClipboardPasteInserter.restorePasteboard(
+                snapshot,
+                ifStillTemporaryText: "dictated text",
+                changeCount: changeCount,
+                pasteboard: pasteboard,
+                valueReader: { nil },
+                confirm: { expectedSubstring, _, _, _, _, _ in
+                    state.confirmWasCalledWithExpectedText = expectedSubstring
+                    return true
+                }
+            ) {
+                state.done = true
+            }
+
+            waitUntilMainQueueCallback(timeout: 1.0) { state.done }
+            return (state.confirmWasCalledWithExpectedText, pasteboard.string(forType: .string))
+        }
+        try expect(restoresAfterConfirmSucceeds.calledWith, equals: "dictated text",
+                   "restore should confirm against the dictated text that was actually pasted")
+        try expect(restoresAfterConfirmSucceeds.restored, equals: "previous clipboard content",
+                   "restore should put the user's previous clipboard content back once confirmed")
+
+        let restoresAfterConfirmTimesOut = MainActor.assumeIsolated { () -> String? in
+            let pasteboard = NSPasteboard.withUniqueName()
+            defer { pasteboard.releaseGlobally() }
+            let (snapshot, changeCount) = setUpTransientPaste(previousText: "previous clipboard content",
+                                                              dictatedText: "dictated text",
+                                                              on: pasteboard)
+
+            let state = RestoreTestState()
+
+            ClipboardPasteInserter.restorePasteboard(
+                snapshot,
+                ifStillTemporaryText: "dictated text",
+                changeCount: changeCount,
+                pasteboard: pasteboard,
+                valueReader: { nil },
+                confirm: { _, _, _, _, _, _ in false }
+            ) {
+                state.done = true
+            }
+
+            waitUntilMainQueueCallback(timeout: 1.0) { state.done }
+            return pasteboard.string(forType: .string)
+        }
+        try expect(restoresAfterConfirmTimesOut, equals: "previous clipboard content",
+                   "restore should still happen even when confirmation times out, rather than losing the user's clipboard forever")
+
+        // Safety-critical case: if the pasteboard changes out from under the
+        // restore WHILE confirmation is still pending (e.g. the user copied
+        // something else in the meantime), the restore must be skipped --
+        // not clobber the newer clipboard contents back to the stale
+        // pre-paste snapshot. Both prior tests above leave the pasteboard
+        // untouched between dispatch and restore, so the
+        // `pasteboard.changeCount == changeCount` guard was never actually
+        // proven to skip a restore; this test forces that guard to fire for
+        // real by mutating the pasteboard from inside `confirm`, before it
+        // returns.
+        let skipsRestoreIfPasteboardChangedDuringPoll = MainActor.assumeIsolated { () -> String? in
+            let pasteboard = NSPasteboard.withUniqueName()
+            defer { pasteboard.releaseGlobally() }
+            let (snapshot, changeCount) = setUpTransientPaste(previousText: "previous clipboard content",
+                                                              dictatedText: "dictated text",
+                                                              on: pasteboard)
+
+            let state = RestoreTestState()
+
+            ClipboardPasteInserter.restorePasteboard(
+                snapshot,
+                ifStillTemporaryText: "dictated text",
+                changeCount: changeCount,
+                pasteboard: pasteboard,
+                valueReader: { nil },
+                confirm: { _, _, _, _, _, _ in
+                    // Simulate the user copying something else while the
+                    // poll is still pending. `confirm` runs on the
+                    // background queue (see restorePasteboard above), so
+                    // this hops to the main queue to perform the mutation
+                    // — actual pasteboard touches stay confined to main,
+                    // matching this file's NSPasteboard: Sendable
+                    // conformance comment — and blocks until it's done, so
+                    // the mutation is guaranteed to land before `confirm`
+                    // returns and restorePasteboard's own main-queue guard
+                    // runs.
+                    DispatchQueue.main.sync {
+                        pasteboard.clearContents()
+                        _ = pasteboard.setString("something else the user copied", forType: .string)
+                    }
+                    return true
+                }
+            ) {
+                state.done = true
+            }
+
+            waitUntilMainQueueCallback(timeout: 1.0) { state.done }
+            return pasteboard.string(forType: .string)
+        }
+        try expect(skipsRestoreIfPasteboardChangedDuringPoll, equals: "something else the user copied",
+                   "restore must be skipped (not clobber newer clipboard contents back to the stale snapshot) if the pasteboard changed while confirmation was still pending")
+    }
+
+    private static func testRecentTranscriptLimit() throws {
+        let transcripts = ["newest", "second", "third", "fourth", "fifth", "sixth"]
+
+        try expect(
+            limitedRecentTranscripts(transcripts, limit: .off),
+            equals: [],
+            "off should keep no recent transcripts"
+        )
+        try expect(
+            limitedRecentTranscripts(transcripts, limit: .last1),
+            equals: ["newest"],
+            "last-one history should keep only the newest transcript"
+        )
+        try expect(
+            limitedRecentTranscripts(transcripts, limit: .last5),
+            equals: ["newest", "second", "third", "fourth", "fifth"],
+            "last-five history should preserve the current default cap"
+        )
+        try expect(
+            parseRecentTranscriptLimit(storedValue: NSNumber(value: 1)),
+            equals: .last1,
+            "numeric defaults writes should be accepted for last-one history"
+        )
+
+        let timedEntries = transcripts.enumerated().map { index, text in
+            TranscriptHistoryEntry(
+                text: text,
+                transcriptionDurationSeconds: Double(index + 1) / 10
+            )
+        }
+        try expect(
+            limitedRecentTranscriptEntries(timedEntries, limit: .last1),
+            equals: [TranscriptHistoryEntry(text: "newest", transcriptionDurationSeconds: 0.1)],
+            "history trimming should preserve transcription timing metadata"
+        )
+
+        let archivedEntries = limitedTranscriptHistoryArchive(timedEntries, maximumCount: 6)
+        try expect(
+            archivedEntries.count,
+            equals: 6,
+            "the archive should retain entries beyond the visible history limit"
+        )
+        let archiveAfterDeletion = transcriptHistoryArchive(archivedEntries, removing: 2)
+        try expect(
+            limitedRecentTranscriptEntries(archiveAfterDeletion, limit: .last5).map(\.text),
+            equals: ["newest", "second", "fourth", "fifth", "sixth"],
+            "deleting a visible history entry should backfill it from the archive"
+        )
+        try expect(
+            transcriptHistoryArchive(archivedEntries, removing: 99),
+            equals: archivedEntries,
+            "an invalid history deletion index should leave the archive unchanged"
+        )
+
+        let historyRowHitTargets = MainActor.assumeIsolated { () -> (delete: Bool, row: Bool, deleteAction: Bool, copyAction: Bool) in
+            let row = HistoryTranscriptItemView(
+                transcript: "test",
+                preview: "test",
+                transcriptionDurationSeconds: 0.1,
+                asrTiming: nil,
+                historyIndex: 0,
+                target: nil,
+                action: NSSelectorFromString("noop:"),
+                onDelete: { _ in }
+            )
+            row.frame = NSRect(x: 0, y: 0, width: 600, height: 56)
+            guard let deleteButton = row.subviews.compactMap({ $0 as? HistoryDeleteButton }).first else {
+                return (false, false, false, false)
+            }
+            deleteButton.frame = NSRect(x: 560, y: 14, width: 28, height: 28)
+            let deleteAction: Bool
+            if case .delete(0) = row.hitAction(atWindowPoint: NSPoint(x: 574, y: 28)) {
+                deleteAction = true
+            } else {
+                deleteAction = false
+            }
+            let copyAction: Bool
+            if case .copy("test") = row.hitAction(atWindowPoint: NSPoint(x: 200, y: 28)) {
+                copyAction = true
+            } else {
+                copyAction = false
+            }
+            return (
+                row.hitTest(NSPoint(x: 574, y: 28)) === row,
+                row.hitTest(NSPoint(x: 200, y: 28)) === row,
+                deleteAction,
+                copyAction
+            )
+        }
+        try expect(
+            historyRowHitTargets.delete,
+            equals: true,
+            "history rows should own delete-zone clicks"
+        )
+        try expect(
+            historyRowHitTargets.row,
+            equals: true,
+            "history rows should keep transcript clicks on the copy action"
+        )
+        try expect(
+            historyRowHitTargets.deleteAction,
+            equals: true,
+            "history delete zones should resolve to deletion"
+        )
+        try expect(
+            historyRowHitTargets.copyAction,
+            equals: true,
+            "history transcript bodies should resolve to clipboard copy"
+        )
+        try expect(
+            transcriptionDurationLabel(0.1234),
+            equals: "0.123 s",
+            "history timing should be displayed in seconds with millisecond precision"
+        )
+        try expect(
+            transcriptionDurationLabel(nil),
+            equals: "\u{2014}",
+            "legacy history entries should not invent transcription timing"
+        )
+
+        let timing = ASRTimingBreakdown(
+            totalSeconds: 0.295,
+            workerQueueSeconds: 0.001,
+            decoderPreparationSeconds: 0.002,
+            engineCallSeconds: 0.290,
+            engineProcessingSeconds: 0.286
+        )
+        let entriesWithBreakdown = [
+            TranscriptHistoryEntry(
+                text: "timed",
+                transcriptionDurationSeconds: timing.totalSeconds,
+                asrTiming: timing
+            )
+        ]
+        let encodedEntries = try JSONEncoder().encode(entriesWithBreakdown)
+        try expect(
+            try JSONDecoder().decode([TranscriptHistoryEntry].self, from: encodedEntries),
+            equals: entriesWithBreakdown,
+            "history timing metadata should survive persistence"
+        )
+        try expect(
+            asrTimingTooltip(timing)?.contains("parakeet.cpp  286.0 ms"),
+            equals: true,
+            "history timing tooltip should expose the parakeet.cpp engine's own processing time"
+        )
+
+        let legacyEntryData = Data(
+            #"[{"text":"legacy","transcriptionDurationSeconds":0.25}]"#.utf8
+        )
+        try expect(
+            try JSONDecoder().decode([TranscriptHistoryEntry].self, from: legacyEntryData),
+            equals: [TranscriptHistoryEntry(text: "legacy", transcriptionDurationSeconds: 0.25)],
+            "history entries saved before detailed metrics should remain decodable"
+        )
+
+        let metricLine = DictationLatencyMetrics(
+            audioSeconds: 2,
+            hotkeyDispatchSeconds: 0.0005,
+            releasePreparationSeconds: 0.001,
+            settingsRefreshSeconds: 0.0002,
+            releasePermissionCheckSeconds: 0.0003,
+            audioFinalizeSeconds: 0.002,
+            audioDetachSeconds: 0.0001,
+            journalFlushSeconds: 0.0015,
+            audioFlattenSeconds: 0.0004,
+            transcribingUISeconds: 0.003,
+            taskQueueSeconds: 0.004,
+            releaseToASRSeconds: 0.010,
+            asrTiming: timing,
+            postprocessingSeconds: 0.005,
+            historyPersistenceSeconds: 0.006,
+            journalCleanupSeconds: 0.007,
+            permissionRecheckSeconds: 0.008,
+            insertionDispatchSeconds: 0.009,
+            releaseToPasteDispatchSeconds: 0.330,
+            enterDelaySeconds: nil,
+            pasteSucceeded: true
+        ).logLine
+        try expect(
+            metricLine.contains("hotkey_dispatch=0.5 ms")
+                && metricLine.contains("journal_flush=1.5 ms")
+                && metricLine.contains("engine_processing=286.0 ms")
+                && metricLine.contains("release_to_paste=330.0 ms")
+                && metricLine.contains("paste=ok"),
+            equals: true,
+            "latency log should expose model, end-to-end, and insertion outcomes"
+        )
+    }
+
+    private static func testRecordingHUDDisplayMode() throws {
+        let defaults = UserDefaults.standard
+        let key = "recording_hud_display_mode"
+        let previousRaw = defaults.string(forKey: key)
+        defer {
+            if let previousRaw {
+                defaults.set(previousRaw, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        defaults.removeObject(forKey: key)
+        let settings = Settings.shared
+        guard settings.recordingHUDDisplayMode == .levelBars else {
+            throw SelfTestFailure.failed("expected default .levelBars, got \(settings.recordingHUDDisplayMode)")
+        }
+
+        settings.recordingHUDDisplayMode = .timerOutline
+        guard settings.recordingHUDDisplayMode == .timerOutline else {
+            throw SelfTestFailure.failed("expected .timerOutline after set, got \(settings.recordingHUDDisplayMode)")
+        }
+
+        defaults.set("not-a-real-mode", forKey: key)
+        guard settings.recordingHUDDisplayMode == .levelBars else {
+            throw SelfTestFailure.failed("expected fallback to .levelBars for garbage stored value")
+        }
+    }
+
+    private static func testFormatRecordingHUDElapsed() throws {
+        let cases: [(TimeInterval, String)] = [
+            (0, "00:00"),
+            (9, "00:09"),
+            (9.9, "00:09"),
+            (10, "00:10"),
+            (59, "00:59"),
+            (60, "01:00"),
+            (65, "01:05"),
+            (599, "09:59"),
+            (600, "10:00"),
+            (3661, "61:01"),
+        ]
+        for (input, expected) in cases {
+            let actual = formatRecordingHUDElapsed(input)
+            guard actual == expected else {
+                throw SelfTestFailure.failed("formatRecordingHUDElapsed(\(input)) = \(actual), expected \(expected)")
+            }
+        }
+    }
+
+    /// `recordingHUDOutlineFillPath` is pure geometry — exercise it directly
+    /// without instantiating a window, per the final-review finding that both
+    /// Critical geometry bugs (chord across the bubble, missing top edge)
+    /// were self-test-catchable this way.
+    private static func testRecordingHUDOutlineFillPath() throws {
+        let capsuleRect = NSRect(x: 0, y: 0, width: 72, height: 26)
+        let bottomCenter = NSPoint(x: capsuleRect.midX, y: capsuleRect.maxY)
+        let topCenter = NSPoint(x: capsuleRect.midX, y: capsuleRect.minY)
+        let tolerance: CGFloat = 0.5
+
+        func subpaths(_ path: NSBezierPath) -> [[NSPoint]] {
+            var result: [[NSPoint]] = []
+            var current: [NSPoint] = []
+            var associated = [NSPoint](repeating: .zero, count: 3)
+            for i in 0..<path.elementCount {
+                let type = path.element(at: i, associatedPoints: &associated)
+                switch type {
+                case .moveTo:
+                    if !current.isEmpty { result.append(current) }
+                    current = [associated[0]]
+                case .lineTo:
+                    current.append(associated[0])
+                case .curveTo:
+                    current.append(contentsOf: associated[0..<3])
+                default:
+                    break
+                }
+            }
+            if !current.isEmpty { result.append(current) }
+            return result
+        }
+
+        func allPoints(_ path: NSBezierPath) -> [NSPoint] {
+            subpaths(path).flatMap { $0 }
+        }
+
+        func approxLength(_ path: NSBezierPath) -> CGFloat {
+            let points = allPoints(path)
+            guard points.count > 1 else { return 0 }
+            var total: CGFloat = 0
+            for i in 1..<points.count {
+                let dx = points[i].x - points[i - 1].x
+                let dy = points[i].y - points[i - 1].y
+                total += (dx * dx + dy * dy).squareRoot()
+            }
+            return total
+        }
+
+        func near(_ a: NSPoint, _ b: NSPoint, _ tol: CGFloat = tolerance) -> Bool {
+            abs(a.x - b.x) < tol && abs(a.y - b.y) < tol
+        }
+
+        // fraction = 0: degenerate (caller already gates on level > 0.001
+        // before calling this), but must still produce a valid path that
+        // starts at bottom-center.
+        let zeroPath = recordingHUDOutlineFillPath(in: capsuleRect, fraction: 0)
+        guard let zeroFirst = allPoints(zeroPath).first, near(zeroFirst, bottomCenter) else {
+            throw SelfTestFailure.failed("fraction=0 path should start at bottom-center \(bottomCenter)")
+        }
+
+        // Every element's associated points stay within the capsule rect
+        // (small tolerance for floating point) at a spread of fractions.
+        let containment = capsuleRect.insetBy(dx: -tolerance, dy: -tolerance)
+        for fraction: CGFloat in [0, 0.25, 0.5, 0.75, 0.999] {
+            let path = recordingHUDOutlineFillPath(in: capsuleRect, fraction: fraction)
+            for point in allPoints(path) {
+                guard containment.contains(point) else {
+                    throw SelfTestFailure.failed("fraction=\(fraction) produced point \(point) outside \(capsuleRect)")
+                }
+                guard point.x.isFinite, point.y.isFinite else {
+                    throw SelfTestFailure.failed("fraction=\(fraction) produced a non-finite point")
+                }
+            }
+            // Bottom-center is always the start point of both side subpaths.
+            for side in subpaths(path) {
+                guard let first = side.first, near(first, bottomCenter) else {
+                    throw SelfTestFailure.failed("fraction=\(fraction) subpath should start at bottom-center, got \(side.first.map(String.init(describing:)) ?? "nil")")
+                }
+            }
+        }
+
+        // fraction = 0.5 is analytically exact for this rect (radius 13,
+        // straightLength 46): the lit length lands exactly at the arc's
+        // horizontal midpoint on each side. This is the one check that pins
+        // down the arc's sweep direction -- containment alone would pass
+        // even if the arc swept the wrong way, since a <=180 degree arc
+        // about the cap center stays inside capsuleRect regardless.
+        let halfPath = recordingHUDOutlineFillPath(in: capsuleRect, fraction: 0.5)
+        let halfSides = subpaths(halfPath)
+        guard halfSides.count == 2 else {
+            throw SelfTestFailure.failed("fraction=0.5 path should have two side subpaths, got \(halfSides.count)")
+        }
+        let leftEnd = halfSides[0].last!
+        let rightEnd = halfSides[1].last!
+        let expectedLeft = NSPoint(x: capsuleRect.minX, y: capsuleRect.midY)
+        let expectedRight = NSPoint(x: capsuleRect.maxX, y: capsuleRect.midY)
+        guard near(leftEnd, expectedLeft) else {
+            throw SelfTestFailure.failed("fraction=0.5 left side should end at \(expectedLeft), got \(leftEnd)")
+        }
+        guard near(rightEnd, expectedRight) else {
+            throw SelfTestFailure.failed("fraction=0.5 right side should end at \(expectedRight), got \(rightEnd)")
+        }
+
+        // fraction = 0.999: both sides should have traversed the bottom
+        // straight run, the full arc, and nearly all of the top straight run
+        // -- i.e. nearly reached top-center. This is the check that catches
+        // a halfPerimeter that omits the top edge (Critical 2): with the bug
+        // present, the arc end point (not top-center) would be the ceiling
+        // any fraction below 1.0 could reach.
+        let almostFullPath = recordingHUDOutlineFillPath(in: capsuleRect, fraction: 0.999)
+        let almostFullSides = subpaths(almostFullPath)
+        guard almostFullSides.count == 2 else {
+            throw SelfTestFailure.failed("fraction=0.999 path should have two side subpaths, got \(almostFullSides.count)")
+        }
+        for side in almostFullSides {
+            guard let end = side.last, near(end, topCenter, 1.0) else {
+                throw SelfTestFailure.failed("fraction=0.999 side should nearly reach top-center \(topCenter), got \(side.last.map(String.init(describing:)) ?? "nil")")
+            }
+        }
+
+        // fraction = 1.0 should equal the full capsule outline (bounds match).
+        let fullPath = recordingHUDOutlineFillPath(in: capsuleRect, fraction: 1.0)
+        let fullBounds = fullPath.bounds
+        guard abs(fullBounds.minX - capsuleRect.minX) < tolerance,
+              abs(fullBounds.minY - capsuleRect.minY) < tolerance,
+              abs(fullBounds.maxX - capsuleRect.maxX) < tolerance,
+              abs(fullBounds.maxY - capsuleRect.maxY) < tolerance else {
+            throw SelfTestFailure.failed("fraction=1.0 path bounds \(fullBounds) should match capsuleRect \(capsuleRect)")
+        }
+
+        // Traversed length should increase monotonically with fraction.
+        let fractions: [CGFloat] = [0, 0.25, 0.5, 0.75, 0.999]
+        var previousLength: CGFloat = -1
+        for fraction in fractions {
+            let length = approxLength(recordingHUDOutlineFillPath(in: capsuleRect, fraction: fraction))
+            guard length >= previousLength else {
+                throw SelfTestFailure.failed("traversed length should increase monotonically with fraction, regressed at \(fraction)")
+            }
+            previousLength = length
+        }
+
+        // A perfect circle (width == height, straightLength == 0) should not
+        // divide by zero or produce NaNs.
+        let circleRect = NSRect(x: 0, y: 0, width: 26, height: 26)
+        for fraction: CGFloat in [0, 0.5, 0.999, 1.0] {
+            let path = recordingHUDOutlineFillPath(in: circleRect, fraction: fraction)
+            for point in allPoints(path) {
+                guard point.x.isFinite, point.y.isFinite else {
+                    throw SelfTestFailure.failed("circle case fraction=\(fraction) produced a non-finite point")
+                }
+            }
+        }
+    }
+
+    private static func testDictationUsageStatistics() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let reference = calendar.date(from: DateComponents(year: 2026, month: 7, day: 18, hour: 12))!
+        let july10 = calendar.date(from: DateComponents(year: 2026, month: 7, day: 10, hour: 10))!
+        let july11 = calendar.date(from: DateComponents(year: 2026, month: 7, day: 11, hour: 10))!
+        let july17 = calendar.date(from: DateComponents(year: 2026, month: 7, day: 17, hour: 10))!
+        let july18 = calendar.date(from: DateComponents(year: 2026, month: 7, day: 18, hour: 10))!
+
+        var stats: [DailyDictationUsage] = []
+        stats = addingDictationUsageSample(to: stats,
+                                           at: july10,
+                                           characterCount: 40,
+                                           audioSeconds: 4,
+                                           asrSeconds: 0.4,
+                                           calendar: calendar)
+        stats = addingDictationUsageSample(to: stats,
+                                           at: july11,
+                                           characterCount: 100,
+                                           audioSeconds: 10,
+                                           asrSeconds: 0.5,
+                                           calendar: calendar)
+        stats = addingDictationUsageSample(to: stats,
+                                           at: july17,
+                                           characterCount: 300,
+                                           audioSeconds: 30,
+                                           asrSeconds: 0.75,
+                                           calendar: calendar)
+        stats = addingDictationUsageSample(to: stats,
+                                           at: july18,
+                                           characterCount: 900,
+                                           audioSeconds: 90,
+                                           asrSeconds: 1.2,
+                                           calendar: calendar)
+
+        let snapshot = lastSevenCompletedDictationUsage(stats,
+                                                         referenceDate: reference,
+                                                         calendar: calendar)
+        try expect(snapshot.days.count, equals: 7,
+                   "statistics should always contain seven completed calendar days")
+        try expect(snapshot.days.first?.usage.day, equals: "2026-07-11",
+                   "statistics should begin seven days before today")
+        try expect(snapshot.days.last?.usage.day, equals: "2026-07-17",
+                   "statistics should end yesterday")
+        try expect(snapshot.totalCharacters, equals: 400,
+                   "statistics should exclude both older data and today's dictations")
+        try expect(snapshot.totalDictations, equals: 2,
+                   "statistics should aggregate completed dictations")
+        try expect(snapshot.totalAudioSeconds, equals: 40,
+                   "statistics should aggregate recorded audio duration")
+        try expect(snapshot.totalASRSeconds, equals: 1.25,
+                   "statistics should aggregate ASR duration")
+
+        let log = """
+        [23:59:58] 2.00 s audio → 0.20 s → 20 chars
+        [00:00:01] HotkeyListener: tap active
+        [00:00:02] 3.00 s audio → 0.30 s → 30 chars
+        [00:00:03] 1.00 s audio → 0.10 s → 0 chars
+        """
+        let imported = importedDailyDictationUsage(
+            from: log,
+            fileCreatedAt: calendar.date(from: DateComponents(year: 2026, month: 7, day: 3))!,
+            calendar: calendar
+        )
+        try expect(imported.count, equals: 2,
+                   "log import should infer a new day when timestamps cross midnight")
+        try expect(imported.first?.characterCount, equals: 20,
+                   "log import should preserve the first day's characters")
+        try expect(imported.last?.characterCount, equals: 30,
+                   "log import should ignore empty transcripts")
+    }
+
+    private static func testAudioLevelMetering() throws {
+        var accumulator = AudioSampleAccumulator()
+        accumulator.append([])
+        accumulator.append([1, 2])
+        accumulator.append([3, 4, 5])
+        try expect(
+            accumulator.sampleCount,
+            equals: 5,
+            "segmented audio accumulator should track total sample count"
+        )
+        let captured = accumulator.drain()
+        try expect(
+            accumulator.sampleCount,
+            equals: 0,
+            "segmented audio accumulator should reset after drain"
+        )
+        try expect(
+            captured.flattened(),
+            equals: [1, 2, 3, 4, 5],
+            "segmented audio accumulator should preserve sample order when flattened"
+        )
+
+        try expect(
+            normalizedAudioLevel(from: Array(repeating: 0, count: 128)),
+            equals: 0,
+            "silence should map to zero recording level"
+        )
+
+        let lowVoice = normalizedAudioLevel(from: Array(repeating: 0.004, count: 128))
+        let quiet = normalizedAudioLevel(from: Array(repeating: 0.01, count: 128))
+        let normal = normalizedAudioLevel(from: Array(repeating: 0.12, count: 128))
+        let loud = normalizedAudioLevel(from: Array(repeating: 4.0, count: 128))
+
+        guard lowVoice > 0 else {
+            throw SelfTestFailure.failed("low close-mic voice should rise above the visual gate")
+        }
+        guard quiet > 0 else {
+            throw SelfTestFailure.failed("quiet speech-like input should rise above zero")
+        }
+        guard normal > quiet else {
+            throw SelfTestFailure.failed("higher RMS should produce a higher visual level")
+        }
+        try expect(
+            loud,
+            equals: 1,
+            "out-of-range samples should clamp to maximum visual level"
+        )
+
+        try expect(
+            normalizedAudioLevel(from: [.nan, .infinity, -.infinity]),
+            equals: 0,
+            "non-finite samples should not produce a visible level"
+        )
+        try expect(
+            visibleRecordingLevel(rawLevel: .nan),
+            equals: 0,
+            "visible recording level should ignore non-finite input"
+        )
+        try expect(
+            visibleRecordingLevel(rawLevel: 0.8),
+            equals: 0.8,
+            "visible recording level should pass through normal input immediately"
+        )
+        try expect(
+            visibleRecordingLevel(rawLevel: 1.2),
+            equals: 1,
+            "visible recording level should clamp high input"
+        )
+
+        let idlePhaseSpeed = recordingHUDPhaseSpeed(mode: .recording, level: 0)
+        let voicePhaseSpeed = recordingHUDPhaseSpeed(mode: .recording, level: 0.8)
+        guard voicePhaseSpeed > idlePhaseSpeed else {
+            throw SelfTestFailure.failed("voice should visibly accelerate the recording waveform")
+        }
+        try expect(
+            recordingHUDPhaseSpeed(mode: .transcribing, level: 1),
+            equals: RECORDING_HUD_TRANSCRIBING_PHASE_SPEED,
+            "transcribing animation speed should not depend on stale microphone level"
+        )
+        try expect(
+            recordingHUDPhaseSpeed(mode: .error, level: 0),
+            equals: 0,
+            "error HUD should be static (zero phase speed)"
+        )
+    }
+
+    private static func testAudioConversion() throws {
+        guard let stereoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                               sampleRate: 48_000,
+                                               channels: 2,
+                                               interleaved: false),
+              let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                             sampleRate: 48_000,
+                                             channels: 1,
+                                             interleaved: false),
+              let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                               sampleRate: 16_000,
+                                               channels: 1,
+                                               interleaved: false),
+              let stereo = AVAudioPCMBuffer(pcmFormat: stereoFormat, frameCapacity: 480),
+              let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: 480),
+              let stereoChannels = stereo.floatChannelData,
+              let monoChannel = mono.floatChannelData?[0] else {
+            throw SelfTestFailure.failed("could not create audio conversion test buffers")
+        }
+        stereo.frameLength = 480
+        for i in 0..<480 {
+            stereoChannels[0][i] = 0.5
+            stereoChannels[1][i] = 0.02
+        }
+
+        let rms = channelRMSValues(channels: stereoChannels, channelCount: 2, frameCount: 480)
+        try expect(
+            selectedMonoMixChannelIndices(channelRMS: rms),
+            equals: [0],
+            "manual mono mix should select the active close-mic channel when another channel is near-silent"
+        )
+        writeMonoMix(channels: stereoChannels,
+                     selectedChannels: selectedMonoMixChannelIndices(channelRMS: rms),
+                     frameCount: 480,
+                     to: monoChannel)
+        mono.frameLength = 480
+        try expect(
+            monoChannel[0],
+            equals: 0.5,
+            "manual mono mix should preserve the selected active channel"
+        )
+
+        for i in 0..<480 {
+            stereoChannels[0][i] = 0.5
+            stereoChannels[1][i] = -0.5
+        }
+        let balancedRMS = channelRMSValues(channels: stereoChannels, channelCount: 2, frameCount: 480)
+        try expect(
+            selectedMonoMixChannelIndices(channelRMS: balancedRMS),
+            equals: [0, 1],
+            "manual mono mix should average multiple similarly active channels"
+        )
+        writeMonoMix(channels: stereoChannels,
+                     selectedChannels: selectedMonoMixChannelIndices(channelRMS: balancedRMS),
+                     frameCount: 480,
+                     to: monoChannel)
+        try expect(
+            monoChannel[0],
+            equals: 0,
+            "manual mono mix should average selected channels with equal weight"
+        )
+
+        guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: 320),
+              let converter = AVAudioConverter(from: monoFormat, to: targetFormat) else {
+            throw SelfTestFailure.failed("could not create audio converter")
+        }
+        var error: NSError?
+        let inputProvider = AudioConverterInputProvider(buffer: mono)
+        let status = converter.convert(to: converted, error: &error) { _, outStatus in
+            inputProvider.provide(outStatus: outStatus)
+        }
+        if status == .error {
+            throw SelfTestFailure.failed("audio conversion failed: \(error?.localizedDescription ?? "?")")
+        }
+        guard converted.format.channelCount == 1,
+              Int(converted.format.sampleRate) == 16_000,
+              converted.frameLength > 0 else {
+            throw SelfTestFailure.failed("audio conversion should produce 16 kHz mono samples")
+        }
+    }
+
+    private static func testTranscriptCorrections() throws {
+        try expect(
+            correctionSourcePrefill(from: "  first line\n\nsecond\tline  "),
+            equals: "first line second line",
+            "correction source prefill should collapse transcript whitespace"
+        )
+        try expect(
+            correctionSourcePrefill(from: String(repeating: "a", count: MAX_TRANSCRIPT_CORRECTION_SOURCE_BYTES + 4)).utf8.count,
+            equals: MAX_TRANSCRIPT_CORRECTION_SOURCE_BYTES,
+            "correction source prefill should stay inside correction source byte limits"
+        )
+        try expect(
+            correctionSourcePrefill(from: String(repeating: "é", count: MAX_TRANSCRIPT_CORRECTION_SOURCE_BYTES)).utf8.count,
+            equals: MAX_TRANSCRIPT_CORRECTION_SOURCE_BYTES,
+            "correction source prefill should clip at character boundaries"
+        )
+
+        let normalized = normalizedTranscriptCorrections([
+            TranscriptCorrection(source: "  Yeti   Nano  ", replacement: "  Blue mic  "),
+            TranscriptCorrection(source: "yeti nano", replacement: "USB mic"),
+            TranscriptCorrection(source: "", replacement: "ignored"),
+            TranscriptCorrection(source: "empty replacement", replacement: "   ")
+        ])
+        try expect(
+            normalized,
+            equals: [TranscriptCorrection(source: "yeti nano", replacement: "USB mic")],
+            "normalization should trim, drop incomplete entries, collapse duplicate sources, and keep the latest replacement"
+        )
+
+        let boundedCorrections = normalizedTranscriptCorrections(
+            [
+                TranscriptCorrection(source: String(repeating: "s", count: MAX_TRANSCRIPT_CORRECTION_SOURCE_BYTES + 1),
+                                     replacement: "replacement"),
+                TranscriptCorrection(source: "source",
+                                     replacement: String(repeating: "r", count: MAX_TRANSCRIPT_CORRECTION_REPLACEMENT_BYTES + 1)),
+                TranscriptCorrection(source: "nul\u{0}source", replacement: "replacement"),
+                TranscriptCorrection(source: "valid", replacement: "replacement")
+            ]
+            + (0..<(MAX_TRANSCRIPT_CORRECTIONS + 3)).map {
+                TranscriptCorrection(source: "source-\($0)", replacement: "replacement-\($0)")
+            }
+            + [
+                TranscriptCorrection(source: "source-0", replacement: "updated")
+            ]
+        )
+        try expect(
+            boundedCorrections.count,
+            equals: MAX_TRANSCRIPT_CORRECTIONS,
+            "normalization should cap stored correction count"
+        )
+        try expect(
+            boundedCorrections.first,
+            equals: TranscriptCorrection(source: "valid", replacement: "replacement"),
+            "normalization should keep valid corrections while dropping oversized and NUL-containing entries"
+        )
+        try expect(
+            boundedCorrections.dropFirst().first,
+            equals: TranscriptCorrection(source: "source-0", replacement: "updated"),
+            "normalization should still let later duplicates update retained corrections"
+        )
+        try expect(
+            boundedCorrections.contains(where: { $0.source == "source-\(MAX_TRANSCRIPT_CORRECTIONS)" }),
+            equals: false,
+            "normalization should drop new unique corrections after the cap"
+        )
+
+        let applied = TranscriptCorrector.apply(
+            to: "parakeet tdt and parakeetish and PARakeet",
+            corrections: [
+                TranscriptCorrection(source: "parakeet", replacement: "Lexomorph"),
+                TranscriptCorrection(source: "parakeet tdt", replacement: "Parakeet TDT")
+            ]
+        )
+        try expect(
+            applied.text,
+            equals: "Parakeet TDT and parakeetish and Lexomorph",
+            "corrections should prefer longer phrases and respect word boundaries"
+        )
+        try expect(
+            applied.appliedCount,
+            equals: 2,
+            "correction count should track applied non-overlapping replacements"
+        )
+
+        let transferred = try TranscriptCorrectionsTransfer.decode(
+            TranscriptCorrectionsTransfer.encode([
+                TranscriptCorrection(source: "  Right Option  ", replacement: "R-Option")
+            ])
+        )
+        try expect(
+            transferred,
+            equals: [TranscriptCorrection(source: "Right Option", replacement: "R-Option")],
+            "document transfer should round-trip normalized corrections"
+        )
+
+        let legacyData = try JSONEncoder().encode([
+            TranscriptCorrection(source: "  old phrase  ", replacement: "new phrase")
+        ])
+        try expect(
+            try TranscriptCorrectionsTransfer.decode(legacyData),
+            equals: [TranscriptCorrection(source: "old phrase", replacement: "new phrase")],
+            "legacy bare-array correction files should remain importable"
+        )
+
+        var oversizedDecodeRejected = false
+        do {
+            _ = try TranscriptCorrectionsTransfer.decode(
+                Data(repeating: 0x20, count: TranscriptCorrectionsTransfer.maxFileBytes + 1)
+            )
+        } catch let error as TranscriptCorrectionsTransferError {
+            if case .fileTooLarge = error {
+                oversizedDecodeRejected = true
+            }
+        }
+        try expect(oversizedDecodeRejected, equals: true,
+                   "correction transfer should reject oversized in-memory data before decoding")
+
+        let transferTmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        let transferFileManager = FileManager.default
+        let oversized = transferTmpDir
+            .appendingPathComponent("lexomorph-corrections-oversized-\(UUID().uuidString).json")
+        try Data(repeating: 0x20, count: TranscriptCorrectionsTransfer.maxFileBytes + 1)
+            .write(to: oversized)
+        defer { try? transferFileManager.removeItem(at: oversized) }
+        var oversizedRejected = false
+        do {
+            _ = try TranscriptCorrectionsTransfer.read(from: oversized)
+        } catch let error as TranscriptCorrectionsTransferError {
+            if case .fileTooLarge = error {
+                oversizedRejected = true
+            }
+        }
+        try expect(oversizedRejected, equals: true,
+                   "correction transfer should reject oversized files before decoding")
+
+        let nonFile = transferTmpDir
+            .appendingPathComponent("lexomorph-corrections-directory-\(UUID().uuidString)")
+        try transferFileManager.createDirectory(at: nonFile, withIntermediateDirectories: false)
+        defer { try? transferFileManager.removeItem(at: nonFile) }
+        var nonFileRejected = false
+        do {
+            _ = try TranscriptCorrectionsTransfer.read(from: nonFile)
+        } catch let error as TranscriptCorrectionsTransferError {
+            if case .notRegularFile = error {
+                nonFileRejected = true
+            }
+        }
+        try expect(nonFileRejected, equals: true,
+                   "correction transfer should reject non-file paths")
+
+        let readTarget = transferTmpDir
+            .appendingPathComponent("lexomorph-corrections-read-target-\(UUID().uuidString).json")
+        try TranscriptCorrectionsTransfer.write(
+            [TranscriptCorrection(source: "source", replacement: "replacement")],
+            to: readTarget
+        )
+        defer { try? transferFileManager.removeItem(at: readTarget) }
+        let readLink = transferTmpDir
+            .appendingPathComponent("lexomorph-corrections-read-link-\(UUID().uuidString).json")
+        try transferFileManager.createSymbolicLink(at: readLink, withDestinationURL: readTarget)
+        defer { try? transferFileManager.removeItem(at: readLink) }
+        var symlinkReadRejected = false
+        do {
+            _ = try TranscriptCorrectionsTransfer.read(from: readLink)
+        } catch let error as TranscriptCorrectionsTransferError {
+            if case .notRegularFile = error {
+                symlinkReadRejected = true
+            }
+        }
+        try expect(symlinkReadRejected, equals: true,
+                   "correction transfer should reject reads through leaf symlinks")
+
+        let writeTarget = transferTmpDir
+            .appendingPathComponent("lexomorph-corrections-write-target-\(UUID().uuidString).json")
+        try Data("target\n".utf8).write(to: writeTarget)
+        defer { try? transferFileManager.removeItem(at: writeTarget) }
+        let writeLink = transferTmpDir
+            .appendingPathComponent("lexomorph-corrections-write-link-\(UUID().uuidString).json")
+        try transferFileManager.createSymbolicLink(at: writeLink, withDestinationURL: writeTarget)
+        defer { try? transferFileManager.removeItem(at: writeLink) }
+        var symlinkWriteRejected = false
+        do {
+            try TranscriptCorrectionsTransfer.write(
+                [TranscriptCorrection(source: "source", replacement: "replacement")],
+                to: writeLink
+            )
+        } catch let error as TranscriptCorrectionsTransferError {
+            if case .notRegularFile = error {
+                symlinkWriteRejected = true
+            }
+        }
+        try expect(symlinkWriteRejected, equals: true,
+                   "correction transfer should reject writes through leaf symlinks")
+        try expect(
+            String(data: try Data(contentsOf: writeTarget), encoding: .utf8),
+            equals: "target\n",
+            "correction transfer symlink rejection should leave the target untouched"
+        )
+
+        let remoteOnlyChange = mergedTranscriptCorrectionsForSync(
+            base: [TranscriptCorrection(source: "old phrase", replacement: "old")],
+            local: [TranscriptCorrection(source: "old phrase", replacement: "old")],
+            remote: [TranscriptCorrection(source: "old phrase", replacement: "remote")]
+        )
+        try expect(
+            remoteOnlyChange,
+            equals: TranscriptCorrectionSyncMergeResult(
+                corrections: [TranscriptCorrection(source: "old phrase", replacement: "remote")],
+                conflictingSources: []
+            ),
+            "sync merge should accept remote changes when local has not changed"
+        )
+
+        let nonConflictingMerge = mergedTranscriptCorrectionsForSync(
+            base: [
+                TranscriptCorrection(source: "shared", replacement: "old"),
+                TranscriptCorrection(source: "removed locally", replacement: "old")
+            ],
+            local: [TranscriptCorrection(source: "shared", replacement: "local")],
+            remote: [
+                TranscriptCorrection(source: "shared", replacement: "old"),
+                TranscriptCorrection(source: "removed locally", replacement: "old"),
+                TranscriptCorrection(source: "remote only", replacement: "remote")
+            ]
+        )
+        try expect(
+            nonConflictingMerge,
+            equals: TranscriptCorrectionSyncMergeResult(
+                corrections: [
+                    TranscriptCorrection(source: "shared", replacement: "local"),
+                    TranscriptCorrection(source: "remote only", replacement: "remote")
+                ],
+                conflictingSources: []
+            ),
+            "sync merge should combine non-conflicting local edits, local deletes, and remote additions"
+        )
+
+        let conflictingMerge = mergedTranscriptCorrectionsForSync(
+            base: [TranscriptCorrection(source: "same source", replacement: "old")],
+            local: [TranscriptCorrection(source: "same source", replacement: "local")],
+            remote: [TranscriptCorrection(source: "same source", replacement: "remote")]
+        )
+        try expect(
+            conflictingMerge,
+            equals: TranscriptCorrectionSyncMergeResult(corrections: [],
+                                                        conflictingSources: ["same source"]),
+            "sync merge should report same-source edits that changed differently on both sides"
+        )
+
+        let normalizedSyncPath = normalizedCorrectionSyncFilePath(" /tmp/lexomorph/../Lexomorph Corrections.lexomorph-corrections\n")
+        try expect(
+            normalizedSyncPath,
+            equals: "/tmp/Lexomorph Corrections.lexomorph-corrections",
+            "correction sync path normalization should trim and standardize absolute paths"
+        )
+        try expect(
+            normalizedCorrectionSyncFilePath("relative/path.lexomorph-corrections"),
+            equals: nil,
+            "correction sync path normalization should reject relative paths"
+        )
+        try expect(
+            normalizedCorrectionSyncFilePath("/tmp/\u{0}lexomorph.lexomorph-corrections"),
+            equals: nil,
+            "correction sync path normalization should reject NUL bytes"
+        )
+        try expect(
+            normalizedCorrectionSyncFilePath("/" + String(repeating: "x", count: MAX_CORRECTION_SYNC_PATH_BYTES)),
+            equals: nil,
+            "correction sync path normalization should reject oversized paths"
+        )
+
+        // Reject leaf-symlinks at the sync path so an attacker who can
+        // plant a symlink at the persisted sync-file location cannot use
+        // the periodic auto-write to overwrite an unrelated file.
+        let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        let fm = FileManager.default
+        let nonexistent = tmpDir.appendingPathComponent("lexomorph-sync-test-missing-\(UUID().uuidString).json")
+        try validateCorrectionSyncPath(nonexistent) // missing files are allowed (first-time write)
+
+        let regular = tmpDir.appendingPathComponent("lexomorph-sync-test-regular-\(UUID().uuidString).json")
+        try Data("{}".utf8).write(to: regular)
+        defer { try? fm.removeItem(at: regular) }
+        try validateCorrectionSyncPath(regular)
+
+        let target = tmpDir.appendingPathComponent("lexomorph-sync-test-target-\(UUID().uuidString).json")
+        try Data("{}".utf8).write(to: target)
+        defer { try? fm.removeItem(at: target) }
+        let link = tmpDir.appendingPathComponent("lexomorph-sync-test-link-\(UUID().uuidString).json")
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+        defer { try? fm.removeItem(at: link) }
+        var rejected = false
+        do {
+            try validateCorrectionSyncPath(link)
+        } catch is TranscriptCorrectionsSyncPathError {
+            rejected = true
+        }
+        try expect(rejected, equals: true,
+                   "validateCorrectionSyncPath should reject a leaf symlink")
+        try expect(
+            shouldStopCorrectionSync(afterPathValidationError: TranscriptCorrectionsSyncPathError.isSymbolicLink),
+            equals: true,
+            "unsafe sync paths should stop configured correction sync"
+        )
+        try expect(
+            shouldStopCorrectionSync(afterPathValidationError: NSError(domain: "LexomorphTest", code: 1)),
+            equals: false,
+            "unrelated sync errors should not clear the configured correction sync path"
+        )
+        try expect(
+            correctionSyncFingerprint(for: link),
+            equals: nil,
+            "correction sync fingerprinting should not follow leaf symlinks"
+        )
+
+        let sameSizeA = tmpDir.appendingPathComponent("lexomorph-sync-fingerprint-a-\(UUID().uuidString).json")
+        let sameSizeB = tmpDir.appendingPathComponent("lexomorph-sync-fingerprint-b-\(UUID().uuidString).json")
+        try Data("aaaa".utf8).write(to: sameSizeA)
+        try Data("bbbb".utf8).write(to: sameSizeB)
+        defer {
+            try? fm.removeItem(at: sameSizeA)
+            try? fm.removeItem(at: sameSizeB)
+        }
+        let sharedModifiedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try fm.setAttributes([.modificationDate: sharedModifiedAt], ofItemAtPath: sameSizeA.path)
+        try fm.setAttributes([.modificationDate: sharedModifiedAt], ofItemAtPath: sameSizeB.path)
+
+        guard let fingerprintA = correctionSyncFingerprint(for: sameSizeA),
+              let fingerprintB = correctionSyncFingerprint(for: sameSizeB) else {
+            throw SelfTestFailure.failed("correction sync fingerprint should read regular files")
+        }
+        try expect(
+            fingerprintA.size,
+            equals: fingerprintB.size,
+            "same-size sync files should have equal size metadata in the fingerprint"
+        )
+        try expect(
+            fingerprintA == fingerprintB,
+            equals: false,
+            "correction sync fingerprint should detect content changes even when file size matches"
+        )
+
+        // The full legal correction set must encode within the
+        // transfer cap: 512 entries at the per-field caps is ~2.4 MB
+        // encoded, which silently failed to save under the old 2 MiB
+        // cap. Also pin that it really is over 2 MiB, documenting why
+        // the cap moved to 4 MiB.
+        let worstCaseSet = (0..<MAX_TRANSCRIPT_CORRECTIONS).map { index in
+            TranscriptCorrection(
+                source: String(format: "%06d-", index)
+                    + String(repeating: "s", count: MAX_TRANSCRIPT_CORRECTION_SOURCE_BYTES - 7),
+                replacement: String(repeating: "r", count: MAX_TRANSCRIPT_CORRECTION_REPLACEMENT_BYTES)
+            )
+        }
+        let worstCaseData = try TranscriptCorrectionsTransfer.encode(worstCaseSet)
+        try expect(
+            worstCaseData.count > 2 * 1024 * 1024,
+            equals: true,
+            "worst-case legal correction set should exceed the old 2 MiB cap (why the cap is now larger)"
+        )
+        try expect(
+            worstCaseData.count <= TranscriptCorrectionsTransfer.maxFileBytes,
+            equals: true,
+            "worst-case legal correction set must fit the transfer cap with JSON-overhead headroom"
+        )
+        try expect(
+            try TranscriptCorrectionsTransfer.decode(worstCaseData).count,
+            equals: MAX_TRANSCRIPT_CORRECTIONS,
+            "worst-case legal correction set should round-trip through the transfer cap"
+        )
+
+        // Near the correction cap a merge can briefly exceed it. The
+        // sync baseline must store the same normalized (capped) list
+        // that is written to the file — a raw over-cap baseline makes
+        // the capped-out entry look like a local deletion later.
+        let sharedNearCap = (0..<(MAX_TRANSCRIPT_CORRECTIONS - 1)).map {
+            TranscriptCorrection(source: "shared-\($0)", replacement: "same")
+        }
+        let nearCapMerge = mergedTranscriptCorrectionsForSync(
+            base: sharedNearCap,
+            local: sharedNearCap + [TranscriptCorrection(source: "local-extra", replacement: "local")],
+            remote: sharedNearCap + [TranscriptCorrection(source: "remote-extra", replacement: "remote")]
+        )
+        try expect(
+            nearCapMerge.conflictingSources,
+            equals: [],
+            "near-cap merge with disjoint additions should not conflict"
+        )
+        try expect(
+            nearCapMerge.corrections.count,
+            equals: MAX_TRANSCRIPT_CORRECTIONS + 1,
+            "near-cap merge result can exceed the cap before normalization"
+        )
+        let nearCapNormalized = normalizedTranscriptCorrections(nearCapMerge.corrections)
+        try expect(
+            nearCapNormalized.count,
+            equals: MAX_TRANSCRIPT_CORRECTIONS,
+            "normalizing the near-cap merge result should drop the over-cap entry"
+        )
+        try expect(
+            nearCapNormalized.contains(TranscriptCorrection(source: "local-extra", replacement: "local")),
+            equals: true,
+            "normalization keeps the earlier (local) addition at the cap"
+        )
+        try expect(
+            nearCapNormalized.contains(TranscriptCorrection(source: "remote-extra", replacement: "remote")),
+            equals: false,
+            "the capped-out remote addition is exactly what the baseline must also drop"
+        )
+
+        // Fingerprinting the bytes we wrote must agree with a fresh
+        // disk fingerprint when nobody touched the file in between —
+        // the sync path uses the in-memory form so a provider replacing
+        // the file in the write-to-fingerprint window is still detected
+        // by the next scan.
+        let fingerprintWriteTarget = tmpDir
+            .appendingPathComponent("lexomorph-sync-written-fingerprint-\(UUID().uuidString).json")
+        let fingerprintWrittenData = try TranscriptCorrectionsTransfer.write(
+            [TranscriptCorrection(source: "fingerprint", replacement: "match")],
+            to: fingerprintWriteTarget
+        )
+        defer { try? fm.removeItem(at: fingerprintWriteTarget) }
+        guard let fingerprintFromDisk = correctionSyncFingerprint(for: fingerprintWriteTarget) else {
+            throw SelfTestFailure.failed("disk fingerprint should be readable right after a write")
+        }
+        try expect(
+            correctionSyncFingerprint(forWrittenData: fingerprintWrittenData, at: fingerprintWriteTarget),
+            equals: fingerprintFromDisk,
+            "fingerprint of written bytes should match the disk fingerprint of an untouched file"
+        )
+
+        // Counted decode keeps the file's pre-normalization entry count
+        // so the import dialog can disclose truncation.
+        let countedOriginal = (0..<(MAX_TRANSCRIPT_CORRECTIONS + 5)).map {
+            TranscriptCorrection(source: "counted-\($0)", replacement: "kept")
+        }
+        let countedEncoder = JSONEncoder()
+        countedEncoder.dateEncodingStrategy = .iso8601
+        let countedDocument = TranscriptCorrectionsDocument(
+            schemaVersion: TranscriptCorrectionsTransfer.schemaVersion,
+            exportedAt: Date(),
+            appVersion: currentBundleVersion(),
+            corrections: countedOriginal
+        )
+        let counted = try TranscriptCorrectionsTransfer.decodeCounted(countedEncoder.encode(countedDocument))
+        try expect(
+            counted.originalCount,
+            equals: MAX_TRANSCRIPT_CORRECTIONS + 5,
+            "counted decode should report the file's pre-normalization entry count"
+        )
+        try expect(
+            counted.corrections.count,
+            equals: MAX_TRANSCRIPT_CORRECTIONS,
+            "counted decode should still normalize down to the correction cap"
+        )
+        let countedLegacy = try TranscriptCorrectionsTransfer.decodeCounted(
+            try JSONEncoder().encode([TranscriptCorrection(source: "  legacy  ", replacement: "entry")])
+        )
+        try expect(
+            countedLegacy,
+            equals: TranscriptCorrectionsTransfer.CountedDecodeResult(
+                corrections: [TranscriptCorrection(source: "legacy", replacement: "entry")],
+                originalCount: 1
+            ),
+            "counted decode should support legacy bare-array files"
+        )
+
+        // Import dialog copy: state the original count when entries
+        // will be dropped, and warn before a cap-overflowing merge.
+        try expect(
+            correctionImportCountText(sourceName: "file.lexomorph-corrections",
+                                      originalCount: 3,
+                                      keptCount: 3),
+            equals: "file.lexomorph-corrections contains 3 corrections.",
+            "import count text should stay simple when nothing is dropped"
+        )
+        let truncatedImportText = correctionImportCountText(
+            sourceName: "big.lexomorph-corrections",
+            originalCount: MAX_TRANSCRIPT_CORRECTIONS + 88,
+            keptCount: MAX_TRANSCRIPT_CORRECTIONS
+        )
+        try expect(
+            truncatedImportText.contains("contains \(MAX_TRANSCRIPT_CORRECTIONS + 88) entries"),
+            equals: true,
+            "import count text should state the file's original entry count when entries are dropped"
+        )
+        try expect(
+            truncatedImportText.contains("first \(MAX_TRANSCRIPT_CORRECTIONS)"),
+            equals: true,
+            "import count text should state how many corrections will actually be kept"
+        )
+        try expect(
+            correctionImportMergeCapWarningText(existingCount: 10, newCount: 10),
+            equals: nil,
+            "merge cap warning should stay silent when the merged set fits"
+        )
+        try expect(
+            correctionImportMergeCapWarningText(existingCount: MAX_TRANSCRIPT_CORRECTIONS,
+                                                newCount: 8)?.contains("8 would be dropped"),
+            equals: true,
+            "merge cap warning should state how many corrections a merge would drop"
+        )
+    }
+
+    /// Covers LLMPostprocessingCoordinator.unloadHostsNoLongerNeeded: a
+    /// host for a model that is no longer selected, or for a stage that was
+    /// switched off, is dropped at once; the selected one stays. Uses
+    /// never-started hosts (LLMHostProcess.stop() is a no-op for them), so
+    /// it is hermetic and fast enough for `all`.
+    private static func testLLMPostprocessingDelayedUnload() throws {
+        let settings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.llm-unload-delay")!,
+                                vocabularyStore: .inMemoryFallback())
+        settings.textPostprocessingMode = .correction
+        settings.llmEngineBackend = .bundledLocal
+        settings.correctionBundledModel = .voiceScribe
+        settings.rewriteEnabled = false
+        let selected = LLMPostprocessingCoordinator.correctionHostIdentity(model: .voiceScribe)
+        let previous = LLMPostprocessingCoordinator.correctionHostIdentity(model: .yandexGPT)
+        try runParakeetEngineSynchronously {
+            let coordinator = LLMPostprocessingCoordinator()
+            await coordinator.registerIdleHostForTest(identity: selected)
+            await coordinator.registerIdleHostForTest(identity: previous)
+
+            await coordinator.unloadHostsNoLongerNeeded(settings: settings)
+            let afterSwitch = await coordinator.hostIdentitiesForTest
+            try expect(afterSwitch, equals: [selected],
+                       "a model switch must unload the previous model's host and keep the selected one")
+
+            settings.textPostprocessingMode = .off
+            await coordinator.unloadHostsNoLongerNeeded(settings: settings)
+            let afterDisable = await coordinator.hostIdentitiesForTest
+            try expect(afterDisable, equals: [], "turning correction off must unload its host")
+
+            await coordinator.stop()
+        }
+    }
+
+    /// Hermetic unit tests for LLMCorrectionGuardrail — the safety net
+    /// against the dictation-corrector model's empirically-observed
+    /// failure modes (dropping the input's leading word, hallucinating
+    /// unfamiliar terms) that must still let its by-design filler removal
+    /// through. No model, no network; part of `all`. The accept/reject
+    /// cases live in fixtures/llm-correction-guardrail.json, shared with the
+    /// Windows port's suite, so the two guardrails cannot drift apart.
+    private static func testLLMCorrectionGuardrail() throws {
+        // GPU canary: a sane model starts its answer with «Привет».
+        try expect(LLMPostprocessingCoordinator.canaryAnswerLooksSane("Привет, как дела?"), equals: true, "corrector echo")
+        try expect(LLMPostprocessingCoordinator.canaryAnswerLooksSane("Привет! Всё хорошо."), equals: true, "instruct greeting")
+        try expect(LLMPostprocessingCoordinator.canaryAnswerLooksSane(" «Привет»"), equals: true, "leading punctuation")
+        try expect(LLMPostprocessingCoordinator.canaryAnswerLooksSane(" обесп"), equals: false, "MI50 garbage")
+        try expect(LLMPostprocessingCoordinator.canaryAnswerLooksSane(""), equals: false, "empty")
+        // A GPU host that crashes while starting is a GPU fault; a plain
+        // failed start (bad model file, exit 1) or the app's own SIGTERM is not.
+        try expect(LLMPostprocessingCoordinator.isCrashDuringStartup(.processExitedDuringStartup(SIGSEGV)), equals: true, "SIGSEGV at start")
+        try expect(LLMPostprocessingCoordinator.isCrashDuringStartup(.processExitedDuringStartup(1)), equals: false, "exit 1 at start")
+        try expect(LLMPostprocessingCoordinator.isCrashDuringStartup(.processExitedDuringStartup(SIGTERM)), equals: false, "SIGTERM at start")
+        // editDistance primitive.
+        try expect(LLMCorrectionGuardrail.editDistance("гитхаб", "гитхуб"), equals: 1,
+                   "single substitution should have distance 1")
+        try expect(LLMCorrectionGuardrail.editDistance("abc", "abc"), equals: 0,
+                   "identical strings should have distance 0")
+
+        try runSharedGuardrailFixture()
+
+        // Chunking for one correction request per piece.
+        try expect(LLMCorrectionGuardrail.correctionChunks("  короткий текст. "), equals: ["короткий текст."],
+                   "short text must stay one chunk")
+        try expect(LLMCorrectionGuardrail.correctionChunks("   "), equals: [],
+                   "blank text must give no chunks")
+        let sentences = (1...60).map { "Это предложение номер \($0)." }
+        let longText = sentences.joined(separator: " ")
+        let chunks = LLMCorrectionGuardrail.correctionChunks(longText, maxCharacters: 200)
+        try expect(chunks.count > 1, equals: true, "long text must be split")
+        try expect(chunks.allSatisfy { $0.count <= 200 }, equals: true, "every chunk must fit the limit")
+        try expect(chunks.allSatisfy { $0.hasSuffix(".") }, equals: true,
+                   "chunks must end on a sentence boundary")
+        try expect(chunks.joined(separator: " "), equals: longText, "chunks must rejoin to the input")
+        let runOn = (1...100).map { "слово\($0)" }.joined(separator: " ")
+        let runOnChunks = LLMCorrectionGuardrail.correctionChunks(runOn, maxCharacters: 120)
+        try expect(runOnChunks.allSatisfy { $0.count <= 120 }, equals: true,
+                   "an over-long sentence must be cut to the limit")
+        try expect(runOnChunks.joined(separator: " "), equals: runOn,
+                   "a cut sentence must rejoin to the input")
+    }
+
+    /// Every case of fixtures/llm-correction-guardrail.json through
+    /// `sanitizedCorrection`, plus the shared filler list. Located from this
+    /// source file, so it runs from a checkout (DEBUG self-tests always do).
+    private static func runSharedGuardrailFixture() throws {
+        struct Case: Decodable { let input: String; let output: String; let expect: String; let why: String }
+        struct WordCount: Decodable {
+            let input_words: Int; let output_words: Int; let expect: String; let why: String
+        }
+        struct WordGuard: Decodable {
+            let input: String; let output: String; let protected: [String]; let expect: String; let why: String
+        }
+        struct Fixture: Decodable {
+            let model_removed_fillers: [String]; let cases: [Case]; let word_count: [WordCount]; let word_guard: [WordGuard]
+        }
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/llm-correction-guardrail.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        try expect(LLMCorrectionGuardrail.modelRemovedFillers, equals: fixture.model_removed_fillers,
+                   "the filler list must match the shared fixture")
+        for item in fixture.cases {
+            let expected = item.expect == "accept"
+                ? item.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                : item.input
+            try expect(LLMCorrectionGuardrail.sanitizedCorrection(input: item.input, output: item.output),
+                       equals: expected, "guardrail must \(item.expect) «\(item.input)» (\(item.why))")
+        }
+        for item in fixture.word_guard {
+            try expect(LLMCorrectionGuardrail.faithfulWords(input: item.input, output: item.output,
+                                                            protected: LLMCorrectionGuardrail.protectedWords(from: item.protected)),
+                       equals: item.expect, "word guard «\(item.input)» (\(item.why))")
+        }
+        try expect(LLMCorrectionGuardrail.protectedWords(from: ["финансовый управляющий", "Дунималова Анаида", "GitHub", "ЕГРН"]),
+                   equals: ["github", "анаида", "дунималова", "егрн"], "only proper words of the vocabulary are protected")
+        for item in fixture.word_count {
+            let input = (0..<item.input_words).map { "слово\($0)" }.joined(separator: " ")
+            let output = (0..<item.output_words).map { "слово\($0)" }.joined(separator: " ")
+            try expect(LLMCorrectionGuardrail.correctionPreservesWordCount(input: input, output: output),
+                       equals: item.expect == "accept",
+                       "word count \(item.input_words) → \(item.output_words) (\(item.why))")
+        }
+    }
+
+    /// The Silero VAD pin through the REAL download path into a temporary
+    /// directory: fresh download, a verified cached copy, and a corrupted
+    /// copy that must be replaced. Network; NOT part of `all`.
+    private static func testSileroVadModelDownload() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lexomorph-silero-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appendingPathComponent(SILERO_VAD_MODEL_FILENAME, isDirectory: false)
+        let download: @Sendable () async throws -> URL = {
+            try await downloadGECFileIfNeeded(existingDescription: "Silero VAD model",
+                                              destination: destination,
+                                              remoteURL: SILERO_VAD_MODEL_URL,
+                                              expectedSize: SILERO_VAD_MODEL_SIZE_BYTES,
+                                              expectedSHA256: SILERO_VAD_MODEL_SHA256)
+        }
+
+        _ = try runParakeetEngineSynchronously(download)
+        try expect(try sha256Hex(ofFileAt: destination), equals: SILERO_VAD_MODEL_SHA256,
+                   "fresh download must match the pinned SHA-256")
+        let firstModified = try FileManager.default.attributesOfItem(atPath: destination.path)[.modificationDate] as? Date
+
+        _ = try runParakeetEngineSynchronously(download)
+        let secondModified = try FileManager.default.attributesOfItem(atPath: destination.path)[.modificationDate] as? Date
+        try expect(secondModified, equals: firstModified, "a verified cached copy must not be redownloaded")
+
+        try Data(repeating: 0, count: Int(SILERO_VAD_MODEL_SIZE_BYTES)).write(to: destination)
+        _ = try runParakeetEngineSynchronously(download)
+        try expect(try sha256Hex(ofFileAt: destination), equals: SILERO_VAD_MODEL_SHA256,
+                   "a corrupted cached copy must be replaced")
+
+        let engine = try SileroVadEngine(modelPath: destination.path)
+        engine.shutdown()
+    }
+
+    /// Full pipeline through a REAL downloaded GEC model and a REAL
+    /// LexomorphLLMHost subprocess (llama_cpp_host) — needs
+    /// LEXOMORPH_GEC_MODEL set to a local base-model .gguf path (plus
+    /// optionally LEXOMORPH_GEC_LORA for the LoRA adapter; when unset,
+    /// an adapter already staged in the app's LLM cache directory is used),
+    /// same convention as LEXOMORPH_PARAKEET_MODEL
+    /// (testParakeetCPUIntegration). NOT part of `all`: downloads/network
+    /// and a multi-second model load are not appropriate for the
+    /// always-on suite.
+    ///
+    /// Exercises the FULL, real pipeline shape (matching LexomorphApp.swift's
+    /// three call sites): processedDictationText (the app's existing
+    /// machine-learned-correction step -- TranscriptCorrector applied
+    /// against a vocabulary entry seeded here to stand in for "the user
+    /// already taught the app this term") THEN
+    /// LLMPostprocessingCoordinator.finalizedText on its output. Foreign-
+    /// term normalization is asserted at THAT layer (the vocabulary), not
+    /// inside the LLM prompt -- see LLMPostprocessingPrompts.swift's own
+    /// doc comment for why a hardcoded dictionary fed to the model was
+    /// tried and rejected. This test only asserts what the model layer
+    /// itself demonstrably does reliably: term/casing correction, and not
+    /// corrupting an already-correct term it's handed.
+    /// The pre-warm primes the bundled host's prompt-prefix snapshot, so
+    /// the very first dictation after it reuses the shared system prompt and
+    /// few-shot turns instead of decoding them. Real model, so not in `all`.
+    private static func testLLMPrefixPrimer() throws {
+        guard let modelPath = ProcessInfo.processInfo.environment["LEXOMORPH_GEC_MODEL"],
+              FileManager.default.fileExists(atPath: modelPath) else {
+            print("SKIP llm-prefix-primer: LEXOMORPH_GEC_MODEL not set to an existing file")
+            return
+        }
+        let coordinator = LLMPostprocessingCoordinator()
+        let settings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.llm-prefix-primer")!,
+                                vocabularyStore: .inMemoryFallback())
+        settings.textPostprocessingMode = .correction
+        settings.llmEngineBackend = .bundledLocal
+        // The suite persists between runs, and the shared-host part below
+        // changes these: set every one the first part depends on.
+        settings.correctionBundledModel = .voiceScribe
+        settings.rewriteEnabled = false
+        settings.llmUseGPU = ProcessInfo.processInfo.environment["LEXOMORPH_PRIMER_CPU"] == nil
+        try runParakeetEngineSynchronously { await coordinator.prewarmNeededHosts(settings: settings) }
+        let cached = try runParakeetEngineSynchronously {
+            await coordinator.correctionCachedTokensForTest("я развернул дебиан сервер", settings: settings)
+        }
+        print("LLM prefix primer: first request after pre-warm reused \(cached.map(String.init) ?? "nil") prompt tokens")
+        try runParakeetEngineSynchronously { await coordinator.stop() }
+        try expect((cached ?? 0) >= 200, equals: true,
+                   "the first correction after pre-warm must reuse the system prompt and few-shot turns")
+
+        // One model for both stages: one host, primed for both, and the
+        // host keeps a snapshot per stage, so neither evicts the other.
+        guard bundledLLMModelExists(.yandexGPT) else {
+            print("SKIP llm-prefix-primer (shared host): YandexGPT is not downloaded")
+            return
+        }
+        let shared = LLMPostprocessingCoordinator()
+        settings.correctionBundledModel = .yandexGPT
+        settings.rewriteEnabled = true
+        settings.rewriteEngineBackend = .bundledLocal
+        settings.rewriteBundledModel = .yandexGPT
+        settings.rewriteStyleID = RewriteStyle.official.rawValue
+        try runParakeetEngineSynchronously { await shared.prewarmNeededHosts(settings: settings) }
+        var counts: [Int?] = []
+        for text in ["я развернул дебиан сервер", "отправь отчёт директору"] {
+            counts.append(try runParakeetEngineSynchronously {
+                await shared.correctionCachedTokensForTest(text, settings: settings)
+            })
+            counts.append(try runParakeetEngineSynchronously {
+                await shared.rewriteCachedTokensForTest(text, settings: settings)
+            })
+        }
+        print("LLM prefix primer (shared host): correction/rewrite alternating reused \(counts.map { $0.map(String.init) ?? "nil" })")
+        try runParakeetEngineSynchronously { await shared.stop() }
+        settings.correctionBundledModel = .voiceScribe
+        settings.rewriteEnabled = false
+        try expect(counts.allSatisfy { ($0 ?? 0) >= 100 }, equals: true,
+                   "a host serving both stages must reuse each stage's system prompt on every request")
+    }
+
+    private static func testLLMGECIntegration() throws {
+        guard let modelPath = ProcessInfo.processInfo.environment["LEXOMORPH_GEC_MODEL"],
+              FileManager.default.fileExists(atPath: modelPath) else {
+            print("SKIP llm-gec: LEXOMORPH_GEC_MODEL not set to an existing file")
+            return
+        }
+
+        let coordinator = LLMPostprocessingCoordinator()
+        let settings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.llm-gec")!,
+                                vocabularyStore: .inMemoryFallback())
+        settings.textPostprocessingMode = .correction
+        settings.llmEngineBackend = .bundledLocal
+        // Exercise the SAME Vulkan backend Parakeet uses (atom hardware
+        // target), via the LLM host's own GPU toggle. If no Vulkan device
+        // is present this falls back to
+        // CPU inside LexomorphLLMHost's own backend registry the same
+        // way Parakeet does -- not a hard requirement for this test to
+        // still pass, just the realistic runtime configuration.
+        settings.llmUseGPU = true
+        // Stands in for "the user already corrected this once" -- the
+        // app's real, general normalization mechanism (VocabularyStore
+        // learns from actual user edits; this seeds one entry directly
+        // instead of simulating that UI flow).
+        _ = try settings.vocabularyStore.upsert(source: "дебиан", replacement: "Debian", origin: .manual)
+
+        // finalizedText resolves the model path via gecModelPath()
+        // (Application Support), not an arbitrary path -- point that at
+        // the env-provided fixture for this test run only by staging it
+        // there if not already present, mirroring the on-demand-download
+        // contract without hitting the network. Same for the LoRA adapter
+        // (gecLoraPath): LEXOMORPH_GEC_LORA overrides, otherwise an
+        // adapter already in the cache is reused.
+        let staged = gecModelPath()
+        if !gecModelCacheExists() {
+            try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: staged.path) {
+                try FileManager.default.removeItem(at: staged)
+            }
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: modelPath), to: staged)
+            if let loraFixture = ProcessInfo.processInfo.environment["LEXOMORPH_GEC_LORA"],
+               FileManager.default.fileExists(atPath: loraFixture) {
+                let stagedLora = gecLoraPath()
+                if FileManager.default.fileExists(atPath: stagedLora.path) {
+                    try FileManager.default.removeItem(at: stagedLora)
+                }
+                try FileManager.default.copyItem(at: URL(fileURLWithPath: loraFixture), to: stagedLora)
+            }
+        }
+        try expect(gecModelCacheExists(), equals: true,
+                   "staged GEC model fixtures should pass the cache size check before use")
+
+        // Step 1: the app's existing deterministic pass (same call
+        // LexomorphApp.swift makes before ever reaching LLM postprocessing).
+        let deterministic = processedDictationText(rawTranscript: "я развернул дебиан сервер",
+                                                    corrections: settings.transcriptCorrections,
+                                                    removeFillerWords: false)
+        try expect(deterministic.text, equals: "я развернул Debian сервер",
+                   "the app's existing vocabulary mechanism should already have normalized дебиан → Debian before the LLM ever sees the text")
+
+        // Step 2: the LLM correction pass on top of that. Note: if the
+        // model drops the leading "я" here, LLMCorrectionGuardrail inside
+        // finalizedText reverts to the input — which still contains the
+        // vocabulary-normalized "Debian", so the assertions below hold
+        // either way (that is the guardrail working as designed, not a
+        // test bypass).
+        let loadStarted = ProcessInfo.processInfo.systemUptime
+        let result1 = try runParakeetEngineSynchronously {
+            await coordinator.finalizedText(deterministic.text, settings: settings)
+        }
+        let loadSeconds = ProcessInfo.processInfo.systemUptime - loadStarted
+        print("LLM GEC: first request (incl. model load) \(String(format: "%.2f", loadSeconds))s, result=\"\(result1)\"")
+        try expect(result1.contains("Debian"), equals: true,
+                   "the LLM pass must not corrupt a term the vocabulary layer already normalized")
+        try expect(result1.isEmpty, equals: false, "correction must never return empty text")
+
+        // Second request on the SAME running host process (load-once
+        // contract, same as ParakeetEngine) -- must not corrupt an
+        // already-Latin term back to Cyrillic.
+        let requestStarted = ProcessInfo.processInfo.systemUptime
+        let result2 = try runParakeetEngineSynchronously {
+            await coordinator.finalizedText("Я развернул Debian сервер.", settings: settings)
+        }
+        let requestSeconds = ProcessInfo.processInfo.systemUptime - requestStarted
+        print("LLM GEC: second request \(String(format: "%.2f", requestSeconds))s, result=\"\(result2)\"")
+        try expect(result2.contains("Debian"), equals: true,
+                   "an already-correct Debian must survive the LLM pass unchanged")
+        try expect(result2.contains("дебиан"), equals: false,
+                   "the model must never revert an already-Latin term back to Cyrillic")
+        // On a GPU whose Vulkan path computes NaN the host now answers 503
+        // instead of aborting, and the coordinator moves to the CPU; either
+        // way the host must still be up after the requests.
+        let faulted = try runParakeetEngineSynchronously { await coordinator.isGPUFaultedForTest }
+        let running = try runParakeetEngineSynchronously { await coordinator.isHostProcessRunningForTest() }
+        print("LLM GEC: GPU fault fallback=\(faulted), host running=\(running)")
+        try expect(running, equals: true, "the model host must stay loaded after a dictation")
+
+        try runParakeetEngineSynchronously { await coordinator.stop() }
+    }
+
+    /// Full end-to-end pipeline through REAL audio, REAL Parakeet ASR, the
+    /// app's REAL deterministic postprocessing (with a fresh, auto-seeded
+    /// vocabulary — a genuinely new install, not a hand-seeded fixture),
+    /// and a REAL LLM correction pass — the exact sequence
+    /// LexomorphApp.swift's own call sites run, exercised without a human
+    /// dictating into a live microphone. Written specifically to catch
+    /// integration bugs BEFORE a build ships for manual testing (this
+    /// project's own standing feedback: don't wait for live human dictation
+    /// to catch mistakes a WAV fixture would have caught first).
+    ///
+    /// Needs LEXOMORPH_PARAKEET_MODEL (real ASR model), LEXOMORPH_GEC_MODEL
+    /// (real correction model), and LEXOMORPH_FULL_PIPELINE_TEST_WAV (a
+    /// 16 kHz mono 16-bit PCM WAV). Regenerate the fixture with:
+    ///   say -v Milena -r 145 "Открой докер и залей изменения на гитхаб." \
+    ///       -o x.aiff && afconvert -f WAVE -d LEI16@16000 -c 1 x.aiff x.wav
+    /// "докер"/"гитхаб" were picked deliberately: the macOS `say` voice's
+    /// pronunciation of "дебиан" was tried first and Parakeet consistently
+    /// mis-transcribed it ("Дебин", "DBN") regardless of sentence context —
+    /// a synthetic-voice artifact confirmed by testing the word in
+    /// isolation, not a pipeline bug (a real human voice says it
+    /// differently; this is a test-fixture limitation, not a product one).
+    /// NOT part of `all` for the same reason the other real-model suites
+    /// aren't: real model loads and real inference, not appropriate for
+    /// the always-on headless suite.
+    private static func testFullDictationPipelineWithLLMCorrection() throws {
+        guard let asrModelPath = ProcessInfo.processInfo.environment["LEXOMORPH_ONNX_MODEL_DIR"],
+              FileManager.default.fileExists(atPath: asrModelPath),
+              let gecModelFixturePath = ProcessInfo.processInfo.environment["LEXOMORPH_GEC_MODEL"],
+              FileManager.default.fileExists(atPath: gecModelFixturePath),
+              let wavPath = ProcessInfo.processInfo.environment["LEXOMORPH_FULL_PIPELINE_TEST_WAV"],
+              FileManager.default.fileExists(atPath: wavPath) else {
+            print("SKIP full-pipeline: needs LEXOMORPH_ONNX_MODEL_DIR + LEXOMORPH_GEC_MODEL + LEXOMORPH_FULL_PIPELINE_TEST_WAV")
+            return
+        }
+
+        let (wavSamples, wavRate) = try loadWavMonoFloat32(path: wavPath)
+        guard wavRate == UInt32(SAMPLE_RATE) else {
+            throw SelfTestFailure.failed("full-pipeline needs a 16 kHz WAV, got \(wavRate) Hz")
+        }
+
+        // Step 1: real ASR, exactly as TranscriptionWorker drives it.
+        let asrEngine = try runParakeetEngineSynchronously {
+            try await OnnxAsrEngine.launch(modelDirectory: URL(fileURLWithPath: asrModelPath, isDirectory: true),
+                                           threadCount: TranscriptionWorker.resolvedASRThreadCount())
+        }
+        defer { _ = try? runParakeetEngineSynchronously { await asrEngine.shutdown() } }
+        let asrStarted = ProcessInfo.processInfo.systemUptime
+        let transcription = try runParakeetEngineSynchronously {
+            try await asrEngine.transcribe(samples: wavSamples)
+        }
+        let asrSeconds = ProcessInfo.processInfo.systemUptime - asrStarted
+        print("FULL PIPELINE: ASR (\(String(format: "%.1f", asrSeconds))s) raw=\"\(transcription.text)\"")
+        try expect(transcription.text.isEmpty, equals: false, "ASR must produce non-empty text for real speech audio")
+
+        // Step 2: the app's REAL deterministic pass, against a FRESH,
+        // empty, on-disk (non-ephemeral) vocabulary store -- a genuinely
+        // new install with zero learned corrections. Deliberately no
+        // seeding: normalizing "докер"/"гитхаб" below with an empty
+        // vocabulary is exactly what proves the LLM layer's own
+        // generalization (not a hardcoded list) is what's actually doing
+        // the normalization work — see LLMPostprocessingPrompts.swift.
+        let tempDBURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("full-pipeline-selftest-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: tempDBURL) }
+        let vocabularyStore = try VocabularyStore(fileURL: tempDBURL)
+        let settings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.full-pipeline-\(UUID().uuidString)")!,
+                                vocabularyStore: vocabularyStore)
+        settings.textPostprocessingMode = .correction
+        settings.llmEngineBackend = .bundledLocal
+        settings.llmUseGPU = true
+
+        let deterministic = processedDictationText(rawTranscript: transcription.text,
+                                                    corrections: settings.transcriptCorrections,
+                                                    removeFillerWords: false)
+        print("FULL PIPELINE: deterministic=\"\(deterministic.text)\"")
+
+        // Step 3: stage the GEC model where finalizedText expects it (same
+        // on-demand-download contract as testLLMGECIntegration).
+        let staged = gecModelPath()
+        if !gecModelCacheExists() {
+            try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: staged.path) {
+                try FileManager.default.removeItem(at: staged)
+            }
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: gecModelFixturePath), to: staged)
+        }
+
+        let coordinator = LLMPostprocessingCoordinator()
+        let llmStarted = ProcessInfo.processInfo.systemUptime
+        let final = try runParakeetEngineSynchronously {
+            await coordinator.finalizedText(deterministic.text, settings: settings)
+        }
+        let llmSeconds = ProcessInfo.processInfo.systemUptime - llmStarted
+        print("FULL PIPELINE: LLM (\(String(format: "%.1f", llmSeconds))s) final=\"\(final)\"")
+        try runParakeetEngineSynchronously { await coordinator.stop() }
+
+        try expect(final.isEmpty, equals: false, "the final pipeline output must never be empty for real speech audio")
+        // The fixture WAV dictates a sentence naming Docker and GitHub (see
+        // this test's own doc comment for how to regenerate it). The
+        // vocabulary store is empty, so the deterministic pass leaves both
+        // terms in phonetic Cyrillic -- normalizing them to canonical Latin
+        // form here is entirely the LLM layer's own generalization.
+        for term in ["Docker", "GitHub"] {
+            try expect(final.contains(term), equals: true,
+                       "expected '\(term)' in the final pipeline output, got: \"\(final)\"")
+        }
+    }
+
+    /// Hermetic coverage for the tiered-correction + rewrite settings and
+    /// pipeline plumbing (docs/specs/rewrite-tiered-correction-spec.md):
+    /// defaults, corruption-tolerant normalization, legacy-key migration,
+    /// correction/rewrite toggle independence, path-based host identities,
+    /// neededHostIdentities (the delayed-unload keep-set), and per-model/
+    /// per-style prompt selection. No model, no network; part of `all`.
+    /// Local LLM endpoints stay direct whatever the proxy toggle says;
+    /// internet ones honour it. Endpoint URLs given with or without `/v1`
+    /// reach `/v1/chat/completions`. Mirrors test_llm_proxy_policy on
+    /// Windows.
+    /// Punctuation restoration settings and the stage's pass-through when
+    /// it is off or its model is missing (no model, no host).
+    private static func testPunctuationSettings() throws {
+        let settings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.punct-\(UUID().uuidString)")!,
+                                vocabularyStore: .inMemoryFallback())
+        try expect(settings.punctuationRestorationEnabled, equals: false, "punctuation restoration is off by default")
+        try expect(settings.punctuationModel, equals: .base, "Base is the default punctuation model")
+        settings.punctuationModel = .small
+        try expect(settings.punctuationModel, equals: .small, "the model choice persists")
+        try expect(PunctuationModel.small.onnxModelID, equals: "punct-small-int8", "small catalog id")
+        try expect(PunctuationModel.base.onnxModelID, equals: "punct-base-int8", "base catalog id")
+        if let resources = resolvedOnnxAsrResources() {
+            for model in PunctuationModel.allCases {
+                let entry = try loadOnnxCatalogEntry(modelID: model.onnxModelID, catalogURL: resources.catalogURL)
+                try expect(entry.files.reduce(0) { $0 + $1.size }, equals: model.downloadBytes,
+                           "\(model.rawValue): downloadBytes matches the catalog")
+            }
+        }
+
+        settings.textPostprocessingMode = .off
+        settings.rewriteEnabled = false
+        let coordinator = LLMPostprocessingCoordinator()
+        let off = try runParakeetEngineSynchronously {
+            await coordinator.finalizedText("привет как дела", settings: settings)
+        }
+        try expect(off, equals: "привет как дела", "with every stage off the text passes through")
+    }
+
+    /// The real Base (or Small) model through the coordinator: needs it
+    /// downloaded into the app cache (Settings → Correction → Punctuation).
+    private static func testPunctuationRestorationReal() throws {
+        guard let model = [PunctuationModel.base, .small].first(where: punctuationModelInstalled) else {
+            print("SKIP punctuation-real: no punctuation model in \(onnxModelCacheDirectory(modelID: "punct-base-int8").path)")
+            return
+        }
+        let settings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.punct-real-\(UUID().uuidString)")!,
+                                vocabularyStore: .inMemoryFallback())
+        settings.textPostprocessingMode = .off
+        settings.rewriteEnabled = false
+        settings.punctuationRestorationEnabled = true
+        settings.punctuationModel = model
+        let coordinator = LLMPostprocessingCoordinator()
+        let started = ProcessInfo.processInfo.systemUptime
+        let first = try runParakeetEngineSynchronously {
+            await coordinator.finalizedText("Когда ты придёшь домой позвони мне пожалуйста", settings: settings)
+        }
+        print("punctuation-real: \(model.rawValue) first request (incl. load) \(String(format: "%.2f", ProcessInfo.processInfo.systemUptime - started)) s: \(first)")
+        try expect(first, equals: "Когда ты придёшь домой, позвони мне, пожалуйста.", "commas and the final period")
+        // Existing sentence ends survive; empty text passes through.
+        let second = try runParakeetEngineSynchronously {
+            await coordinator.finalizedText("Ура! пошли гулять", settings: settings)
+        }
+        try expect(second.hasPrefix("Ура!"), equals: true, "an existing \"!\" is kept: \(second)")
+        let empty = try runParakeetEngineSynchronously {
+            await coordinator.finalizedText("   ", settings: settings)
+        }
+        try expect(empty, equals: "   ", "blank text passes through")
+        // Turning the stage off frees the model host.
+        settings.punctuationRestorationEnabled = false
+        _ = try runParakeetEngineSynchronously {
+            await coordinator.finalizedText("ещё раз", settings: settings)
+        }
+        let loaded = try runParakeetEngineSynchronously { await coordinator.punctuation.isLoadedForTest }
+        try expect(loaded, equals: false, "switching the stage off unloads the model")
+        try runParakeetEngineSynchronously { await coordinator.stop() }
+    }
+
+    private static func testLLMProxyPolicy() throws {
+        for host in ["127.0.0.1", "127.10.0.2", "192.168.1.10", "10.0.0.5",
+                     "172.16.0.1", "172.31.255.255", "169.254.1.1",
+                     "100.64.0.1", "::1", "[::1]", "fe80::1", "fd00::1", "0.0.0.0",
+                     "localhost", "printer.local", "::ffff:192.168.1.5"] {
+            try expect(isLocalNetworkHost(host), equals: true, "local network: \(host)")
+        }
+        for host in ["8.8.8.8", "172.32.0.1", "203.0.113.10", "openrouter.ai", "fcc.example.com"] {
+            try expect(isLocalNetworkHost(host), equals: false, "internet: \(host)")
+        }
+        let cases: [(String, String)] = [
+            ("http://127.0.0.1:1234", "http://127.0.0.1:1234/v1/chat/completions"),
+            ("http://127.0.0.1:1234/", "http://127.0.0.1:1234/v1/chat/completions"),
+            ("https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1/chat/completions"),
+            ("https://openrouter.ai/api/v1/", "https://openrouter.ai/api/v1/chat/completions"),
+            ("https://api.example.com/v1/chat/completions", "https://api.example.com/v1/chat/completions"),
+        ]
+        for (base, expected) in cases {
+            try expect(chatCompletionsURL(URL(string: base)!)?.absoluteString, equals: expected,
+                       "endpoint URL for \(base)")
+        }
+        let settings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.llm-proxy-\(UUID().uuidString)")!,
+                                vocabularyStore: .inMemoryFallback())
+        try expect(settings.llmUseSystemProxy, equals: true, "the system proxy is on by default")
+        settings.llmUseSystemProxy = false
+        try expect(settings.llmUseSystemProxy, equals: false, "turning the proxy off persists")
+    }
+
+    private static func testRewriteAndTierSettings() throws {
+        func freshSettings() -> Settings {
+            Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.rewrite-tier-\(UUID().uuidString)")!,
+                     vocabularyStore: .inMemoryFallback())
+        }
+
+        // Defaults: VoiceScribe correction (the benchmark's best fast
+        // model), rewrite off, polish style, bundled rewrite backend,
+        // YandexGPT as the bundled rewrite model, empty custom endpoint
+        // fields.
+        do {
+            let settings = freshSettings()
+            try expect(settings.correctionBundledModel, equals: .voiceScribe,
+                       "fresh install must default to the VoiceScribe correction model")
+            try expect(settings.rewriteEnabled, equals: false,
+                       "rewrite must be off by default")
+            try expect(settings.rewriteStyleID, equals: RewriteStyle.polish.rawValue,
+                       "polish must be the default rewrite style")
+            try expect(settings.rewriteEngineBackend, equals: .bundledLocal,
+                       "bundled local must be the default rewrite backend")
+            try expect(settings.rewriteBundledModel, equals: .yandexGPT,
+                       "YandexGPT must be the default bundled rewrite model (benchmark winner)")
+            try expect(settings.rewriteCustomBaseURL.isEmpty && settings.rewriteCustomAPIKey.isEmpty && settings.rewriteCustomModelName.isEmpty,
+                       equals: true,
+                       "rewrite custom endpoint fields must start empty")
+        }
+
+        // LLM GPU toggle: clean installs start on CPU; an unset toggle
+        // inherits the retired ASR "Use GPU" key; once set it is explicit.
+        do {
+            let suite = "com.local.lexomorph.selftest.llm-gpu-\(UUID().uuidString)"
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = Settings(defaults: defaults, vocabularyStore: .inMemoryFallback())
+            try expect(settings.llmUseGPU, equals: false, "LLM must start on CPU on a clean install")
+            defaults.set(true, forKey: "parakeet_use_gpu")
+            try expect(settings.llmUseGPU, equals: true, "an unset LLM GPU toggle must inherit the retired ASR toggle")
+            settings.llmUseGPU = false
+            try expect(settings.llmUseGPU, equals: false, "an explicit LLM GPU choice must override the retired ASR toggle")
+            try expect(defaults.bool(forKey: "parakeet_use_gpu"), equals: true, "the LLM toggle must never write the retired key")
+        }
+
+        // Corruption tolerance: unknown stored values fall back to defaults.
+        do {
+            let defaults = UserDefaults(suiteName: "com.local.lexomorph.selftest.rewrite-tier-corrupt-\(UUID().uuidString)")!
+            defaults.set("yolo", forKey: "correction_bundled_model_v2")
+            defaults.set("ultra", forKey: "rewrite_style_v1")
+            defaults.set("quantum", forKey: "rewrite_engine_backend_v1")
+            defaults.set("weird", forKey: "rewrite_bundled_model_v2")
+            let settings = Settings(defaults: defaults, vocabularyStore: .inMemoryFallback())
+            try expect(settings.correctionBundledModel, equals: .voiceScribe, "unknown correction model raw value must normalize to .voiceScribe")
+            try expect(settings.rewriteStyleSelection(), equals: RewriteStyleSelection.builtin(.polish),
+                       "unknown style raw value must normalize to .polish")
+            try expect(settings.rewriteEngineBackend, equals: .bundledLocal, "unknown backend raw value must normalize to .bundledLocal")
+            try expect(settings.rewriteBundledModel, equals: .yandexGPT, "unknown rewrite model raw value must normalize to .yandexGPT")
+        }
+
+        // Legacy migration: the retired tier/rewrite pickers map onto the
+        // new model settings (fast→VoiceScribe, quality→YandexGPT — the
+        // benchmark correction winner, offered in the correction picker;
+        // voiceScribe rewrite→YandexGPT).
+        do {
+            let defaults = UserDefaults(suiteName: "com.local.lexomorph.selftest.rewrite-tier-legacy-\(UUID().uuidString)")!
+            defaults.set("quality", forKey: "correction_model_tier_v1")
+            defaults.set("voicescribe", forKey: "rewrite_bundled_model_v1")
+            let settings = Settings(defaults: defaults, vocabularyStore: .inMemoryFallback())
+            try expect(settings.correctionBundledModel, equals: .yandexGPT,
+                       "legacy quality tier must migrate to YandexGPT (the correction winner)")
+            try expect(settings.rewriteBundledModel, equals: .yandexGPT,
+                       "legacy voiceScribe rewrite choice must migrate to YandexGPT")
+            defaults.set("fast", forKey: "correction_model_tier_v1")
+            try expect(settings.correctionBundledModel, equals: .voiceScribe,
+                       "legacy fast tier must migrate to VoiceScribe")
+        }
+
+        // The pickers mirror the benchmark's test roles: correction offers
+        // every small tested model plus YandexGPT; rewrite offers the
+        // curated rewrite-table set. Several models serve BOTH roles.
+        do {
+            try expect(BundledLLMModel.correctionModels.contains(.voiceScribe), equals: true,
+                       "correction list must contain VoiceScribe")
+            try expect(BundledLLMModel.correctionModels.contains(.loqira), equals: true,
+                       "correction list must contain Loqira (small model tested for correction)")
+            try expect(BundledLLMModel.correctionModels.contains(.vanilla08b), equals: true,
+                       "correction list must contain vanilla 0.8B")
+            try expect(BundledLLMModel.correctionModels.contains(.lfm25), equals: false,
+                       "LFM2.5 must NOT be offered: it always emits <think> reasoning (template-forced AND model-trained), burning the token budget — verified in a live harness")
+            try expect(BundledLLMModel.correctionModels.contains(.yandexGPT), equals: true,
+                       "correction list must contain YandexGPT (correction winner)")
+            try expect(BundledLLMModel.rewriteModels.contains(.yandexGPT), equals: true,
+                       "rewrite list must contain YandexGPT")
+            try expect(BundledLLMModel.rewriteModels.contains(.qwen35_9b), equals: true,
+                       "rewrite list must contain Qwen3.5-9B")
+            try expect(BundledLLMModel.rewriteModels.contains(.gemma4e4b), equals: true,
+                       "rewrite list must contain Gemma 4 E4B")
+            try expect(BundledLLMModel.rewriteModels.contains(.phi4mini)
+                        && BundledLLMModel.rewriteModels.contains(.ministral3b)
+                        && BundledLLMModel.rewriteModels.contains(.ruAdapt4b),
+                       equals: true,
+                       "rewrite list must contain the small models tested for rewrite")
+            try expect(BundledLLMModel.rewriteModels.contains(.lfm25), equals: true,
+                       "rewrite list must contain LFM2.5 (experimental, thinking forced off)")
+            try expect(BundledLLMModel(rawValue: "qwen3_8b"), equals: nil,
+                       "the removed Qwen3-8B case must not exist in the enum")
+            // Prompt-lock policy: Loqira's system prompt is mandatory.
+            try expect(BundledLLMModel.loqira.allowsCustomSystemPrompt, equals: false,
+                       "Loqira must have a locked (mandatory) system prompt")
+            try expect(BundledLLMModel.voiceScribe.allowsCustomSystemPrompt, equals: true,
+                       "VoiceScribe's system prompt must stay editable")
+            // NB thinking mode needs NO launch flags: the bundled helper
+            // hardcodes COMMON_REASONING_FORMAT_NONE and honors the
+            // request-level enable_thinking=false. NEVER pass llama-server
+            // flags (e.g. --reasoning-format) to the helper — it rejects
+            // unknown arguments and exits at startup, silently disabling
+            // the whole correction/rewrite pass.
+        }
+
+        // Toggle independence: flipping rewrite never touches correction
+        // and vice versa — the decoupling the spec mandates (§1.4).
+        do {
+            let settings = freshSettings()
+            settings.rewriteEnabled = true
+            try expect(settings.textPostprocessingMode, equals: .off,
+                       "enabling rewrite must NOT enable correction")
+            settings.textPostprocessingMode = .correction
+            try expect(settings.rewriteEnabled, equals: true,
+                       "enabling correction must NOT disable rewrite")
+            settings.textPostprocessingMode = .off
+            try expect(settings.rewriteEnabled, equals: true,
+                       "disabling correction must NOT disable rewrite")
+            // Endpoint independence: correction and rewrite endpoint fields
+            // hold separate values.
+            settings.llmCustomBaseURL = "http://correction.local:8080"
+            settings.rewriteCustomBaseURL = "http://rewrite.local:8081"
+            settings.llmCustomModelName = "correction-model"
+            settings.rewriteCustomModelName = "rewrite-model"
+            try expect(settings.llmCustomBaseURL, equals: "http://correction.local:8080",
+                       "correction endpoint URL must be independent from rewrite's")
+            try expect(settings.rewriteCustomBaseURL, equals: "http://rewrite.local:8081",
+                       "rewrite endpoint URL must be independent from correction's")
+            try expect(settings.llmCustomModelName != settings.rewriteCustomModelName, equals: true,
+                       "the two endpoint model names must stay separate values")
+        }
+
+        // Host identities are path-based: distinct models get distinct
+        // hosts; the SAME model picked for both passes would share one
+        // host (the pickers offer disjoint lists, so this is a unit-level
+        // invariant, not a UI-reachable state).
+        do {
+            let voiceScribe = LLMPostprocessingCoordinator.correctionHostIdentity(model: .voiceScribe)
+            let qwen4b = LLMPostprocessingCoordinator.correctionHostIdentity(model: .qwen35_4b)
+            let rewriteYandex = LLMPostprocessingCoordinator.rewriteHostIdentity(model: .yandexGPT)
+            try expect(voiceScribe != qwen4b, equals: true,
+                       "different bundled models must map to different host identities")
+            try expect(voiceScribe != rewriteYandex, equals: true,
+                       "correction and rewrite models must map to different host identities")
+            try expect(LLMPostprocessingCoordinator.rewriteHostIdentity(model: .yandexGPT)
+                        == LLMPostprocessingCoordinator.correctionHostIdentity(model: .yandexGPT),
+                       equals: true,
+                       "the same bundled model must resolve to the same host identity for both passes")
+        }
+
+        // neededHostIdentities (the delayed-unload keep-set) across the
+        // enabled-function matrix.
+        do {
+            let settings = freshSettings()
+
+            settings.textPostprocessingMode = .off
+            settings.rewriteEnabled = false
+            try expect(LLMPostprocessingCoordinator.neededHostIdentities(settings: settings).isEmpty, equals: true,
+                       "nothing enabled → no bundled hosts needed")
+
+            settings.textPostprocessingMode = .correction
+            settings.llmEngineBackend = .bundledLocal
+            settings.correctionBundledModel = .voiceScribe
+            try expect(LLMPostprocessingCoordinator.neededHostIdentities(settings: settings).count, equals: 1,
+                       "correction alone needs exactly its own host")
+
+            settings.rewriteEnabled = true
+            settings.rewriteEngineBackend = .bundledLocal
+            try expect(LLMPostprocessingCoordinator.neededHostIdentities(settings: settings).count, equals: 2,
+                       "correction + bundled rewrite need two hosts when the models differ")
+
+            // Same model in BOTH passes (YandexGPT is offered for both):
+            // one shared host identity.
+            settings.correctionBundledModel = .yandexGPT
+            try expect(LLMPostprocessingCoordinator.neededHostIdentities(settings: settings).count, equals: 1,
+                       "YandexGPT correction + YandexGPT rewrite must share ONE host")
+            settings.correctionBundledModel = .voiceScribe
+
+            settings.textPostprocessingMode = .off
+            try expect(LLMPostprocessingCoordinator.neededHostIdentities(settings: settings).count, equals: 1,
+                       "rewrite alone keeps its host (correction toggle-off must not unload it)")
+
+            settings.rewriteEngineBackend = .customEndpoint
+            try expect(LLMPostprocessingCoordinator.neededHostIdentities(settings: settings).isEmpty, equals: true,
+                       "custom-endpoint rewrite needs no bundled host")
+
+            settings.textPostprocessingMode = .correction
+            settings.llmEngineBackend = .customEndpoint
+            try expect(LLMPostprocessingCoordinator.neededHostIdentities(settings: settings).isEmpty, equals: true,
+                       "custom-endpoint correction needs no bundled host")
+        }
+
+        // Prompt selection: VoiceScribe keeps its tuned few-shot prompt;
+        // every instruct model gets the benchmark zero-shot prompt; rewrite
+        // prompts carry their mode instructions and «Режим:» user suffix.
+        do {
+            let voiceScribePrompt = LLMCorrectionPrompt.systemPrompt(vocabulary: [], model: .voiceScribe)
+            let instructPrompt = LLMCorrectionPrompt.systemPrompt(vocabulary: [], model: .qwen35_4b)
+            try expect(voiceScribePrompt.contains("Корректор русской диктовки"), equals: true,
+                       "VoiceScribe must keep its tuned correction prompt")
+            try expect(LLMCorrectionPrompt.exampleTurns(vocabulary: [], model: .voiceScribe).count, equals: 8,
+                       "VoiceScribe must keep its 4 few-shot pairs (8 user+assistant messages)")
+            try expect(instructPrompt.contains("минимальный корректор"), equals: true,
+                       "instruct models must use the benchmark-validated zero-shot prompt")
+            try expect(LLMCorrectionPrompt.exampleTurns(vocabulary: [], model: .qwen35_4b).isEmpty, equals: true,
+                       "instruct models must be zero-shot (benchmark configuration)")
+
+            let polish = LLMRewritePrompt.systemPrompt(style: .polish)
+            try expect(polish.contains("повторы"), equals: true, "polish prompt must instruct repeat removal")
+            let task = LLMRewritePrompt.systemPrompt(style: .structuredTask)
+            try expect(task.contains("структурированную"), equals: true, "task prompt must instruct structuring")
+            let official = LLMRewritePrompt.systemPrompt(style: .official)
+            try expect(official.contains("формальным"), equals: true, "official prompt must instruct formal register")
+            for (style, token) in [(RewriteStyle.polish, "POLISH"),
+                                   (RewriteStyle.structuredTask, "AGENT_TASK"),
+                                   (RewriteStyle.official, "FORMAL")] {
+                let user = LLMRewritePrompt.userText(for: "текст", style: style)
+                try expect(user.hasSuffix("\n\nРежим: \(token)"), equals: true,
+                           "rewrite user turn must carry the benchmark «Режим: \(token)» suffix")
+            }
+            // Every style shares the fact-preservation base.
+            for style in RewriteStyle.allCases {
+                try expect(LLMRewritePrompt.systemPrompt(style: style).contains("Не добавляй новых фактов"), equals: true,
+                           "every rewrite style must keep the fact-preservation base")
+            }
+        }
+
+        // Prompt overrides: empty = built-in default; correction override
+        // is role-wide, rewrite overrides are independent per style; the
+        // Loqira lock is a model property the pipeline reads.
+        do {
+            let settings = freshSettings()
+            try expect(settings.correctionSystemPromptOverride.isEmpty, equals: true,
+                       "no correction prompt override by default")
+            settings.correctionSystemPromptOverride = "Свой промпт коррекции"
+            try expect(settings.correctionSystemPromptOverride, equals: "Свой промпт коррекции",
+                       "correction prompt override must round-trip")
+            try expect(settings.rewriteSystemPromptOverride(for: .polish).isEmpty, equals: true,
+                       "no rewrite prompt override by default")
+            settings.setRewriteSystemPromptOverride("Свой промпт задачи", for: .structuredTask)
+            try expect(settings.rewriteSystemPromptOverride(for: .structuredTask), equals: "Свой промпт задачи",
+                       "rewrite prompt override must round-trip per style")
+            try expect(settings.rewriteSystemPromptOverride(for: .polish).isEmpty, equals: true,
+                       "rewrite prompt overrides must be independent per style")
+        }
+    }
+
+    /// Rewrite integration through the REAL YandexGPT-5-Lite-8B model and
+    /// a REAL LexomorphLLMHost subprocess — needs
+    /// LEXOMORPH_YANDEXGPT_MODEL set to a local copy of
+    /// YandexGPT-5-Lite-8B-instruct-Q4_K_M.gguf (the benchmark copy at
+    /// benchmark/models/ works), same convention as llm-gec's
+    /// LEXOMORPH_GEC_MODEL. NOT part of `all`: a multi-second 4.9 GB
+    /// model load is not appropriate for the always-on suite.
+    private static func testLLMRewriteIntegration() throws {
+        guard let modelPath = ProcessInfo.processInfo.environment["LEXOMORPH_YANDEXGPT_MODEL"],
+              FileManager.default.fileExists(atPath: modelPath) else {
+            print("SKIP llm-rewrite: LEXOMORPH_YANDEXGPT_MODEL not set to an existing file")
+            return
+        }
+
+        let coordinator = LLMPostprocessingCoordinator()
+        let settings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.llm-rewrite")!,
+                                vocabularyStore: .inMemoryFallback())
+        settings.rewriteEnabled = true
+        settings.rewriteEngineBackend = .bundledLocal
+        settings.llmUseGPU = true
+
+        // finalizedText resolves the rewrite model path via
+        // yandexGPTModelPath() (Application Support) — stage the env
+        // fixture there if not already present, mirroring the on-demand
+        // download contract without hitting the network.
+        let staged = yandexGPTModelPath()
+        if !yandexGPTModelCacheExists() {
+            try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: staged.path) {
+                try FileManager.default.removeItem(at: staged)
+            }
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: modelPath), to: staged)
+        }
+        try expect(yandexGPTModelCacheExists(), equals: true,
+                   "staged YandexGPT fixture should pass the cache size check before use")
+
+        // One representative input per style, shaped like the benchmark's
+        // rewrite corpus (free-flowing dictated Russian with repeats,
+        // filler segments, buried facts).
+        let cases: [(style: RewriteStyle, input: String)] = [
+            (.polish,
+             "я вчера ездил к бабушке она попросила помочь с телефоном там ватсап не открывался я переустановил ватсап и все заработало"),
+            (.structuredTask,
+             "напиши скрипт на пайтон который проходит по папке загрузки и раскидывает файлы по расширениям картинки в папку пикчерз документы в докс остальное в миск лог действий в консоль"),
+            (.official,
+             "ну слушай скажи клиенту что договор мы подпишем не раньше двадцать пятого мая потому что бухгалтерия не закрыла акты за апрель"),
+        ]
+
+        let totalStarted = ProcessInfo.processInfo.systemUptime
+        for testCase in cases {
+            settings.setRewriteStyleSelection(.builtin(testCase.style))
+            let started = ProcessInfo.processInfo.systemUptime
+            let result = try runParakeetEngineSynchronously {
+                await coordinator.finalizedText(testCase.input, settings: settings)
+            }
+            let seconds = ProcessInfo.processInfo.systemUptime - started
+            print("LLM REWRITE [\(testCase.style.rawValue)] \(String(format: "%.2f", seconds))s in=\"\(testCase.input.prefix(60))…\" out=\"\(result)\"")
+            try expect(result.isEmpty, equals: false,
+                       "rewrite [\(testCase.style.rawValue)] must never return empty text")
+            try expect(result.contains("Режим:"), equals: false,
+                       "rewrite [\(testCase.style.rawValue)] must not echo the mode suffix back")
+        }
+        let totalSeconds = ProcessInfo.processInfo.systemUptime - totalStarted
+        print("LLM REWRITE: 3 styles total \(String(format: "%.2f", totalSeconds))s (first request includes model load)")
+
+        try runParakeetEngineSynchronously { await coordinator.stop() }
+    }
+
+    private static func testVocabularyStore() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-store-selftest-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let store = try VocabularyStore(fileURL: tempURL)
+
+        // Manual upsert + dedup by source (case-insensitive).
+        let first = try store.upsert(source: "инглиш", replacement: "English", origin: .manual)
+        guard first.origin == .manual else { throw VocabularyLearningTestFailure("expected manual origin") }
+        let updated = try store.upsert(source: "Инглиш", replacement: "english", origin: .manual)
+        guard store.count() == 1, updated.replacement == "english" else {
+            throw VocabularyLearningTestFailure("case-insensitive upsert should update the existing row, not add a second one")
+        }
+
+        // recordLearned: no-op when source already known.
+        guard store.recordLearned(source: "инглиш", replacement: "English") == nil else {
+            throw VocabularyLearningTestFailure("recordLearned should no-op for an already-known source")
+        }
+
+        // recordLearned: succeeds for a new source, tagged 'learned'.
+        guard let learned = store.recordLearned(source: "кложа", replacement: "closure"), learned.origin == .learned else {
+            throw VocabularyLearningTestFailure("recordLearned should insert a new source tagged learned")
+        }
+        guard store.count() == 2 else { throw VocabularyLearningTestFailure("expected 2 rows after recordLearned") }
+
+        // delete(id:)
+        store.delete(id: learned.id)
+        guard store.count() == 1 else { throw VocabularyLearningTestFailure("delete(id:) should remove exactly one row") }
+
+        // replaceAllPreservingOrigin: preserves origin/created_at for kept rows, drops missing ones, adds new ones as manual.
+        _ = try store.upsert(source: "старое", replacement: "old", origin: .learned)
+        store.replaceAllPreservingOrigin([
+            TranscriptCorrection(source: "инглиш", replacement: "English (edited)"),
+            TranscriptCorrection(source: "новое", replacement: "new"),
+        ])
+        let all = store.all()
+        guard all.count == 2 else { throw VocabularyLearningTestFailure("replaceAllPreservingOrigin should leave exactly the given sources") }
+        guard let englishRow = all.first(where: { $0.source.lowercased() == "инглиш" }), englishRow.replacement == "English (edited)" else {
+            throw VocabularyLearningTestFailure("replaceAllPreservingOrigin should update the replacement text for a kept source")
+        }
+        guard let newRow = all.first(where: { $0.source == "новое" }), newRow.origin == .manual else {
+            throw VocabularyLearningTestFailure("replaceAllPreservingOrigin should tag brand-new sources as manual")
+        }
+
+        // Cap enforcement in recordLearned.
+        let capStore = try VocabularyStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("vocabulary-store-cap-\(UUID().uuidString).sqlite"))
+        defer { }
+        for index in 0..<MAX_TRANSCRIPT_CORRECTIONS {
+            _ = try capStore.upsert(source: "src\(index)", replacement: "rep\(index)", origin: .manual)
+        }
+        guard capStore.recordLearned(source: "one-too-many", replacement: "nope") == nil else {
+            throw VocabularyLearningTestFailure("recordLearned must not exceed MAX_TRANSCRIPT_CORRECTIONS")
+        }
+    }
+
+    /// ASR hotwords (docs/specs/asr-hotwords-spec.md §6–§8), unit level:
+    /// the selection rule, the `asr_hint` migration on a temp store, the
+    /// settings and the TRANSCRIBE options. The real host is exercised by
+    /// `onnx-asr-real`.
+    // MARK: - Vocabulary hygiene (spec vocabulary-hygiene-and-sync §2–§3, §5)
+
+    private static func hygieneRecord(_ id: Int64, _ source: String, _ replacement: String,
+                                      _ origin: VocabularyOrigin = .learned,
+                                      updated: String = "2026-10-01T00:00:00Z") -> VocabularyRecord {
+        VocabularyRecord(id: id, source: source, replacement: replacement, origin: origin,
+                         createdAt: updated, updatedAt: updated)
+    }
+
+    private static func testVocabularyHygiene() throws {
+        typealias Verdict = VocabularyHygiene.Verdict
+        func accept(_ source: String, _ replacement: String,
+                    _ rewrites: [VocabularyHygiene.Rewrite] = []) -> Verdict {
+            .accept(source: source, replacement: replacement, rewrites: rewrites)
+        }
+
+        // --- Table: every §1 example and the §2 keep-cases -------------
+        // (source, replacement, existing entries, expected verdict)
+        let manualGitHub = hygieneRecord(44, "гитхаб", "GitHub", .manual)
+        let cases: [(String, String, [VocabularyRecord], Verdict)] = [
+            // §1 punctuation-only edits
+            ("оплатил", "оплатил.", [], .reject(.punctuation)),
+            ("соусом.", "соусом!!", [], .reject(.punctuation)),
+            ("инструменты.", "инструменты?", [], .reject(.punctuation)),
+            ("ознакомления", "ознакомления.", [], .reject(.punctuation)),
+            // §1 replacement without letters
+            ("интернейшнл.", ".", [], .reject(.noLetters)),
+            ("S.", "1", [], .reject(.noLetters)),
+            // §1 grammar / inflection edits (+ §2 «черноиск»)
+            ("Запомню", "Запомни", [], .reject(.inflection)),
+            ("дополню,", "дополни,", [], .reject(.inflection)),
+            ("пробиваю.", "пробивает.", [], .reject(.inflection)),
+            ("капюшонном,", "капюшоном,", [], .reject(.inflection)),
+            ("погонял", "погоняло", [], .reject(.inflection)),
+            ("сторониной", "стороной", [], .reject(.inflection)),
+            ("черноиск", "черновик", [], .reject(.inflection)),
+            // Several words, short stems, fleeting vowels, hyphens, «ё»
+            ("финансовая управляющая", "финансового управляющего", [], .reject(.inflection)),
+            ("обжалуемым судебным актом", "обжалуемыми судебными актами", [], .reject(.inflection)),
+            ("договор суда", "договор суду", [], .reject(.inflection)),
+            ("Санкт-Петербурга", "Санкт-Петербургу", [], .reject(.inflection)),
+            ("отец", "отца", [], .reject(.inflection)),
+            ("день", "дня", [], .reject(.inflection)),
+            ("лёд", "льда", [], .reject(.inflection)),
+            ("бой", "боя", [], .reject(.inflection)),
+            ("сделал работу", "сделала работы", [], .reject(.inflection)),
+            ("ёлка", "елки", [], .reject(.inflection)),
+            // Real fixes that only look like an ending
+            ("кто", "кот", [], accept("кто", "кот")),
+            ("Бюллеттени Нилова", "Бюллетени Нилова", [], accept("Бюллеттени Нилова", "Бюллетени Нилова")),
+            ("Биллюте Николашникова", "Биллютени Калашникова", [], accept("Биллюте Николашникова", "Биллютени Калашникова")),
+            ("докс-документа", "DOCX-документа", [], accept("докс-документа", "DOCX-документа")),
+            // §1 content rewrites
+            ("Смотри.", "Задайте вопрос ChatGPT", [], .reject(.rewrite)),
+            ("тридцать семь. А", "37А", [], .reject(.rewrite)),
+            // §1 chain: a typo of a typo collapses onto the final target
+            ("Pypline.", "Pipline.", [hygieneRecord(143, "Pipline.", "Pipeline.")], accept("Pypline", "Pipeline")),
+            // §1 case conflicts: manual casing wins, else the newest entry
+            ("Гетхаб.", "Github.", [manualGitHub], accept("Гетхаб", "GitHub")),
+            ("Зип,", "Zip,", [hygieneRecord(140, "ЗИП", "ZIP", updated: "2026-10-28T10:55:18Z")], accept("Зип", "Zip")),  // same key: the newer casing replaces it
+            ("Интернейшн", "international",
+             [hygieneRecord(12, "Интернейшнал.", "International.", updated: "2026-08-13T09:19:28Z")],
+             accept("Интернейшн", "International")),
+            // §1 edge punctuation baked into the source
+            ("Гетхаб.", "Github.", [], accept("Гетхаб", "Github")),
+            // §1 several sources for one target stay
+            ("докx", "docx", [hygieneRecord(112, "DogX", "docx"), hygieneRecord(102, "док икс", "docx")], accept("докx", "docx")),
+            // §2 rule 1: shared edge punctuation
+            ("Pipline.", "Pipeline.", [], accept("Pipline", "Pipeline")),
+            // §2 rule 2 keep-cases: formatting fixes of terms
+            ("IS60", "IS-60", [], accept("IS60", "IS-60")),
+            ("Metal Fish", "MetalFish", [], accept("Metal Fish", "MetalFish")),
+            ("NH C14S", "NH-C14S", [], accept("NH C14S", "NH-C14S")),
+            ("Амирханян Ц", "АмирханянЦ", [], accept("Амирханян Ц", "АмирханянЦ")),
+            ("Х 99", "Х99", [], accept("Х 99", "Х99")),
+            // §2 rule 4 keep-cases
+            ("Егр", "ЕГРЮЛ", [], accept("Егр", "ЕГРЮЛ")),
+            ("Нечепуренко", "Ничипуренко", [], accept("Нечепуренко", "Ничипуренко")),
+            ("красненькову", "Красникову", [], accept("красненькову", "Красникову")),
+            ("паникший", "поникший", [], accept("паникший", "поникший")),
+            ("снуху", "слуху", [], accept("снуху", "слуху")),
+            // §2 rule 5 keep-cases
+            ("Эмсипи", "MCP", [], accept("Эмсипи", "MCP")),
+            ("Эс эйч", "ssh", [], accept("Эс эйч", "ssh")),
+            ("Comment", "Command", [], accept("Comment", "Command")),
+            ("Юзу ВМ", "УВМ", [], accept("Юзу ВМ", "УВМ")),
+            ("Кад Сендер", "kad sender", [], accept("Кад Сендер", "kad sender")),
+            // §2 rule 6: undo of an earlier correction (checked before the
+            // rejection rules: this revert is itself an inflection edit)
+            ("Запомни", "Запомню", [hygieneRecord(117, "Запомню", "Запомни")], .undo(existingId: 117)),
+            ("Github", "Гетхаб", [hygieneRecord(90, "Гетхаб.", "Github.")], .undo(existingId: 90)),
+            // §2 rule 7b: entries pointing at the new source follow it
+            ("Pipline", "Pipeline", [hygieneRecord(142, "Pypline.", "Pipline.")],
+             accept("Pipline", "Pipeline", [VocabularyHygiene.Rewrite(id: 142, replacement: "Pipeline")])),
+        ]
+        for (source, replacement, existing, expected) in cases {
+            try expect(VocabularyHygiene.review(source: source, replacement: replacement, existing: existing),
+                       equals: expected, "review «\(source) → \(replacement)»")
+        }
+
+        // Manual editor: rules 1 and 3 only.
+        let manualTrim = VocabularyHygiene.reviewManual(source: "Pipline.", replacement: "Pipeline.")
+        try expect(manualTrim.map { "\($0.source)→\($0.replacement)" }, equals: "Pipline→Pipeline", "manual: rule 1 trims")
+        try expect(VocabularyHygiene.reviewManual(source: "S.", replacement: "1") == nil, equals: true, "manual: rule 3 rejects")
+        try expect(VocabularyHygiene.reviewManual(source: "Запомню", replacement: "Запомни") != nil, equals: true,
+                   "manual: no inflection rule")
+        try expect(VocabularyHygiene.reviewManual(source: "Смотри", replacement: "Задайте вопрос ChatGPT") != nil, equals: true,
+                   "manual: no rewrite rule")
+
+        // --- Store: learn path with hygiene, undo and tombstones ---------
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-hygiene-selftest-\(UUID().uuidString).sqlite")
+        defer {
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: tempURL.path + suffix) }
+        }
+        let store = try VocabularyStore(fileURL: tempURL)
+        try expect(store.commitLearned(source: "оплатил", replacement: "оплатил."), equals: .rejected(.punctuation),
+                   "commitLearned rejects a punctuation edit")
+        try expect(store.count(), equals: 0, "a rejected candidate writes nothing")
+        guard case .learned(let pipline) = store.commitLearned(source: "Pypline.", replacement: "Pipline.") else {
+            throw SelfTestFailure.failed("commitLearned should store a new term")
+        }
+        try expect("\(pipline.source)→\(pipline.replacement)", equals: "Pypline→Pipline", "stored trimmed")
+        guard case .learned = store.commitLearned(source: "Pipline", replacement: "Pipeline") else {
+            throw SelfTestFailure.failed("commitLearned should store the chain head")
+        }
+        try expect(store.all().first { $0.id == pipline.id }?.replacement, equals: "Pipeline",
+                   "chain collapsed onto the newest target in the same transaction")
+        _ = try store.upsert(source: "гитхаб", replacement: "GitHub", origin: .manual)
+        guard case .learned(let github) = store.commitLearned(source: "Гетхаб.", replacement: "Github.") else {
+            throw SelfTestFailure.failed("commitLearned should store Гетхаб")
+        }
+        try expect(github.replacement, equals: "GitHub", "case unified with the manual entry")
+        guard case .undone(let undone) = store.commitLearned(source: "GitHub", replacement: "Гетхаб") else {
+            throw SelfTestFailure.failed("reverting a correction should undo it")
+        }
+        try expect(undone.id, equals: github.id, "undo deletes the reverted entry")
+        try expect(store.all().contains { $0.id == github.id }, equals: false, "reverted entry is gone")
+        try expect(store.tombstones().map(\.key), equals: ["гетхаб"], "undo writes a tombstone")
+        guard case .learned = store.commitLearned(source: "Гетхаб", replacement: "GitHub") else {
+            throw SelfTestFailure.failed("re-learning a deleted key should work")
+        }
+        try expect(store.tombstones().isEmpty, equals: true, "re-adding a key removes its tombstone")
+        try expect(store.commitLearned(source: "гитхаб", replacement: "GitHab"), equals: .declined("source already known"),
+                   "a known source is never overwritten by learning")
+        // Every delete path writes a tombstone.
+        let doomed = try store.upsert(source: "удалить", replacement: "Delete", origin: .manual)
+        store.delete(id: doomed.id)
+        _ = try store.upsert(source: "второй", replacement: "Second", origin: .manual)
+        store.deleteWhere(sourceCaseInsensitive: "ВТОРОЙ")
+        store.replaceAllPreservingOrigin(store.all().filter { $0.source != "гитхаб" }
+            .map { TranscriptCorrection(source: $0.source, replacement: $0.replacement) })
+        try expect(Set(store.tombstones().map(\.key)), equals: ["удалить", "второй", "гитхаб"],
+                   "delete(id:), deleteWhere and replaceAll write tombstones")
+
+        // --- Cleanup plan on a store mimicking the real dictionary --------
+        let realURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-cleanup-selftest-\(UUID().uuidString).sqlite")
+        defer {
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: realURL.path + suffix) }
+        }
+        let real = try VocabularyStore(fileURL: realURL)
+        // (source, replacement, origin, updated_at) — rows from the user's
+        // dictionary (spec §1), written with their real stamps.
+        let rows: [(String, String, VocabularyOrigin, String)] = [
+            ("гитхаб", "GitHub", .manual, "2026-08-20T12:37:28Z"),
+            ("докер", "Docker", .manual, "2026-08-20T12:37:28Z"),
+            ("Гетхаб.", "Github.", .learned, "2026-08-27T23:48:23Z"),
+            ("ЗИП", "ZIP", .learned, "2026-10-28T10:55:18Z"),
+            ("Зип,", "Zip,", .learned, "2026-10-28T01:04:11Z"),
+            ("Интернейшн", "international", .learned, "2026-08-13T09:18:50Z"),
+            ("Интернейшнал.", "International.", .learned, "2026-08-13T09:19:28Z"),
+            ("Pipline.", "Pipeline.", .learned, "2026-10-28T13:22:16Z"),
+            ("Pypline.", "Pipline.", .learned, "2026-10-28T13:22:11Z"),
+            ("Нечепуренко", "Ничипуренко", .learned, "2026-09-28T18:55:42Z"),
+            ("Не Чепуренко.", "Ничипуренко.", .learned, "2026-09-28T18:55:33Z"),
+            ("DogX", "docx", .learned, "2026-10-06T19:30:28Z"),
+            ("докx", "docx", .learned, "2026-10-19T10:56:38Z"),
+            ("оплатил", "оплатил.", .learned, "2026-10-26T20:54:31Z"),
+            ("интернейшнл.", ".", .learned, "2026-08-17T11:05:30Z"),
+            ("Запомню", "Запомни", .learned, "2026-10-19T10:56:30Z"),
+            ("Смотри.", "Задайте вопрос ChatGPT", .learned, "2026-08-29T10:19:41Z"),
+            ("дривен", "driven", .learned, "2026-08-12T22:10:27Z"),
+            ("Дривен.", "Driven.", .learned, "2026-08-12T22:10:08Z"),
+            ("Эмсипи", "MCP", .learned, "2026-08-24T18:17:06Z"),
+        ]
+        try real.applyRemote(rows.map {
+            VocabularyStore.RemoteEntry(source: $0.0, replacement: $0.1, origin: $0.2, asrHint: nil,
+                                        deleted: false, updatedAt: $0.3)
+        })
+        let plan = real.cleanupPlan()
+        func describe(_ deletion: VocabularyHygiene.CleanupDeletion) -> String {
+            switch deletion.reason {
+            case .rejected(let reason): return "\(deletion.record.source)|\(reason.rawValue)"
+            case .duplicate: return "\(deletion.record.source)|duplicate"
+            }
+        }
+        try expect(Set(plan.deletions.map(describe)), equals: [
+            "оплатил|punctuation", "интернейшнл.|no-letters", "Запомню|inflection", "Смотри.|rewrite",
+            "Дривен.|duplicate", "Зип,|duplicate",
+        ], "cleanup deletions (ЗИП and Зип, share one source key)")
+        let rewrites = Dictionary(uniqueKeysWithValues: plan.rewrites.map {
+            ($0.record.source, "\($0.source)→\($0.replacement) [\($0.kinds.map(\.rawValue).joined(separator: ","))]")
+        })
+        try expect(rewrites, equals: [
+            "Гетхаб.": "Гетхаб→GitHub [trimmed,case]",
+            "Интернейшн": "Интернейшн→International [case]",
+            "Интернейшнал.": "Интернейшнал→International [trimmed]",
+            "Pipline.": "Pipline→Pipeline [trimmed]",
+            "Pypline.": "Pypline→Pipeline [trimmed,chain]",
+            "Не Чепуренко.": "Не Чепуренко→Ничипуренко [trimmed]",
+        ], "cleanup rewrites")
+        try expect(Set(plan.merges.map { "\($0.keptSource)<-\($0.removed.map(\.source).joined(separator: ","))" }),
+                   equals: ["ЗИП<-Зип,", "дривен<-Дривен."], "duplicates merge onto the newest entry")
+        let manualBefore = real.all().filter { $0.origin == .manual }
+        try real.applyCleanup(plan)
+        let after = real.all()
+        try expect(after.filter { $0.origin == .manual }, equals: manualBefore, "manual entries are never touched")
+        try expect(after.count, equals: rows.count - plan.deletions.count, "deletions applied")
+        try expect(after.first { $0.source == "Pypline" }?.replacement, equals: "Pipeline", "rewrites applied")
+        try expect(real.cleanupPlan().isEmpty, equals: true, "a second cleanup finds nothing")
+        let tombstoneKeys = Set(real.tombstones().map(\.key))
+        try expect(tombstoneKeys.isSuperset(of: ["оплатил", "запомню", "дривен.", "гетхаб.", "pypline."]), equals: true,
+                   "cleanup deletions and re-keyed rewrites leave tombstones")
+        // A plan built before an edit is refused.
+        _ = try real.upsert(source: "Мусор", replacement: "мусор.", origin: .learned)
+        let stalePlan = real.cleanupPlan()
+        _ = try real.upsert(source: "Мусор", replacement: "мусор!", origin: .learned)
+        do {
+            try real.applyCleanup(stalePlan)
+            throw SelfTestFailure.failed("a stale cleanup plan must be refused")
+        } catch VocabularyStore.CleanupError.storeChanged {
+        }
+    }
+
+    private static func testVocabularyCleanupDryRun() throws {
+        guard let path = ProcessInfo.processInfo.environment["SD_VOCAB_CLEANUP_DB"], !path.isEmpty else {
+            print("SKIP vocabulary-cleanup-dry-run: SD_VOCAB_CLEANUP_DB is not set (point it at a copy of corrections.sqlite)")
+            return
+        }
+        let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        let live = try lexomorphApplicationSupportDirectory()
+            .appendingPathComponent("corrections.sqlite").standardizedFileURL.resolvingSymlinksInPath()
+        guard url.path != live.path else {
+            throw SelfTestFailure.failed("refusing to open the live dictionary; pass a copy")
+        }
+        let store = try VocabularyStore(fileURL: url)
+        let plan = store.cleanupPlan()
+        print("CLEANUP PLAN for \(store.count()) entries: \(plan.deletions.count) deletions, \(plan.rewrites.count) rewrites, \(plan.merges.count) merges")
+        for deletion in plan.deletions {
+            let reason: String
+            switch deletion.reason {
+            case .rejected(let rejected): reason = rejected.rawValue
+            case .duplicate(let keptId): reason = "duplicate of id \(keptId)"
+            }
+            print("DELETE  id=\(deletion.record.id) «\(deletion.record.source)» → «\(deletion.record.replacement)»  [\(reason)]")
+        }
+        for rewrite in plan.rewrites {
+            print("REWRITE id=\(rewrite.record.id) «\(rewrite.record.source)» → «\(rewrite.record.replacement)»  ⇒  «\(rewrite.source)» → «\(rewrite.replacement)»  [\(rewrite.kinds.map(\.rawValue).joined(separator: ","))]")
+        }
+        for merge in plan.merges {
+            print("MERGE   keep id=\(merge.keptId) «\(merge.keptSource)» ← \(merge.removed.map { "id=\($0.id) «\($0.source)»" }.joined(separator: ", "))")
+        }
+        // SD_VOCAB_CLEANUP_APPLY=1 applies the plan to the COPY through the
+        // same store method as «Почистить словарь…».
+        if ProcessInfo.processInfo.environment["SD_VOCAB_CLEANUP_APPLY"] == "1" {
+            try store.applyCleanup(plan)
+            print("CLEANUP APPLIED to the copy: \(store.count()) entries left")
+        }
+    }
+
+    // MARK: - Vocabulary account sync (spec vocabulary-hygiene-and-sync §4, §5)
+
+    private static func testVocabularySync() throws {
+        guard let rawURL = ProcessInfo.processInfo.environment["SD_VOCAB_SYNC_TEST_URL"],
+              let serverURL = URL(string: rawURL) else {
+            print("SKIP vocabulary-sync: SD_VOCAB_SYNC_TEST_URL is not set (start server/vocab-sync locally)")
+            return
+        }
+        final class Device {
+            let settings: Settings
+            let store: VocabularyStore
+            let tokens = InMemoryVocabularySyncTokenStore()
+            let engine: VocabularySyncEngine
+            let url: URL
+            let suite: String
+
+            init(name: String, serverURL: URL) throws {
+                suite = "com.local.lexomorph.selftest.vocabulary-sync-\(name)-\(UUID().uuidString)"
+                url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("vocabulary-sync-\(name)-\(UUID().uuidString).sqlite")
+                store = try VocabularyStore(fileURL: url)
+                settings = Settings(defaults: UserDefaults(suiteName: suite)!, vocabularyStore: store)
+                settings.setVocabularySyncServerURLOverride(serverURL.absoluteString)
+                engine = VocabularySyncEngine(settings: settings, tokenStore: tokens, lockFileURL: nil)
+            }
+
+            func cleanUp() {
+                UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+                for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+            }
+
+            func row(_ source: String) -> VocabularyRecord? {
+                store.all().first { normalizedTranscriptCorrectionSource($0.source) == normalizedTranscriptCorrectionSource(source) }
+            }
+        }
+        let a = try Device(name: "a", serverURL: serverURL)
+        let b = try Device(name: "b", serverURL: serverURL)
+        defer { a.cleanUp(); b.cleanUp() }
+        let email = "selftest-\(UUID().uuidString.prefix(8).lowercased())@example.com"
+        let password = "correct horse battery"
+
+        func pass(_ device: Device) throws -> VocabularySyncPassSummary {
+            let engine = device.engine
+            return try runParakeetEngineSynchronously { try await engine.runPass() }
+        }
+
+        // Wrong-length password → invalid credentials, nothing stored.
+        do {
+            let engine = a.engine
+            _ = try runParakeetEngineSynchronously { try await engine.signIn(email: email, password: "short") }
+            throw SelfTestFailure.failed("a 7-character password must be refused")
+        } catch VocabularySyncFailure.invalidCredentials {
+        }
+        try expect(a.engine.isSignedIn, equals: false, "a refused sign-in stores no token")
+
+        // Device A has entries before the account exists; a hint travels.
+        _ = try a.store.upsert(source: "докер", replacement: "Docker", origin: .manual)
+        let ddr = try a.store.upsert(source: "DR4 DM", replacement: "DDR4 DIMM", origin: .learned)
+        try a.store.setAsrHint(id: ddr.id, hint: false)
+        let created = try runParakeetEngineSynchronously { [engine = a.engine] in
+            try await engine.signIn(email: email, password: password)
+        }
+        try expect(created, equals: true, "the first sign-in creates the account")
+        let first = try pass(a)
+        try expect(first.pushed, equals: 2, "the first pass pushes every local entry")
+
+        // Device B joins the same account and gets A's dictionary.
+        let joined = try runParakeetEngineSynchronously { [engine = b.engine] in
+            try await engine.signIn(email: email.uppercased(), password: password)
+        }
+        try expect(joined, equals: false, "a second device signs in to the existing account")
+        do {
+            let engine = b.engine
+            _ = try runParakeetEngineSynchronously { try await engine.signIn(email: email, password: "wrong password") }
+            throw SelfTestFailure.failed("a wrong password must be refused")
+        } catch VocabularySyncFailure.wrongPassword {
+        }
+        try expect(b.engine.isSignedIn, equals: true, "a failed re-sign-in keeps the existing token")
+        let localChanges = LockedCounter()
+        b.store.onLocalChange = { localChanges.increment() }
+        _ = try pass(b)
+        try expect(b.row("докер")?.replacement, equals: "Docker", "A's entry reaches B")
+        try expect(b.row("DR4 DM")?.asrHint, equals: false, "asr_hint travels with the entry")
+        try expect(b.row("DR4 DM")?.origin, equals: .learned, "origin travels with the entry")
+        try expect(b.row("DR4 DM")?.updatedAt, equals: a.row("DR4 DM")?.updatedAt,
+                   "an applied remote entry keeps the remote updated_at")
+        try expect(localChanges.value, equals: 0, "applying remote entries is not a local change")
+        b.store.onLocalChange = nil
+
+        // An add on A appears on B.
+        _ = try a.store.upsert(source: "гитхаб", replacement: "GitHub", origin: .manual)
+        _ = try pass(a)
+        _ = try pass(b)
+        try expect(b.row("гитхаб")?.replacement, equals: "GitHub", "an add on A appears on B")
+
+        // A delete on B removes the entry on A. Stamps have one-second
+        // resolution and a tie keeps the server copy, so the delete must
+        // land in a later second than the add.
+        Thread.sleep(forTimeInterval: 1.1)
+        b.store.deleteWhere(sourceCaseInsensitive: "гитхаб")
+        _ = try pass(b)
+        _ = try pass(a)
+        try expect(a.row("гитхаб") == nil, equals: true, "a delete on B removes the entry on A")
+        try expect(a.store.tombstones().map(\.key).contains("гитхаб"), equals: true, "the remote delete leaves a tombstone on A")
+
+        // Conflict: the newer updated_at wins, whichever device pushes last.
+        _ = try a.store.upsert(source: "дебиан", replacement: "Debian", origin: .manual)
+        _ = try pass(a)
+        _ = try pass(b)
+        _ = try a.store.upsert(source: "дебиан", replacement: "Debian (A, older)", origin: .manual)
+        Thread.sleep(forTimeInterval: 1.2)
+        _ = try b.store.upsert(source: "дебиан", replacement: "Debian (B, newer)", origin: .manual)
+        _ = try pass(b)
+        _ = try pass(a)
+        try expect(a.row("дебиан")?.replacement, equals: "Debian (B, newer)", "the newer edit wins on A")
+        _ = try pass(b)
+        try expect(b.row("дебиан")?.replacement, equals: "Debian (B, newer)", "the older edit does not overwrite B")
+
+        // Custom hotwords travel between devices through the real server.
+        Thread.sleep(forTimeInterval: 1.1)
+        let hotword = try a.store.addHotwordPhrase("Дунималова Анаида Георгиевна")
+        _ = try pass(a)
+        _ = try pass(b)
+        try expect(b.store.hotwordPhrases().map(\.phrase), equals: ["Дунималова Анаида Георгиевна"], "A's hotword reaches B")
+        try expect(b.store.asrHotwordPhrases().contains("Дунималова Анаида Георгиевна"), equals: true,
+                   "a synced hotword reaches the ASR list")
+        try expect(b.store.all().contains { $0.replacement.contains("Дунималова") }, equals: false,
+                   "a synced hotword creates no replacement rule")
+        Thread.sleep(forTimeInterval: 1.1)
+        try a.store.setHotwordPhraseEnabled(id: hotword.id, enabled: false)
+        _ = try pass(a)
+        _ = try pass(b)
+        try expect(b.store.hotwordPhrases().first?.enabled, equals: false, "disabling travels")
+        try expect(b.store.asrHotwordPhrases().contains("Дунималова Анаида Георгиевна"), equals: false,
+                   "a disabled hotword leaves B's ASR list")
+        Thread.sleep(forTimeInterval: 1.1)
+        guard let onB = b.store.hotwordPhrases().first else { throw SelfTestFailure.failed("B should hold the hotword") }
+        try b.store.deleteHotwordPhrase(id: onB.id)
+        _ = try pass(b)
+        _ = try pass(a)
+        try expect(a.store.hotwordPhrases().isEmpty, equals: true, "a hotword delete on B removes it on A")
+
+        try expect(a.settings.vocabularySyncLastPushedLocalStamp.isEmpty, equals: false, "a current server advances the push cursor")
+
+        // A server that predates hotwords drops them: the cursor must stay
+        // so they go out again after its upgrade.
+        if let oldRaw = ProcessInfo.processInfo.environment["SD_VOCAB_SYNC_TEST_OLD_URL"], let oldURL = URL(string: oldRaw) {
+            let old = try Device(name: "old", serverURL: oldURL)
+            defer { old.cleanUp() }
+            _ = try runParakeetEngineSynchronously { [engine = old.engine] in
+                try await engine.signIn(email: "old-\(email)", password: password)
+            }
+            _ = try old.store.addHotwordPhrase("Старый Сервер")
+            let firstOld = try pass(old)
+            try expect(firstOld.pushed, equals: 1, "the hotword is sent to the old server")
+            try expect(old.settings.vocabularySyncLastPushedLocalStamp, equals: "", "an old server does not advance the push cursor")
+            let secondOld = try pass(old)
+            try expect(secondOld.pushed, equals: 1, "an old server's dropped hotword is pushed again")
+        } else {
+            print("SKIP vocabulary-sync old-server step: SD_VOCAB_SYNC_TEST_OLD_URL is not set")
+        }
+
+        // 401: a revoked token is dropped locally.
+        guard let token = b.tokens.token(for: b.settings.vocabularySyncEmail) else {
+            throw SelfTestFailure.failed("B should hold a token")
+        }
+        try runParakeetEngineSynchronously { await VocabularySyncClient(baseURL: serverURL).signOut(token: token) }
+        do {
+            _ = try pass(b)
+            throw SelfTestFailure.failed("a revoked token must fail the pass")
+        } catch VocabularySyncFailure.unauthorized {
+        }
+        try expect(b.tokens.token(for: b.settings.vocabularySyncEmail) == nil, equals: true, "a 401 clears the token")
+        try expect(b.engine.isSignedIn, equals: false, "B is signed out after the 401")
+        try expect(b.settings.vocabularySyncLastError, equals: VocabularySyncFailure.unauthorized.rawValue,
+                   "the UI is told to ask for a new sign-in")
+        do {
+            _ = try pass(b)
+            throw SelfTestFailure.failed("a signed-out device must not sync")
+        } catch VocabularySyncFailure.notSignedIn {
+        }
+
+        // Sign-out on A revokes its token and resets the cursors.
+        try runParakeetEngineSynchronously { [engine = a.engine] in await engine.signOut() }
+        try expect(a.engine.isSignedIn, equals: false, "sign-out drops the token")
+        try expect(a.settings.vocabularySyncLastServerRevision, equals: 0, "sign-out resets the cursor")
+    }
+
+    /// Custom ASR hotword sync, store level (user-hotword-vocabulary spec §8):
+    /// tombstones, the change filter and applyRemoteHotwords. No server needed.
+    private static func dumpCorrectionPrompt() throws {
+        guard let path = ProcessInfo.processInfo.environment["SD_LLM_PROMPT_DUMP"] else {
+            print("SKIP llm-prompt-dump: SD_LLM_PROMPT_DUMP is not set")
+            return
+        }
+        let model = Settings.shared.correctionBundledModel
+        let system = LLMCorrectionPrompt.systemPrompt(vocabulary: [], model: model)
+        let turns = LLMCorrectionPrompt.exampleTurns(vocabulary: [], model: model)
+        let data = try JSONEncoder().encode(["system": [OpenAICompatibleMessage(role: .system, content: system)], "turns": turns])
+        try data.write(to: URL(fileURLWithPath: path))
+    }
+
+    private static func testDictationTrace() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("trace-\(UUID().uuidString).jsonl")
+        defer { try? FileManager.default.removeItem(at: url) }
+        for number in 0..<5 {
+            DictationTrace.record(asr: "сырой \(number)", rules: "правила \(number)", final: "итог \(number)", to: url, maxLines: 3)
+        }
+        let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+        try expect(lines.count <= 6, equals: true, "the trace keeps only the newest lines")
+        let entry = try JSONSerialization.jsonObject(with: Data(lines.last!.utf8)) as? [String: Any]
+        try expect(entry?["asr"] as? String, equals: "сырой 4", "the trace holds the recognized text")
+        try expect(entry?["final"] as? String, equals: "итог 4", "the trace holds the final text")
+    }
+
+    /// The vocabulary window's «ASR-термины» tab; SD_HOTWORD_WINDOW_PNG saves
+    /// what it draws.
+    private static func testHotwordWindow() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hotword-window-\(UUID().uuidString).sqlite")
+        defer { for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) } }
+        let store = try VocabularyStore(fileURL: url)
+        let image = ProcessInfo.processInfo.environment["SD_HOTWORD_WINDOW_PNG"].map { URL(fileURLWithPath: $0) }
+        _ = NSApplication.shared
+        try MainActor.assumeIsolated {
+            try VocabularyManagerWindowController(store: store).exerciseHotwordsTabForSelfTest(imageURL: image)
+        }
+    }
+
+    /// SD_CROSS_URL, SD_CROSS_EMAIL, SD_CROSS_PASSWORD; adds SD_CROSS_ADD if
+    /// set, runs a pass from an empty store and prints every term it holds.
+    private static func testHotwordSyncCross() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let raw = env["SD_CROSS_URL"], let email = env["SD_CROSS_EMAIL"], let password = env["SD_CROSS_PASSWORD"] else {
+            print("SKIP hotword-sync-cross: SD_CROSS_URL, SD_CROSS_EMAIL and SD_CROSS_PASSWORD are not set")
+            return
+        }
+        let suite = "com.local.lexomorph.selftest.hotword-cross-\(UUID().uuidString)"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("hotword-cross-\(UUID().uuidString).sqlite")
+        defer {
+            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+        }
+        let store = try VocabularyStore(fileURL: url)
+        let settings = Settings(defaults: UserDefaults(suiteName: suite)!, vocabularyStore: store)
+        settings.setVocabularySyncServerURLOverride(raw)
+        let engine = VocabularySyncEngine(settings: settings, tokenStore: InMemoryVocabularySyncTokenStore(), lockFileURL: nil)
+        _ = try runParakeetEngineSynchronously { try await engine.signIn(email: email, password: password) }
+        if let phrase = env["SD_CROSS_ADD"] { _ = try store.addHotwordPhrase(phrase) }
+        _ = try runParakeetEngineSynchronously { try await engine.runPass() }
+        for record in store.hotwordPhrases() { print("TERM \(record.phrase) enabled=\(record.enabled)") }
+    }
+
+    /// Rewrite styles and usage statistics in the account sync
+    /// (docs/specs/modes-and-usage-sync-spec.md): store level and wire level,
+    /// no server needed.
+    private static func testSyncModesAndUsage() throws {
+        func makeSettings() -> (Settings, () -> Void) {
+            let suite = "com.local.lexomorph.selftest.sync-modes-\(UUID().uuidString)"
+            let settings = Settings(defaults: UserDefaults(suiteName: suite)!, vocabularyStore: .inMemoryFallback())
+            return (settings, { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) })
+        }
+        func style(_ id: String, _ name: String, hotkey: Int = 0) -> CustomRewriteStyle {
+            CustomRewriteStyle(id: id, name: name, colorHex: "#FF8800", instruction: "Пиши кратко",
+                               hotkeyKeycode: hotkey, hotkeyModifiers: 0)
+        }
+
+        // Local edits stamp updated_at, tombstone deletions, and notify.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            let notified = LockedCounter()
+            settings.onCustomStylesLocalChange = { notified.increment() }
+            settings.customRewriteStyles = [style("c-1", "Деловой", hotkey: 12)]
+            let created = settings.customRewriteStyles
+            try expect(created.first?.updatedAt != nil, equals: true, "a new style is stamped")
+            try expect(notified.value, equals: 1, "a new style starts a sync")
+
+            var hotkeyOnly = created
+            hotkeyOnly[0].hotkeyKeycode = 40
+            settings.customRewriteStyles = hotkeyOnly
+            try expect(settings.customRewriteStyles.first?.updatedAt, equals: created.first?.updatedAt,
+                       "a hotkey change keeps the stamp")
+            try expect(notified.value, equals: 1, "a hotkey change does not start a sync")
+
+            var renamed = settings.customRewriteStyles
+            renamed[0].name = "Деловой 2"
+            settings.customRewriteStyles = renamed
+            try expect(notified.value, equals: 2, "a rename starts a sync")
+            let changes = settings.customStyleSyncChanges(since: "")
+            try expect(changes.styles.map(\.name), equals: ["Деловой 2"], "the style is in the push set")
+            try expect(settings.customStyleSyncChanges(since: "9999-01-01T00:00:00Z").styles.isEmpty, equals: true,
+                       "a style older than the cursor is not pushed")
+
+            settings.customRewriteStyles = []
+            try expect(settings.customRewriteStyleTombstones.map(\.id), equals: ["c-1"], "a deletion leaves a tombstone")
+            try expect(notified.value, equals: 3, "a deletion starts a sync")
+            try expect(settings.customStyleSyncChanges(since: "").tombstones.count, equals: 1, "the tombstone is pushed")
+        }
+
+        // Remote styles: LWW, tombstones, local hotkey and active mode, no local-change callback.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            let notified = LockedCounter()
+            settings.onCustomStylesLocalChange = { notified.increment() }
+            func remote(_ id: String, _ name: String, deleted: Bool = false, at stamp: String) -> CustomStyleRemoteEntry {
+                CustomStyleRemoteEntry(id: id, name: name, color: "#00AAFF", instruction: "remote",
+                                       deleted: deleted, updatedAt: stamp)
+            }
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Чужой", at: "2026-11-10T10:00:00Z")]), equals: 1,
+                       "a remote style is added")
+            try expect(notified.value, equals: 0, "applying a remote style is not a local change")
+            try expect(settings.customRewriteStyles.first?.updatedAt, equals: "2026-11-10T10:00:00Z",
+                       "the remote stamp is kept (nothing to push back)")
+            try expect(settings.customStyleSyncChanges(since: "2026-11-10T10:00:01Z").styles.isEmpty, equals: true,
+                       "an applied style is not pushed again")
+
+            var local = settings.customRewriteStyles
+            local[0].hotkeyKeycode = 99
+            settings.customRewriteStyles = local
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Старый", at: "2026-11-10T09:00:00Z")]), equals: 0,
+                       "an older remote edit loses")
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Новый", at: "2026-11-10T11:00:00Z")]), equals: 1,
+                       "a newer remote edit wins")
+            try expect(settings.customRewriteStyles.first?.name, equals: "Новый", "the name is replaced")
+            try expect(settings.customRewriteStyles.first?.hotkeyKeycode, equals: 99, "the hotkey stays local")
+
+            settings.rewriteStyleID = "c-a"
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "", deleted: true, at: "2026-11-10T12:00:00Z")]),
+                       equals: 1, "a remote deletion removes the style")
+            try expect(settings.customRewriteStyles.isEmpty, equals: true, "the style is gone")
+            try expect(settings.rewriteStyleID, equals: RewriteStyle.polish.rawValue,
+                       "deleting the active style falls back to polish")
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Воскрес", at: "2026-11-10T11:30:00Z")]), equals: 0,
+                       "an older edit does not resurrect a deleted style")
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Воскрес", at: "2026-11-10T13:00:00Z")]), equals: 1,
+                       "a newer edit recreates it")
+            try expect(notified.value, equals: 0, "no remote application started a sync")
+        }
+
+        // A stale Control Panel draft must not overwrite or delete what a sync applied meanwhile.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            settings.customRewriteStyles = [style("c-keep", "Свой"), style("c-gone", "Удаляемый"), style("c-edit", "Правка")]
+            let baseline = settings.customRewriteStyles
+            var draft = baseline
+            draft.removeAll { $0.id == "c-gone" }
+            draft[draft.firstIndex { $0.id == "c-edit" }!].hotkeyKeycode = 33
+            // Meanwhile the agent applies remote changes.
+            settings.applyRemoteCustomStyles([
+                CustomStyleRemoteEntry(id: "c-new", name: "С другого ПК", color: "#00AAFF", instruction: "r",
+                                       deleted: false, updatedAt: "2099-01-01T00:00:00Z"),
+                CustomStyleRemoteEntry(id: "c-edit", name: "Правка удалённо", color: "#00AAFF", instruction: "r2",
+                                       deleted: false, updatedAt: "2099-01-01T00:00:01Z"),
+            ])
+            settings.mergeCustomRewriteStyles(draft: draft, baseline: baseline)
+            let merged = Dictionary(uniqueKeysWithValues: settings.customRewriteStyles.map { ($0.id, $0) })
+            try expect(merged["c-new"]?.name, equals: "С другого ПК", "a style applied by sync survives a stale save")
+            try expect(merged["c-gone"] == nil, equals: true, "an explicit user deletion is applied")
+            try expect(settings.customRewriteStyleTombstones.map(\.id), equals: ["c-gone"], "only the explicit deletion is tombstoned")
+            try expect(merged["c-edit"]?.name, equals: "Правка удалённо", "the remote content edit is not reverted")
+            try expect(merged["c-edit"]?.hotkeyKeycode, equals: 33, "the user's hotkey edit is kept")
+            try expect(merged["c-keep"]?.name, equals: "Свой", "untouched styles stay")
+        }
+
+        // Usage: absolute rows of this device, others kept apart, summed without double counting.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            settings.vocabularySyncEnabled = true
+            let device = settings.usageSyncDeviceID
+            try expect(settings.usageSyncDeviceID, equals: device, "the device id is stable")
+            settings.dailyDictationUsage = [
+                DailyDictationUsage(day: "2026-11-09", dictationCount: 3, characterCount: 300, audioSeconds: 30, asrSeconds: 3),
+                DailyDictationUsage(day: "2026-11-10", dictationCount: 2, characterCount: 100, audioSeconds: 10, asrSeconds: 1),
+            ]
+            var rows = VocabularySyncEngine.usageChanges(local: settings.dailyDictationUsage, lastSent: [],
+                                                         device: device, stamp: "2026-11-10T12:00:00Z")
+            try expect(rows.count, equals: 2, "every local day goes out on the first push")
+            try expect(rows.first?.dictations, equals: 3, "values are absolute")
+            try expect(rows.first?.device, equals: device, "rows carry this device's id")
+            let sent = settings.dailyDictationUsage
+            try expect(VocabularySyncEngine.usageChanges(local: sent, lastSent: sent, device: device, stamp: "x").isEmpty,
+                       equals: true, "a repeated pass sends nothing")
+            var grown = sent
+            grown[1].add(dictations: 1, characters: 50, audio: 5, asr: 0.5)
+            rows = VocabularySyncEngine.usageChanges(local: grown, lastSent: sent, device: device, stamp: "x")
+            try expect(rows.map(\.dictations), equals: [3], "only the changed day goes out, as a total")
+
+            let other = DeviceDictationUsage(day: "2026-11-10", device: "dev-b", dictationCount: 4, characterCount: 400,
+                                             wordCount: 60, audioSeconds: 40, asrSeconds: 4, updatedAt: "2026-11-10T11:00:00Z")
+            let echo = DeviceDictationUsage(day: "2026-11-10", device: device, dictationCount: 2, characterCount: 100,
+                                            wordCount: 0, audioSeconds: 10, asrSeconds: 1, updatedAt: "2026-11-10T11:00:00Z")
+            try expect(settings.applyRemoteUsage([other, echo]), equals: 1, "this device's own echo is ignored")
+            try expect(settings.applyRemoteUsage([other]), equals: 0, "the same row again changes nothing")
+            var newer = other
+            newer.dictationCount = 7
+            newer.updatedAt = "2026-11-10T12:00:00Z"
+            try expect(settings.applyRemoteUsage([newer]), equals: 1, "a newer row of the same device replaces it")
+            let combined = settings.combinedDailyDictationUsage
+            try expect(combined.first { $0.day == "2026-11-10" }?.dictationCount, equals: 9,
+                       "the shown statistic sums the devices (2 local + 7 remote)")
+            try expect(combined.first { $0.day == "2026-11-09" }?.dictationCount, equals: 3, "local-only days stay")
+            try expect(settings.dailyDictationUsage.first { $0.day == "2026-11-10" }?.dictationCount, equals: 2,
+                       "the local counter is not mixed with remote rows")
+            settings.vocabularySyncEnabled = false
+            try expect(settings.combinedDailyDictationUsage.first { $0.day == "2026-11-10" }?.dictationCount, equals: 2,
+                       "without sync only the local counter is shown")
+            settings.resetUsageSyncState()
+            try expect(settings.remoteDailyUsage.isEmpty, equals: true, "sign-out forgets other devices' rows")
+        }
+
+        // Wire compatibility.
+        do {
+            let old = Data(#"{"revision":5,"entries":[],"hotwords":[]}"#.utf8)
+            let decodedOld = try JSONDecoder().decode(VocabularySyncResponse.self, from: old)
+            try expect(decodedOld.serverStoresHotwords, equals: true, "hotwords present")
+            try expect(decodedOld.serverStoresStyles, equals: false, "a server without styles is detected")
+            try expect(decodedOld.serverStoresUsage, equals: false, "a server without usage is detected")
+            try expect(decodedOld.styles.isEmpty && decodedOld.usage.isEmpty, equals: true, "absent collections are empty")
+
+            let fresh = Data(#"""
+            {"revision":9,"entries":[],"hotwords":[],
+             "styles":[{"id":"c-1","name":"Деловой","color":"#FF8800","instruction":"x","deleted":false,"updated_at":"2026-11-10T12:00:00Z"}],
+             "usage":[{"day":"2026-11-10","device":"d","dictations":12,"characters":3400,"audio_seconds":210.5,"updated_at":"2026-11-10T12:00:00Z"},
+                      {"day":"2026-11-09","device":"w","dictations":1,"characters":10,"words":2,"audio_seconds":1,"asr_seconds":null,"updated_at":"2026-11-10T12:00:00Z"}]}
+            """#.utf8)
+            let decoded = try JSONDecoder().decode(VocabularySyncResponse.self, from: fresh)
+            try expect(decoded.serverStoresStyles && decoded.serverStoresUsage, equals: true, "new collections detected")
+            try expect(decoded.styles.first?.updatedAt, equals: "2026-11-10T12:00:00Z", "style wire decoding")
+            try expect(decoded.usage.count, equals: 2, "usage rows without words or asr_seconds decode")
+            try expect(decoded.usage.first?.audioSeconds, equals: 210.5, "usage values decode")
+
+            let encoded = try JSONEncoder().encode(decoded.usage[0])
+            let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+            try expect(object?["audio_seconds"] as? Double, equals: 210.5, "usage uses snake_case keys")
+            try expect(object?["updated_at"] as? String, equals: "2026-11-10T12:00:00Z", "usage carries updated_at")
+        }
+    }
+
+    private static func testHotwordSync() throws {
+        // The sign-in state is read on the main thread: it must not reach the
+        // Keychain, which can block behind a dialog after an update.
+        do {
+            final class SpyTokens: VocabularySyncTokenStore, @unchecked Sendable {
+                private let lock = NSLock()
+                private var value = 0
+                var reads: Int { lock.withLock { value } }
+                func token(for account: String) -> String? { lock.withLock { value += 1 }; return nil }
+                func setToken(_ token: String, for account: String) throws {}
+                func removeToken(for account: String) {}
+            }
+            let suite = "com.local.lexomorph.selftest.signed-in-\(UUID().uuidString)"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("signed-in-\(UUID().uuidString).sqlite")
+            defer {
+                UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+                for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+            }
+            let settings = Settings(defaults: UserDefaults(suiteName: suite)!, vocabularyStore: try VocabularyStore(fileURL: url))
+            let spy = SpyTokens()
+            let engine = VocabularySyncEngine(settings: settings, tokenStore: spy, lockFileURL: nil)
+            settings.vocabularySyncEmail = "user@example.com"
+            settings.vocabularySyncEnabled = true
+            try expect(engine.isSignedIn, equals: true, "enabled with an account means signed in")
+            try expect(spy.reads, equals: 0, "isSignedIn does not read the Keychain")
+            do {
+                _ = try runParakeetEngineSynchronously { try await engine.runPass() }
+                throw SelfTestFailure.failed("a pass without a token must fail")
+            } catch VocabularySyncFailure.notSignedIn {
+            }
+            try expect(spy.reads, equals: 1, "a pass reads the token")
+            try expect(engine.isSignedIn, equals: false, "a missing token asks to sign in again")
+        }
+
+        final class ChangeCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func bump() { lock.withLock { value += 1 } }
+            var count: Int { lock.withLock { value } }
+        }
+        let store = VocabularyStore.inMemoryFallback()
+        let counter = ChangeCounter()
+        store.onLocalChange = { counter.bump() }
+
+        // Timestamps are ISO-8601 text.
+        let phrase = try store.addHotwordPhrase("Дунималова Анаида")
+        try expect(phrase.updatedAt.hasSuffix("Z") && phrase.updatedAt.contains("T"), equals: true,
+                   "hotword timestamps are ISO-8601 text")
+        try expect(store.hotwordTombstones().isEmpty, equals: true, "no tombstone before a delete")
+
+        // Local delete leaves a tombstone keyed by the canonical key; re-adding clears it.
+        try expect(try store.deleteHotwordPhrase(id: phrase.id), equals: true, "delete reports a change")
+        let tombstones = store.hotwordTombstones()
+        try expect(tombstones.map(\.key), equals: [AsrHotwordSelection.customPhraseKey("Дунималова Анаида")],
+                   "delete writes a tombstone with the canonical key")
+        try expect(tombstones.first?.phrase, equals: "Дунималова Анаида", "tombstone keeps the phrase")
+        try expect(try store.deleteHotwordPhrase(id: phrase.id), equals: false, "deleting a missing row adds no tombstone")
+        try expect(store.hotwordTombstones().count, equals: 1, "still one tombstone")
+        let readded = try store.addHotwordPhrase("дунималова   анаида")
+        try expect(store.hotwordTombstones().isEmpty, equals: true, "re-adding a phrase clears its tombstone")
+
+        // A rename tombstones the old key.
+        let renamed = try store.updateHotwordPhrase(id: readded.id, phrase: "Арбитражный суд", enabled: true)
+        try expect(store.hotwordTombstones().map(\.key), equals: [AsrHotwordSelection.customPhraseKey("дунималова анаида")],
+                   "a rename tombstones the old key")
+        try expect(renamed.phrase, equals: "Арбитражный суд", "renamed")
+
+        // hotwordSyncChanges: stamp filter (>=), empty stamp selects everything.
+        let all = store.hotwordSyncChanges(since: "")
+        try expect(all.entries.count, equals: 1, "all live rows with an empty stamp")
+        try expect(all.tombstones.count, equals: 1, "all tombstones with an empty stamp")
+        let future = store.hotwordSyncChanges(since: "2999-01-01T00:00:00Z")
+        try expect(future.entries.isEmpty && future.tombstones.isEmpty, equals: true, "nothing is newer than a future stamp")
+        let atStamp = store.hotwordSyncChanges(since: renamed.updatedAt)
+        try expect(atStamp.entries.map(\.phrase), equals: ["Арбитражный суд"], "a row at the cursor stamp is included")
+
+        // applyRemoteHotwords: last-writer-wins, tombstones, no onLocalChange.
+        let before = counter.count
+        let remote = VocabularyStore.inMemoryFallback()
+        remote.onLocalChange = { counter.bump() }
+        func entry(_ phrase: String, _ stamp: String, enabled: Bool = true, deleted: Bool = false) -> HotwordRemoteEntry {
+            HotwordRemoteEntry(phrase: phrase, enabled: enabled, deleted: deleted, updatedAt: stamp)
+        }
+        try expect(try remote.applyRemoteHotwords([entry("ЕСИА", "2026-11-05T10:00:00Z", enabled: false)]), equals: 1,
+                   "a new remote hotword is inserted")
+        var row = remote.hotwordPhrases().first
+        try expect(row?.phrase, equals: "ЕСИА", "remote phrase stored")
+        try expect(row?.enabled, equals: false, "remote enabled flag stored")
+        try expect(row?.updatedAt, equals: "2026-11-05T10:00:00Z", "remote updated_at is kept")
+        try expect(remote.hotwordSyncChanges(since: "2026-11-05T10:00:01Z").entries.isEmpty, equals: true,
+                   "an applied row does not look locally changed")
+        // Older / equal stamps lose; newer wins (case variant = same key).
+        try expect(try remote.applyRemoteHotwords([entry("есиа", "2026-11-05T09:00:00Z")]), equals: 0, "older remote loses")
+        try expect(try remote.applyRemoteHotwords([entry("есиа", "2026-11-05T10:00:00Z")]), equals: 0, "a tie keeps local")
+        try expect(try remote.applyRemoteHotwords([entry("есиа", "2026-11-05T11:00:00Z")]), equals: 1, "newer remote wins")
+        row = remote.hotwordPhrases().first
+        try expect(row?.enabled, equals: true, "newer remote re-enabled the phrase")
+        try expect(remote.hotwordPhrases().count, equals: 1, "still one row")
+        // Remote delete: older loses, newer deletes and leaves a tombstone.
+        try expect(try remote.applyRemoteHotwords([entry("ЕСИА", "2026-11-05T10:30:00Z", deleted: true)]), equals: 0,
+                   "an older remote delete loses")
+        try expect(try remote.applyRemoteHotwords([entry("ЕСИА", "2026-11-05T12:00:00Z", deleted: true)]), equals: 1,
+                   "a newer remote delete removes the row")
+        try expect(remote.hotwordPhrases().isEmpty, equals: true, "row deleted")
+        try expect(remote.hotwordTombstones().map(\.deletedAt), equals: ["2026-11-05T12:00:00Z"],
+                   "the remote stamp becomes the tombstone stamp")
+        // Tombstone blocks an older resurrection, yields to a newer one.
+        try expect(try remote.applyRemoteHotwords([entry("ЕСИА", "2026-11-05T11:30:00Z")]), equals: 0,
+                   "an older live entry cannot resurrect a deleted phrase")
+        try expect(remote.hotwordPhrases().isEmpty, equals: true, "still deleted")
+        try expect(try remote.applyRemoteHotwords([entry("ЕСИА", "2026-11-05T13:00:00Z")]), equals: 1,
+                   "a newer live entry resurrects")
+        try expect(remote.hotwordTombstones().isEmpty, equals: true, "resurrection clears the tombstone")
+        // A tombstone for an unknown phrase is remembered and invalid phrases are skipped.
+        try expect(try remote.applyRemoteHotwords([entry("Неизвестное", "2026-11-05T14:00:00Z", deleted: true),
+                                                   entry("?!…", "2026-11-05T14:00:00Z")]), equals: 0,
+                   "unknown tombstone and invalid phrase change no rows")
+        try expect(remote.hotwordTombstones().map(\.phrase), equals: ["Неизвестное"], "unknown tombstone recorded")
+        try expect(try remote.applyRemoteHotwords([]), equals: 0, "empty batch is a no-op")
+        try expect(counter.count, equals: before, "applyRemoteHotwords never fires onLocalChange")
+    }
+
+    private static func testAsrHotwords() throws {
+        // --- Selection rule (§6) -------------------------------------
+        // (source, replacement, origin, hint, expected effective phrase or nil)
+        let cases: [(String, String, VocabularyOrigin, Bool?, String?)] = [
+            // From the user's real vocabulary: included…
+            ("DR4 DM", "DDR4 DIMM", .learned, nil, "DDR4 DIMM"),
+            ("ЕСА", "ЕСИА", .learned, nil, "ЕСИА"),
+            ("Gm, вотчер,", "Gmail watcher,", .learned, nil, "Gmail watcher"),
+            ("Пони Чепуренко", "По Ничипуренко", .learned, nil, "По Ничипуренко"),
+            ("Егр", "ЕГРЮЛ", .learned, nil, "ЕГРЮЛ"),
+            ("TicTic,", "TickTick,", .learned, nil, "TickTick"),
+            ("тридцать семь. А", "37А", .learned, nil, "37А"),
+            ("1.", "1mm.", .learned, nil, "1mm"),
+            ("Аллес Скарш—", "Alien_skaarj —", .learned, nil, "Alien_skaarj"),
+            ("хаггинг фейс", "Hugging Face", .manual, nil, "Hugging Face"),
+            ("Смотри.", "Задайте вопрос ChatGPT", .learned, nil, "Задайте вопрос ChatGPT"),
+            // …and excluded: ordinary learned words.
+            ("Запомню", "Запомни", .learned, nil, nil),
+            ("сторониной", "стороной", .learned, nil, nil),
+            ("красненькову", "Красникову", .learned, nil, nil),
+            ("Нечепуренко", "Ничипуренко", .learned, nil, nil),
+            // Explicit hints win over the automatic rule.
+            ("Нечепуренко", "Ничипуренко", .learned, true, "Ничипуренко"),
+            ("красненькову", "Красникову", .learned, true, "Красникову"),
+            ("докер", "Docker", .manual, false, nil),
+            ("Эмсипи", "MCP", .learned, false, nil),
+            // Manual entries are on even when not term-like.
+            ("сторониной", "стороной", .manual, nil, "стороной"),
+            // Skip rules hold even against an explicit hint.
+            ("оплатил", "оплатил.", .learned, true, nil),        // punctuation-only edit
+            ("ознакомления", "ознакомления.", .manual, nil, nil),
+            ("Амирханян Ц", "АмирханянЦ", .learned, true, nil),  // whitespace-only edit
+            ("Х 99", "Х99", .manual, nil, nil),
+            ("Инструменты.", "инструменты?", .manual, nil, nil),  // case + punctuation only
+            ("интернейшнл.", ".", .learned, true, nil),          // empty after trimming
+            ("S.", "1", .manual, nil, nil),                     // no letter
+            ("икс", "X", .manual, true, nil),                    // < 2 characters
+            ("12", "42!", .manual, true, nil),                   // no letter
+            ("длинно", "раз два три четыре пять", .manual, true, nil), // > 4 words
+            ("коротко", "раз два три QQ", .learned, nil, "раз два три QQ"), // exactly 4 words
+            ("кавычки", "«Ответ налоговая»", .manual, nil, "Ответ налоговая"),
+            ("тире", "— TDT –", .learned, nil, "TDT"),
+            ("ssh", "Ssh", .manual, nil, nil),                   // case-only edit
+        ]
+        for (index, testCase) in cases.enumerated() {
+            let (source, replacement, origin, hint, expected) = testCase
+            let record = VocabularyRecord(id: Int64(index), source: source, replacement: replacement,
+                                          origin: origin, createdAt: "", updatedAt: "", asrHint: hint)
+            try expect(AsrHotwordSelection.isEffective(record), equals: expected != nil,
+                       "effective state of \(source) → \(replacement) (\(origin.rawValue), hint \(String(describing: hint)))")
+            try expect(AsrHotwordSelection.phrases(from: [record]), equals: expected.map { [$0] } ?? [],
+                       "phrase for \(source) → \(replacement)")
+        }
+        try expect(AsrHotwordSelection.isTermLike("Ёлка"), equals: false, "one uppercase Cyrillic letter is not term-like")
+        try expect(AsrHotwordSelection.isTermLike("ЁЖ"), equals: true, "two uppercase letters are term-like")
+        try expect(AsrHotwordSelection.isTermLike("café"), equals: true, "Latin-1 letters count as Latin")
+
+        // Exact-duplicate merge (case variants stay distinct), order kept, cap.
+        let duplicates = [("гитхаб", "GitHub"), ("гит хаб", "GitHub"), ("Гетхаб.", "Github."), ("зип", "ZIP"), ("Зип,", "Zip,")]
+            .enumerated().map { VocabularyRecord(id: Int64($0.offset), source: $0.element.0, replacement: $0.element.1,
+                                                 origin: .manual, createdAt: "", updatedAt: "") }
+        try expect(AsrHotwordSelection.phrases(from: duplicates), equals: ["GitHub", "Github", "ZIP", "Zip"],
+                   "exact duplicates merged, case variants kept, input order preserved")
+        let many = (0..<1200).map { VocabularyRecord(id: Int64($0), source: "s\($0)", replacement: "Term\($0)",
+                                                     origin: .manual, createdAt: "", updatedAt: "") }
+        let capped = AsrHotwordSelection.phrases(from: many)
+        try expect(capped.count, equals: AsrHotwordSelection.maxPhrases, "the list is capped at 1000 phrases")
+        try expect(capped.last, equals: "Term999", "the cap keeps the first 1000 in order")
+
+        // --- asr_hint migration on a pre-hotwords database -----------
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("asr-hotwords-selftest-\(UUID().uuidString).sqlite")
+        defer {
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: tempURL.path + suffix)
+            }
+        }
+        do {
+            var legacy: OpaquePointer?
+            guard sqlite3_open(tempURL.path, &legacy) == SQLITE_OK, let legacy else {
+                throw SelfTestFailure.failed("could not create the legacy test database")
+            }
+            defer { sqlite3_close(legacy) }
+            let legacySQL = """
+            CREATE TABLE corrections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL COLLATE NOCASE,
+                replacement TEXT NOT NULL,
+                origin TEXT NOT NULL DEFAULT 'manual',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX idx_corrections_source_nocase ON corrections (source);
+            INSERT INTO corrections (source, replacement, origin, created_at, updated_at) VALUES
+                ('Нечепуренко', 'Ничипуренко', 'learned', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                ('DR4 DM', 'DDR4 DIMM', 'learned', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                ('докер', 'Docker', 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+            """
+            guard sqlite3_exec(legacy, legacySQL, nil, nil, nil) == SQLITE_OK else {
+                throw SelfTestFailure.failed("could not fill the legacy test database")
+            }
+        }
+
+        let store = try VocabularyStore(fileURL: tempURL)
+        let migrated = store.all()
+        try expect(migrated.count, equals: 3, "pre-migration rows survive the migration")
+        try expect(migrated.allSatisfy { $0.asrHint == nil }, equals: true, "migrated rows start automatic")
+        try expect(store.asrHotwordPhrases(), equals: ["DDR4 DIMM", "Docker"], "automatic phrases after migration")
+
+        guard let surname = migrated.first(where: { $0.replacement == "Ничипуренко" }),
+              let docker = migrated.first(where: { $0.replacement == "Docker" }) else {
+            throw SelfTestFailure.failed("migrated rows missing")
+        }
+        try store.setAsrHint(id: surname.id, hint: true)
+        try store.setAsrHint(id: docker.id, hint: false)
+        try expect(store.asrHotwordPhrases(), equals: ["DDR4 DIMM", "Ничипуренко"], "explicit hints applied")
+        // The hint travels with the entry in the account sync, whose
+        // last-writer-wins merge keys off updated_at, so setting it bumps
+        // the stamp (spec vocabulary-hygiene-and-sync §4).
+        try expect((store.all().first { $0.id == surname.id }?.updatedAt ?? "") > surname.updatedAt, equals: true,
+                   "setting a hint bumps updated_at for the sync")
+
+        // Idempotent: a second connection (the other process) re-runs the
+        // migration and sees the stored hints.
+        let reopened = try VocabularyStore(fileURL: tempURL)
+        try expect(reopened.all().first { $0.id == surname.id }?.asrHint, equals: true, "hint persists across connections")
+        try expect(reopened.all().first { $0.id == docker.id }?.asrHint, equals: false, "explicit off persists")
+
+        // Every write path keeps the hint: upsert of a known source…
+        _ = try store.upsert(source: "нечепуренко", replacement: "Ничипуренко", origin: .manual)
+        try expect(store.all().first { $0.id == surname.id }?.asrHint, equals: true, "upsert keeps the hint")
+        // …recordLearned of a known source is a no-op…
+        try expect(store.recordLearned(source: "Нечепуренко", replacement: "x") == nil, equals: true,
+                   "recordLearned no-ops for a known source")
+        // …and the full-array replace used by import/sync.
+        store.replaceAllPreservingOrigin([
+            TranscriptCorrection(source: "Нечепуренко", replacement: "Ничипуренко"),
+            TranscriptCorrection(source: "докер", replacement: "Docker"),
+            TranscriptCorrection(source: "ЕСА", replacement: "ЕСИА"),
+        ])
+        let afterReplace = store.all()
+        try expect(afterReplace.first { $0.id == surname.id }?.asrHint, equals: true, "replaceAll keeps the hint")
+        try expect(afterReplace.first { $0.id == docker.id }?.asrHint, equals: false, "replaceAll keeps explicit off")
+        try expect(afterReplace.first { $0.replacement == "ЕСИА" }?.asrHint, equals: nil, "new rows start automatic")
+        try expect(store.asrHotwordPhrases(), equals: ["ЕСИА", "Ничипуренко"], "phrases after replaceAll (manual ЕСИА is on)")
+        // nil resets to automatic.
+        try store.setAsrHint(id: surname.id, hint: nil)
+        try expect(store.all().first { $0.id == surname.id }?.asrHint, equals: nil, "nil resets the hint")
+        guard let learned = store.recordLearned(source: "Клод", replacement: "Claude") else {
+            throw SelfTestFailure.failed("recordLearned should insert a new source")
+        }
+        try expect(learned.asrHint, equals: nil, "a learned row starts automatic")
+
+        // A brand-new database and the in-memory fallback get the column too.
+        let memory = VocabularyStore.inMemoryFallback()
+        let row = try memory.upsert(source: "кью 8", replacement: "Q8", origin: .learned)
+        try memory.setAsrHint(id: row.id, hint: false)
+        try expect(memory.all().first?.asrHint, equals: false, "in-memory store supports hints")
+
+        // --- Settings (§8) --------------------------------------------
+        let suiteName = "com.local.lexomorph.selftest.asr-hotwords-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            throw SelfTestFailure.failed("could not create a test defaults suite")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settingsStore = VocabularyStore.inMemoryFallback()
+        _ = try settingsStore.upsert(source: "DR4 DM", replacement: "DDR4 DIMM", origin: .learned)
+        _ = try settingsStore.upsert(source: "сторониной", replacement: "стороной", origin: .learned)
+        let settings = Settings(defaults: defaults, vocabularyStore: settingsStore)
+        try expect(settings.asrHotwordsEnabled, equals: true, "hotwords are on by default")
+        try expect(settings.asrHotwordsStrength, equals: .normal, "normal strength by default")
+        try expect(settings.asrHotwordsConfiguration,
+                   equals: AsrHotwordsConfiguration(phrases: ["DDR4 DIMM"], score: 2.0), "default configuration")
+        settings.asrHotwordsStrength = .strong
+        try expect(settings.asrHotwordsConfiguration.score, equals: 3.0, "strong = 3.0")
+        settings.asrHotwordsEnabled = false
+        try expect(settings.asrHotwordsConfiguration, equals: .disabled, "disabled → empty list")
+        try expect(AsrHotwordsConfiguration.disabled.phrases.isEmpty, equals: true, "disabled carries no phrases")
+
+        let suite0 = "com.local.lexomorph.selftest.user-hotwords-\(UUID().uuidString)"
+        guard let defaults0 = UserDefaults(suiteName: suite0) else {
+            throw SelfTestFailure.failed("could not create a test defaults suite")
+        }
+        defer { defaults0.removePersistentDomain(forName: suite0) }
+        // --- User hotword vocabulary, Wave 1 (user-hotword-vocabulary spec §4–§6) ---
+        // Migration: the pre-hotwords database above gained the table.
+        try expect(store.hotwordPhrases().isEmpty, equals: true, "legacy database gets an empty hotword table")
+        try expect(reopened.hotwordPhrases().isEmpty, equals: true, "second connection re-runs the migration idempotently")
+        let anaida = try store.addHotwordPhrase("  Дунималова   Анаида Георгиевна ")
+        try expect(anaida.phrase, equals: "Дунималова   Анаида Георгиевна", "trimmed, casing and inner spacing kept")
+        try expect(anaida.enabled, equals: true, "new phrase is enabled")
+        try expect(reopened.hotwordPhrases().map(\.phrase), equals: [anaida.phrase], "phrase visible to another connection")
+        for bad in ["", "   ", "?!…", "один два три четыре пять"] {
+            do { _ = try store.addHotwordPhrase(bad); throw SelfTestFailure.failed("accepted invalid phrase '\(bad)'") }
+            catch VocabularyStoreError.invalidPhrase {}
+        }
+        do { _ = try store.addHotwordPhrase("дунималова анаида   георгиевна"); throw SelfTestFailure.failed("accepted a canonical duplicate") }
+        catch VocabularyStoreError.duplicatePhrase {}
+        let arbitr = try store.addHotwordPhrase("АС Москвы")
+        let renamed = try store.updateHotwordPhrase(id: arbitr.id, phrase: "Арбитражный суд", enabled: true)
+        try expect(renamed.phrase, equals: "Арбитражный суд", "update rewrites the phrase")
+        do { _ = try store.updateHotwordPhrase(id: arbitr.id, phrase: "ДУНИМАЛОВА Анаида Георгиевна", enabled: true)
+             throw SelfTestFailure.failed("update accepted a duplicate") }
+        catch VocabularyStoreError.duplicatePhrase {}
+        _ = try store.updateHotwordPhrase(id: arbitr.id, phrase: "арбитражный СУД", enabled: true) // own key is not a duplicate
+        // Selection/priority: custom first, no text replacement implied.
+        let combinedFromStore = store.asrHotwordPhrases()
+        try expect(combinedFromStore,
+                   equals: [anaida.phrase, "арбитражный СУД", "ЕСИА", "Claude"],
+                   "custom phrases precede the explicit correction-derived tail")
+        try expect(try store.setHotwordPhraseEnabled(id: arbitr.id, enabled: false), equals: true, "disable reports a change")
+        try expect(store.hotwordPhrases().contains { $0.id == arbitr.id && !$0.enabled }, equals: true, "disabled phrase is kept")
+        try expect(store.asrHotwordPhrases().contains("арбитражный СУД"), equals: false, "disabled phrase absent from ASR input")
+        try expect(try store.setHotwordPhraseEnabled(id: 99_999, enabled: true), equals: false, "unknown id reports no change")
+        try expect(try store.deleteHotwordPhrase(id: arbitr.id), equals: true, "delete reports a change")
+        try expect(try store.deleteHotwordPhrase(id: arbitr.id), equals: false, "second delete reports none")
+        try expect(store.all().count, equals: afterReplace.count + 1, "corrections untouched by hotword CRUD (+ the learned Клод row)")
+
+        // Pure selector: dedup keeps the custom spelling, disabled skipped, custom wins the cap.
+        func custom(_ id: Int64, _ phrase: String, _ enabled: Bool = true) -> HotwordPhraseRecord {
+            HotwordPhraseRecord(id: id, phrase: phrase, enabled: enabled, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z")
+        }
+        let learnedDocker = VocabularyRecord(id: 1, source: "докер", replacement: "docker", origin: .manual, createdAt: "", updatedAt: "")
+        try expect(AsrHotwordSelection.combinedPhrases(corrections: [learnedDocker],
+                                                       custom: [custom(1, "Docker"), custom(2, "Off", false)]),
+                   equals: ["Docker"], "duplicate appears once with the custom spelling; disabled skipped")
+        try expect(AsrHotwordSelection.combinedPhrases(corrections: [], custom: []).isEmpty, equals: true, "both sources empty → empty list")
+        let manyCustom = (0..<900).map { custom(Int64($0), "Custom\($0)") }
+        let combined = AsrHotwordSelection.combinedPhrases(corrections: many, custom: manyCustom)
+        try expect(combined.count, equals: AsrHotwordSelection.maxPhrases, "combined list is capped at 1000")
+        try expect(Array(combined.prefix(900)), equals: manyCustom.map(\.phrase), "all custom phrases survive the cap")
+        try expect(combined.last, equals: "Term99", "remaining slots go to correction phrases in order")
+        let onlyDisabled = Settings(defaults: defaults0, vocabularyStore: VocabularyStore.inMemoryFallback())
+        try expect(onlyDisabled.asrHotwordsConfiguration, equals: .disabled, "no custom and no correction phrases → .disabled")
+        let memHot = VocabularyStore.inMemoryFallback()
+        let memPhrase = try memHot.addHotwordPhrase("Дунималова Анаида Георгиевна")
+        try expect(memHot.all().isEmpty, equals: true, "a hotword creates no correction row")
+        try expect(Settings(defaults: defaults0, vocabularyStore: memHot).asrHotwordsConfiguration.phrases,
+                   equals: [memPhrase.phrase], "custom phrase reaches AsrHotwordsConfiguration")
+        try memHot.setHotwordPhraseEnabled(id: memPhrase.id, enabled: false)
+        try expect(Settings(defaults: defaults0, vocabularyStore: memHot).asrHotwordsConfiguration, equals: .disabled,
+                   "only a disabled custom phrase → .disabled")
+
+        // --- TRANSCRIBE options (§7) ----------------------------------
+        // An empty list must produce exactly the pre-hotwords request.
+        let legacyOptions: [String: Any] = ["timestamps": true, "sample_rate": Int(SAMPLE_RATE)]
+        for timestamps in [false, true] {
+            let empty = OnnxAsrEngine.transcribeOptions(timestamps: timestamps, hotwords: [], hotwordsScore: 3.0)
+            try expect(empty.keys.sorted(), equals: ["sample_rate", "timestamps"], "empty list adds no keys (timestamps \(timestamps))")
+            try expect(empty["timestamps"] as? Bool, equals: timestamps, "timestamps flag")
+        }
+        let emptyJSON = try JSONSerialization.data(
+            withJSONObject: OnnxAsrEngine.transcribeOptions(timestamps: true, hotwords: [], hotwordsScore: 2.0),
+            options: .sortedKeys)
+        try expect(emptyJSON, equals: try JSONSerialization.data(withJSONObject: legacyOptions, options: .sortedKeys),
+                   "empty list: request JSON identical to the unbiased one")
+        let biased = OnnxAsrEngine.transcribeOptions(timestamps: false, hotwords: ["DDR4 DIMM", "ЕСИА"], hotwordsScore: 3.0)
+        try expect(biased["hotwords"] as? [String], equals: ["DDR4 DIMM", "ЕСИА"], "hotwords sent as given")
+        try expect(biased["hotwords_score"] as? Double, equals: 3.0, "hotwords_score sent")
+        try expect(biased.keys.sorted(), equals: ["hotwords", "hotwords_score", "sample_rate", "timestamps"], "biased keys")
+
+        // --- Benchmark flag parsing ------------------------------------
+        let phraseFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("asr-hotwords-selftest-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: phraseFile) }
+        try "DDR4 DIMM\n\n  ЕСИА  \r\nGmail watcher\n".write(to: phraseFile, atomically: true, encoding: .utf8)
+        var arguments = ["gigaam", "--hotwords", phraseFile.path, "--hotwords-score", "3", "cpu", "8", "a.wav"]
+        guard case .success(let parsed) = benchmarkExtractHotwords(&arguments) else {
+            throw SelfTestFailure.failed("--hotwords parsing failed")
+        }
+        try expect(parsed, equals: AsrHotwordsConfiguration(phrases: ["DDR4 DIMM", "ЕСИА", "Gmail watcher"], score: 3.0),
+                   "--hotwords file: one phrase per line, blanks dropped")
+        try expect(arguments, equals: ["gigaam", "cpu", "8", "a.wav"], "hotword flags removed from the positional list")
+        var plain = ["cpu", "8", "a.wav"]
+        guard case .success(let none) = benchmarkExtractHotwords(&plain) else {
+            throw SelfTestFailure.failed("parsing without --hotwords failed")
+        }
+        try expect(none, equals: .disabled, "no --hotwords → no hotwords")
+        var bad = ["--hotwords-score", "abc", "cpu"]
+        if case .success = benchmarkExtractHotwords(&bad) {
+            throw SelfTestFailure.failed("an invalid --hotwords-score must be rejected")
+        }
+    }
+
+    private static func testFillerWordRemoval() throws {
+        // Mid-sentence filler with surrounding commas → orphan comma
+        // gets collapsed.
+        let mid = FillerWordRemover.apply(to: "So, um, I was going.")
+        try expect(mid.text, equals: "So, I was going.", "mid-sentence filler should leave a single comma")
+        try expect(mid.removedCount, equals: 1, "mid-sentence filler removal count")
+
+        // Sentence-initial filler with leading-comma cleanup AND
+        // capitalisation restored (the original 'U' was uppercase).
+        let initial = FillerWordRemover.apply(to: "Um, hello.")
+        try expect(initial.text, equals: "Hello.", "sentence-initial filler should re-capitalise the next word")
+        try expect(initial.removedCount, equals: 1, "sentence-initial filler removal count")
+
+        let secondSentence = FillerWordRemover.apply(to: "This is the first sentence. Um this is the second sentence.")
+        try expect(
+            secondSentence.text,
+            equals: "This is the first sentence. This is the second sentence.",
+            "sentence-initial filler after a period should re-capitalise the next word"
+        )
+        try expect(secondSentence.removedCount, equals: 1, "second-sentence filler removal count")
+
+        let secondSentenceWithComma = FillerWordRemover.apply(to: "This is the first sentence. Um, this is the second sentence.")
+        try expect(
+            secondSentenceWithComma.text,
+            equals: "This is the first sentence. This is the second sentence.",
+            "sentence-initial filler after a period should not leave an orphan comma"
+        )
+        try expect(secondSentenceWithComma.removedCount, equals: 1, "second-sentence comma filler removal count")
+
+        let secondSentenceQuestion = FillerWordRemover.apply(to: "This is the first sentence. Um? this is the second sentence.")
+        try expect(
+            secondSentenceQuestion.text,
+            equals: "This is the first sentence. This is the second sentence.",
+            "sentence-initial filler with its own punctuation should take that punctuation with it"
+        )
+        try expect(secondSentenceQuestion.removedCount, equals: 1, "second-sentence question filler removal count")
+
+        let capitalizedMidSentence = FillerWordRemover.apply(to: "This is not a sentence boundary Um this stays lowercase.")
+        try expect(
+            capitalizedMidSentence.text,
+            equals: "This is not a sentence boundary this stays lowercase.",
+            "capitalized fillers away from sentence starts should not force capitalization"
+        )
+        try expect(capitalizedMidSentence.removedCount, equals: 1, "capitalized mid-sentence filler removal count")
+
+        // Bare filler with adjacent punctuation collapses to empty.
+        let bare = FillerWordRemover.apply(to: "Um.")
+        try expect(bare.text, equals: "", "bare filler with trailing punctuation should leave empty string")
+        try expect(bare.removedCount, equals: 1, "bare filler removal count")
+
+        // Filler with no surrounding punctuation just leaves a space
+        // that gets collapsed away.
+        let inline = FillerWordRemover.apply(to: "I'm uh going to the store.")
+        try expect(inline.text, equals: "I'm going to the store.", "inline filler should collapse the leftover whitespace")
+        try expect(inline.removedCount, equals: 1, "inline filler removal count")
+
+        // Compound interjection "uh-huh" must NOT match — the hyphen is
+        // part of the boundary class.
+        let uhHuh = FillerWordRemover.apply(to: "Yeah, uh-huh.")
+        try expect(uhHuh.text, equals: "Yeah, uh-huh.", "uh-huh must not be stripped")
+        try expect(uhHuh.removedCount, equals: 0, "uh-huh removal count")
+
+        // Words that *contain* a filler substring must not match. "her"
+        // contains "er", "sum" contains "um", "exercise" contains "er".
+        let contains = FillerWordRemover.apply(to: "Her sum exercise is harder.")
+        try expect(contains.text, equals: "Her sum exercise is harder.", "filler substrings inside larger words must be preserved")
+        try expect(contains.removedCount, equals: 0, "no removals when fillers are embedded in real words")
+
+        // Multiple fillers in one utterance all get stripped.
+        let multi = FillerWordRemover.apply(to: "Um, ah, I uh think so.")
+        try expect(multi.text, equals: "I think so.", "multiple fillers should all be removed and artifacts cleaned up")
+        try expect(multi.removedCount, equals: 3, "multi-filler removal count")
+
+        // Empty input should be a no-op.
+        let empty = FillerWordRemover.apply(to: "")
+        try expect(empty.text, equals: "", "empty input passes through unchanged")
+        try expect(empty.removedCount, equals: 0, "empty input has zero removals")
+
+        // No fillers present → identical text, zero removals.
+        let clean = FillerWordRemover.apply(to: "Hello world.")
+        try expect(clean.text, equals: "Hello world.", "filler-free input passes through unchanged")
+        try expect(clean.removedCount, equals: 0, "filler-free input has zero removals")
+
+        // Elongated fillers — common in real dictation. The word-
+        // boundary lookahead would have rejected these without the
+        // per-pattern trailing-repeat allowance.
+        let elongatedUm = FillerWordRemover.apply(to: "Ummm, hello.")
+        try expect(elongatedUm.text, equals: "Hello.", "ummm should be stripped like um")
+        try expect(elongatedUm.removedCount, equals: 1, "elongated um removal count")
+
+        let elongatedUh = FillerWordRemover.apply(to: "Uhhh I think so.")
+        try expect(elongatedUh.text, equals: "I think so.", "uhhh should be stripped like uh")
+        try expect(elongatedUh.removedCount, equals: 1, "elongated uh removal count")
+
+        let elongatedAh = FillerWordRemover.apply(to: "Ahhh, that makes sense.")
+        try expect(elongatedAh.text, equals: "That makes sense.", "ahhh should be stripped like ah")
+        try expect(elongatedAh.removedCount, equals: 1, "elongated ah removal count")
+
+        // `hm+` covers both "hm" (single m) and "hmmm" (extended). The
+        // earlier fixed-list "hmm" entry rejected the single-m form.
+        let shortHm = FillerWordRemover.apply(to: "Hm, interesting.")
+        try expect(shortHm.text, equals: "Interesting.", "short hm should be stripped like hmm")
+        try expect(shortHm.removedCount, equals: 1, "short hm removal count")
+
+        // Words containing the new repeat-friendly patterns must still
+        // pass through. "ohm" embeds "hm" but has a leading letter.
+        let embedded = FillerWordRemover.apply(to: "An ohm is a unit.")
+        try expect(embedded.text, equals: "An ohm is a unit.", "ohm must not match hm")
+        try expect(embedded.removedCount, equals: 0, "ohm should produce zero removals")
+
+        // Two consecutive fillers used to leave ",," because the
+        // comma-collapse pass was single-pass/non-overlapping: it
+        // consumed one ", ," pair and the whitespace-before-punctuation
+        // pass then glued the leftover " ," into ",,".
+        let consecutive = FillerWordRemover.apply(to: "So, um, uh, yes.")
+        try expect(consecutive.text, equals: "So, yes.", "consecutive fillers should collapse to a single comma")
+        try expect(consecutive.removedCount, equals: 2, "consecutive filler removal count")
+
+        // Three consecutive fillers exercise runs longer than one
+        // collapse step.
+        let tripleRun = FillerWordRemover.apply(to: "He said, um, uh, er, no.")
+        try expect(tripleRun.text, equals: "He said, no.", "a run of three fillers should collapse to a single comma")
+        try expect(tripleRun.removedCount, equals: 3, "triple filler removal count")
+
+        // Consecutive fillers mid-sentence keep exactly one comma,
+        // matching the single-filler behavior above.
+        let midRun = FillerWordRemover.apply(to: "I think, um, uh, we should go.")
+        try expect(midRun.text, equals: "I think, we should go.", "mid-sentence consecutive fillers should keep one comma")
+        try expect(midRun.removedCount, equals: 2, "mid-sentence consecutive filler removal count")
+
+        // Trailing filler before terminal punctuation used to leave
+        // ",." because no pass cleaned a comma glued onto a period.
+        let trailing = FillerWordRemover.apply(to: "That's all, um.")
+        try expect(trailing.text, equals: "That's all.", "trailing filler should not leave a comma before the period")
+        try expect(trailing.removedCount, equals: 1, "trailing filler removal count")
+
+        let beforeQuestion = FillerWordRemover.apply(to: "Is that right, um?")
+        try expect(beforeQuestion.text, equals: "Is that right?", "filler before a question mark should not leave a comma")
+        try expect(beforeQuestion.removedCount, equals: 1, "filler before question mark removal count")
+
+        let beforeBang = FillerWordRemover.apply(to: "Stop, um!")
+        try expect(beforeBang.text, equals: "Stop!", "filler before an exclamation mark should not leave a comma")
+        try expect(beforeBang.removedCount, equals: 1, "filler before exclamation mark removal count")
+
+        // Sentence-initial filler with its own terminal punctuation:
+        // the leading-strip class must include "?" and "!" or the
+        // orphaned punctuation survives ("Um? What?" → "? What?").
+        let leadingQuestion = FillerWordRemover.apply(to: "Um? What?")
+        try expect(leadingQuestion.text, equals: "What?", "leading filler question should take its punctuation with it")
+        try expect(leadingQuestion.removedCount, equals: 1, "leading filler question removal count")
+
+        let leadingBang = FillerWordRemover.apply(to: "Ah! Careful.")
+        try expect(leadingBang.text, equals: "Careful.", "leading filler exclamation should take its punctuation with it")
+        try expect(leadingBang.removedCount, equals: 1, "leading filler exclamation removal count")
+    }
+
+    private static func testFillerWordRemoverPresetsAndCustomWords() throws {
+        // Only enabled presets are removed.
+        // "Um" carries the capital at sentence start, so removal restores
+        // capitalization onto the following word ("hello" -> "Hello"),
+        // exactly like the pre-existing sentence-initial-filler behavior
+        // exercised in testFillerWordRemoval. "ah" is left untouched
+        // because only the "en_um" preset is enabled.
+        let onlyUm = FillerWordRemover.apply(to: "Um, hello, ah, world.", enabledPresetKeys: ["en_um"], customWords: [])
+        try expect(onlyUm.text, equals: "Hello, ah, world.", "only the enabled preset (um) should be removed, ah stays")
+
+        // Phrase preset, default-off key, explicitly enabled.
+        let phrase = FillerWordRemover.apply(to: "Это как бы сложно.", enabledPresetKeys: ["ru_kak_by"], customWords: [])
+        try expect(phrase.text, equals: "Это сложно.", "multi-word Russian phrase preset should be removed when enabled")
+
+        // Custom word, case-insensitive, word-boundary safe.
+        let custom = FillerWordRemover.apply(to: "So anyway I think so.", enabledPresetKeys: [], customWords: ["anyway"])
+        try expect(custom.text, equals: "So I think so.", "custom single word should be removed when listed")
+
+        // Custom multi-word phrase, tolerant of ASR spacing via \s+.
+        let customPhrase = FillerWordRemover.apply(to: "This is sort  of  fine.", enabledPresetKeys: [], customWords: ["sort of"])
+        try expect(customPhrase.text, equals: "This is fine.", "custom multi-word phrase should tolerate extra whitespace")
+
+        // No presets, no custom words -> no-op.
+        let noop = FillerWordRemover.apply(to: "Nothing changes here.", enabledPresetKeys: [], customWords: [])
+        try expect(noop.text, equals: "Nothing changes here.", "empty preset/custom sets should leave text untouched")
+
+        // Longest-first ordering: a custom word that's a substring of a longer
+        // enabled phrase must not corrupt the phrase.
+        // As with "onlyUm" above, "Это" carries the sentence-initial capital,
+        // so removing the full "это самое" phrase restores capitalization
+        // onto "сложно". The key assertion here is that the longer phrase
+        // ("это самое") is matched and removed whole -- not the shorter
+        // "это" leaving a stray "самое" behind.
+        let ordering = FillerWordRemover.apply(to: "Это самое сложно.", enabledPresetKeys: ["ru_eto_samoe"], customWords: ["это"])
+        try expect(ordering.text, equals: "Сложно.", "the longer phrase preset must be tried before the shorter custom word it contains")
+
+        // Regression coverage for the exact two presets a user reported as
+        // "не фильтруются": the pipeline itself must handle both when they
+        // are ticked (the real bug was in the Settings window, which ate
+        // the clicks before they could be saved).
+        let znaesh = FillerWordRemover.apply(to: "Ну, знаешь, как дела?", enabledPresetKeys: ["ru_znaesh"], customWords: [])
+        try expect(znaesh.text, equals: "Ну, как дела?", "ru_znaesh must be removed when ticked")
+
+        let etoSamoe = FillerWordRemover.apply(to: "Я, это самое, не знаю.", enabledPresetKeys: ["ru_eto_samoe"], customWords: [])
+        try expect(etoSamoe.text, equals: "Я, не знаю.", "ru_eto_samoe must be removed when ticked")
+
+        // Blank/whitespace-only custom words must be ignored, not turned
+        // into a zero-width-match pattern that inflates removedCount and
+        // corrupts unrelated text via the punctuation-cleanup pass.
+        let blankCustomWords = FillerWordRemover.apply(to: "Hello world.", enabledPresetKeys: [], customWords: ["", "   "])
+        try expect(blankCustomWords.text, equals: "Hello world.", "blank/whitespace-only custom words should be a no-op")
+        try expect(blankCustomWords.removedCount, equals: 0, "blank/whitespace-only custom words should not count as removals")
+
+        // Russian hesitation-sound presets (ru_e, ru_em, ru_m, ru_am, ru_aa)
+        // are intentionally defaultEnabled: true per the design doc's
+        // parity intent (docs/superpowers/specs/2026-08-01-windows-port-
+        // feature-parity-design.md §1: Russian hesitation sounds are
+        // categorized alongside the English ones as "unambiguous
+        // hesitation sounds", not as an ambiguous real-word phrase like
+        // "как бы"/"типа"). This is a deliberate behavior *addition* for
+        // any user who hasn't touched filler settings, not a preserved
+        // no-op -- confirmed here through the same production path
+        // (processedDictationText with default enabledFillerPresetKeys)
+        // that live dictation uses.
+        let russianDefaultOn = processedDictationText(
+            rawTranscript: "Э, мне нужно подумать.",
+            corrections: [],
+            removeFillerWords: true
+        )
+        try expect(russianDefaultOn.text, equals: "Мне нужно подумать.", "Russian hesitation sound (э) should be removed by default, with no explicit preset/custom-word configuration")
+    }
+
+    private static func testFillerWordPresetDefaults() throws {
+        // Every preset's default-enabled status must match its curated intent:
+        // hesitation sounds on, real-word phrases off.
+        let alwaysOnKeys: Set<String> = ["en_um", "en_uh", "en_ah", "en_er", "en_erm", "en_hm",
+                                          "ru_e", "ru_em", "ru_m", "ru_am", "ru_aa"]
+        let alwaysOffKeys: Set<String> = ["ru_kak_by", "ru_tipa", "ru_koroche", "en_like", "en_you_know"]
+        for preset in FillerWordRemover.presets where alwaysOnKeys.contains(preset.key) {
+            guard preset.defaultEnabled else {
+                throw SelfTestFailure.failed("expected \(preset.key) to default on")
+            }
+        }
+        for preset in FillerWordRemover.presets where alwaysOffKeys.contains(preset.key) {
+            guard !preset.defaultEnabled else {
+                throw SelfTestFailure.failed("expected \(preset.key) to default off")
+            }
+        }
+
+        // No duplicate keys -- a duplicate would silently shadow one preset's
+        // toggle state with another's in the enabled-set.
+        let keys = FillerWordRemover.presets.map(\.key)
+        guard Set(keys).count == keys.count else {
+            throw SelfTestFailure.failed("duplicate FillerWordPreset keys found")
+        }
+    }
+
+    private static func testEnabledFillerPresetKeysSetting() throws {
+        let defaults = UserDefaults.standard
+        let key = "enabled_filler_preset_keys"
+        let previous = defaults.array(forKey: key)
+        defer {
+            if let previous { defaults.set(previous, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        defaults.removeObject(forKey: key)
+        let settings = Settings.shared
+        guard settings.enabledFillerPresetKeys == FillerWordRemover.defaultEnabledPresetKeys else {
+            throw SelfTestFailure.failed("expected default enabled set when nothing stored yet")
+        }
+
+        settings.enabledFillerPresetKeys = ["en_um"]
+        guard settings.enabledFillerPresetKeys == ["en_um"] else {
+            throw SelfTestFailure.failed("expected stored set to override the default once written")
+        }
+    }
+
+    private static func testSilenceAutoStopTracker() throws {
+        // Continuous silence past the threshold fires exactly once.
+        var tracker = SilenceAutoStopTracker(thresholdSeconds: 5)
+        try expect(tracker.update(level: 0.0, now: 0), equals: false, "tick 0: not yet silent long enough")
+        try expect(tracker.update(level: 0.0, now: 3), equals: false, "tick 3s: still under threshold")
+        try expect(tracker.update(level: 0.0, now: 5), equals: true, "tick 5s: threshold reached, fires once")
+        try expect(tracker.update(level: 0.0, now: 6), equals: false, "tick 6s: already fired, must not fire again")
+
+        // A voiced tick resets the clock.
+        var resetTracker = SilenceAutoStopTracker(thresholdSeconds: 5)
+        _ = resetTracker.update(level: 0.0, now: 0)
+        _ = resetTracker.update(level: 0.0, now: 4)
+        _ = resetTracker.update(level: 0.5, now: 4.5) // voice interrupts
+        try expect(resetTracker.update(level: 0.0, now: 5), equals: false, "silence restarted after voice, 0.5s in is not enough")
+        try expect(resetTracker.update(level: 0.0, now: 9.5), equals: true, "5s of continuous silence after the reset point fires")
+
+        // reset() allows firing again for a new recording.
+        var reusedTracker = SilenceAutoStopTracker(thresholdSeconds: 1)
+        _ = reusedTracker.update(level: 0.0, now: 0)
+        try expect(reusedTracker.update(level: 0.0, now: 1), equals: true, "first recording fires at 1s")
+        reusedTracker.reset()
+        try expect(reusedTracker.update(level: 0.0, now: 1.5), equals: false, "after reset, clock restarts from the next tick")
+        try expect(reusedTracker.update(level: 0.0, now: 2.5), equals: true, "second recording fires 1s after its own start")
+    }
+
+    private static func testDisabledCustomFillerWords() throws {
+        let defaults = UserDefaults.standard
+        let wordsKey = "custom_filler_words"
+        let disabledKey = "disabled_custom_filler_words"
+        let previousWords = defaults.array(forKey: wordsKey)
+        let previousDisabled = defaults.array(forKey: disabledKey)
+        defer {
+            if let previousWords { defaults.set(previousWords, forKey: wordsKey) } else { defaults.removeObject(forKey: wordsKey) }
+            if let previousDisabled { defaults.set(previousDisabled, forKey: disabledKey) } else { defaults.removeObject(forKey: disabledKey) }
+        }
+
+        defaults.removeObject(forKey: wordsKey)
+        defaults.removeObject(forKey: disabledKey)
+        let settings = Settings.shared
+
+        settings.customFillerWords = ["вещь", "thing"]
+        try expect(settings.enabledCustomFillerWords, equals: ["вещь", "thing"],
+                   "custom words are all enabled until explicitly unticked")
+
+        settings.disabledCustomFillerWords = ["thing"]
+        try expect(settings.enabledCustomFillerWords, equals: ["вещь"],
+                   "unticked custom word must drop out of the pipeline list but stay stored")
+
+        // The pipeline itself must skip the unticked word and keep the rest.
+        let stripped = FillerWordRemover.apply(to: "This thing is a thing, honestly.",
+                                               enabledPresetKeys: [],
+                                               customWords: settings.enabledCustomFillerWords)
+        try expect(stripped.text, equals: "This thing is a thing, honestly.",
+                   "unticked custom word must not be removed from dictated text")
+
+        let active = FillerWordRemover.apply(to: "This thing is a вещь, honestly.",
+                                             enabledPresetKeys: [],
+                                             customWords: settings.enabledCustomFillerWords)
+        try expect(active.text, equals: "This thing is a, honestly.",
+                   "ticked custom word must still be removed")
+    }
+
+    private static func testRecordingHUDAccentColorResolvedColor() throws {
+        for color in RecordingHUDAccentColor.allCases where color != .contrast {
+            try expect(color.resolvedColor(lightBackground: true), equals: color.nsColor,
+                       "\(color) must be background-independent on a light background")
+            try expect(color.resolvedColor(lightBackground: false), equals: color.nsColor,
+                       "\(color) must be background-independent on a dark background")
+        }
+        try expect(RecordingHUDAccentColor.contrast.resolvedColor(lightBackground: true), equals: .black,
+                   "contrast on a light background must resolve to black")
+        try expect(RecordingHUDAccentColor.contrast.resolvedColor(lightBackground: false), equals: .white,
+                   "contrast on a dark background must resolve to white")
+    }
+
+    private static func testAudioInputDeviceFiltering() throws {
+        let pseudo = AudioInputDevice(id: 1,
+                                      uid: "CADefaultDeviceAggregate-42159-0",
+                                      name: "CADefaultDeviceAggregate-42159-0")
+        let real = AudioInputDevice(id: 2,
+                                    uid: "real-yeti-nano",
+                                    name: "Yeti Nano")
+
+        try expect(
+            isDefaultAggregateAudioInputDevice(pseudo),
+            equals: true,
+            "CoreAudio default aggregate devices should be recognized"
+        )
+        try expect(
+            isDefaultAggregateAudioInputDevice(real),
+            equals: false,
+            "named microphones should remain selectable"
+        )
+        try expect(
+            normalizedInputDevicePreference(" Yeti Nano\n"),
+            equals: "Yeti Nano",
+            "input device preferences should be trimmed before storing"
+        )
+        try expect(
+            normalizedInputDevicePreference(pseudo.uid),
+            equals: nil,
+            "input device preferences should reject CoreAudio default aggregates"
+        )
+        try expect(
+            normalizedInputDevicePreference("real\u{0}device"),
+            equals: nil,
+            "input device preferences should reject NUL bytes"
+        )
+        try expect(
+            normalizedInputDevicePreference(String(repeating: "x", count: MAX_INPUT_DEVICE_PREFERENCE_BYTES + 1)),
+            equals: nil,
+            "input device preferences should reject oversized values"
+        )
+        try expect(
+            audioInputDevice(matching: pseudo.uid, in: [pseudo, real])?.uid,
+            equals: nil,
+            "CoreAudio default aggregate preferences should fall back to system default"
+        )
+        try expect(
+            audioInputDevice(matching: " real-yeti-nano\n", in: [real])?.uid,
+            equals: "real-yeti-nano",
+            "input device preferences should resolve after trimming"
+        )
+        try expect(
+            audioInputDevice(matching: "Yeti Nano", in: [real])?.uid,
+            equals: "real-yeti-nano",
+            "named microphone preferences should still resolve by display name"
+        )
+
+        // reloadAudioInputIfNeeded()'s change-detection must treat any
+        // spelling of "system default" (empty string, whitespace-only,
+        // or a stale CoreAudio default-aggregate UID) as equivalent, so
+        // a settings save doesn't trigger a spurious audio-only restart.
+        try expect(
+            audioInputPreferenceDidChange(saved: "real-yeti-nano", activeAtLastEngineStart: ""),
+            equals: true,
+            "switching from system default to a named device should count as a change"
+        )
+        try expect(
+            audioInputPreferenceDidChange(saved: "real-yeti-nano", activeAtLastEngineStart: "real-yeti-nano"),
+            equals: false,
+            "reselecting the already-active device should not count as a change"
+        )
+        try expect(
+            audioInputPreferenceDidChange(saved: "", activeAtLastEngineStart: "  "),
+            equals: false,
+            "empty and whitespace-only preferences should both normalize to system default"
+        )
+        try expect(
+            audioInputPreferenceDidChange(saved: "", activeAtLastEngineStart: pseudo.uid),
+            equals: false,
+            "a stale default-aggregate UID and an empty preference should both mean system default"
+        )
+        try expect(
+            audioInputPreferenceDidChange(saved: " Yeti Nano\n", activeAtLastEngineStart: "Yeti Nano"),
+            equals: false,
+            "untrimmed and trimmed spellings of the same device should not count as a change"
+        )
+        try expect(
+            audioInputPreferenceDidChange(saved: "real-yeti-nano", activeAtLastEngineStart: "other-device"),
+            equals: true,
+            "switching between two named devices should count as a change"
+        )
+
+        let sameName = AudioInputDevice(id: 3,
+                                        uid: "another-yeti-nano",
+                                        name: "Yeti Nano")
+        try expect(
+            audioInputDevice(matching: sameName.uid, in: [real, sameName])?.id,
+            equals: sameName.id,
+            "stable device UIDs should win even when microphone names are duplicated"
+        )
+        try expect(
+            audioInputDevice(matching: "missing-device", in: [real]),
+            equals: nil,
+            "a disconnected saved microphone should resolve to system default"
+        )
+        try expect(
+            shouldRestartAudioInputForSettingsChange(previousPreference: "",
+                                                     nextPreference: real.uid,
+                                                     isCoreRuntimeReady: true),
+            equals: true,
+            "changing microphones should restart only the audio input when runtime is ready"
+        )
+        try expect(
+            shouldRestartAudioInputForSettingsChange(previousPreference: real.uid,
+                                                     nextPreference: real.uid,
+                                                     isCoreRuntimeReady: true),
+            equals: false,
+            "saving the same microphone should not restart audio"
+        )
+        try expect(
+            shouldRestartAudioInputForSettingsChange(previousPreference: "",
+                                                     nextPreference: real.uid,
+                                                     isCoreRuntimeReady: false),
+            equals: false,
+            "startup should pick up a microphone change without an extra audio restart"
+        )
+
+        let suiteName = "com.local.lexomorph.self-test.input.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            throw SelfTestFailure.failed("could not create isolated input-device defaults")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let isolatedSettings = Settings(defaults: defaults)
+        try expect(isolatedSettings.inputDevice, equals: "",
+                   "microphone settings should default to the macOS system input")
+        isolatedSettings.inputDevice = " \(real.uid)\n"
+        try expect(isolatedSettings.inputDevice, equals: real.uid,
+                   "microphone settings should persist a normalized stable UID")
+        isolatedSettings.inputDevice = pseudo.uid
+        try expect(isolatedSettings.inputDevice, equals: "",
+                   "pseudo aggregate inputs should reset the preference to system default")
+    }
+
+    private static func testLiveAudioInputEnumeration() throws {
+        let devices = availableAudioInputDevices()
+        guard !devices.isEmpty else {
+            throw SelfTestFailure.failed("CoreAudio reported no selectable input devices")
+        }
+        var seenUIDs = Set<String>()
+        for device in devices {
+            guard !device.uid.isEmpty, !device.name.isEmpty else {
+                throw SelfTestFailure.failed("CoreAudio returned an input with an empty UID or name")
+            }
+            guard audioDeviceHasInputChannels(device.id) else {
+                throw SelfTestFailure.failed("\(device.name) has no input channels")
+            }
+            guard !isDefaultAggregateAudioInputDevice(device) else {
+                throw SelfTestFailure.failed("a temporary CoreAudio aggregate leaked into the picker")
+            }
+            guard seenUIDs.insert(device.uid).inserted else {
+                throw SelfTestFailure.failed("CoreAudio returned duplicate input UID \(device.uid)")
+            }
+            print("AUDIO INPUT: \(device.name) [\(device.uid)]")
+        }
+
+        let engine = AVAudioEngine()
+        guard let unit = engine.inputNode.audioUnit else {
+            throw SelfTestFailure.failed("AVAudioEngine did not expose an input audio unit")
+        }
+        for device in devices {
+            var deviceID = device.id
+            let status = AudioUnitSetProperty(unit,
+                                              kAudioOutputUnitProperty_CurrentDevice,
+                                              kAudioUnitScope_Global,
+                                              0,
+                                              &deviceID,
+                                              UInt32(MemoryLayout<AudioDeviceID>.size))
+            guard status == noErr else {
+                throw SelfTestFailure.failed(
+                    "CoreAudio rejected \(device.name): \(formattedOSStatus(status))"
+                )
+            }
+            guard currentAudioInputDeviceID(for: unit) == device.id else {
+                throw SelfTestFailure.failed(
+                    "CoreAudio did not make \(device.name) the current input"
+                )
+            }
+            let captureFormat = engine.inputNode.inputFormat(forBus: 0)
+            guard captureFormat.sampleRate > 0, captureFormat.channelCount > 0 else {
+                throw SelfTestFailure.failed(
+                    "\(device.name) did not expose an active capture format"
+                )
+            }
+            if let expectedRate = audioInputDeviceNominalSampleRate(device.id),
+               abs(captureFormat.sampleRate - expectedRate) >= 0.5 {
+                throw SelfTestFailure.failed(
+                    "\(device.name) capture format \(captureFormat.sampleRate) did not match \(expectedRate)"
+                )
+            }
+            print("AUDIO SELECT: \(device.name) OK")
+        }
+    }
+
+    private static func testSpeechModelStartupStatus() throws {
+        // `.auto` maps to `nil` here — parakeet.cpp's plain PCM transcription
+        // entry point (wrapped by `sd_parakeet_transcribe`) does not accept a
+        // forced-language parameter at all (unlike whisper.cpp's
+        // `params.language`, which this app used to map `nil` to the literal
+        // string "auto" for), so `isoLanguageCode` is used only for
+        // deterministic post-processing (`ParakeetTranscriptRepair`) — see
+        // `DictationLanguage`'s doc comment in this file.
+        try expect(
+            DictationLanguage.auto.isoLanguageCode,
+            equals: nil,
+            "auto-detect should resolve to no forced ISO language code"
+        )
+        try expect(
+            DictationLanguage.russian.isoLanguageCode,
+            equals: "ru",
+            "a specific language selection should pass its ISO-639-1 code through unchanged"
+        )
+        try expect(
+            resolveEffectiveDictationLanguage(setting: .russian),
+            equals: "ru",
+            "an explicit language selection should bypass keyboard resolution unchanged"
+        )
+        // resolveEffectiveDictationLanguage(setting: .auto) itself depends on
+        // the live Carbon keyboard input source, which is unavailable/unset
+        // over SSH with no GUI session — so it can only be asserted here to
+        // not crash. The actual tag → language-code mapping it delegates to
+        // is a pure function and is fully exercised below.
+        _ = resolveEffectiveDictationLanguage(setting: .auto)
+        try expect(
+            dictationLanguageCode(forKeyboardLanguageTag: "en-US"),
+            equals: "en",
+            "a region-qualified BCP-47 tag should resolve to its primary subtag's language code"
+        )
+        try expect(
+            dictationLanguageCode(forKeyboardLanguageTag: "RU"),
+            equals: "ru",
+            "keyboard language tags should be matched case-insensitively"
+        )
+        try expect(
+            dictationLanguageCode(forKeyboardLanguageTag: "zh-Hans"),
+            equals: nil,
+            "a keyboard language with no matching DictationLanguage should fall through to auto-detect"
+        )
+        try expect(
+            dictationLanguageCode(forKeyboardLanguageTag: ""),
+            equals: nil,
+            "an empty keyboard language tag should fall through to auto-detect"
+        )
+        try expect(
+            dictationLanguageCode(forKeyboardLanguageTag: "auto"),
+            equals: nil,
+            "a keyboard tag literally matching DictationLanguage.auto's rawValue must not be treated as a forced language"
+        )
+        // No Parakeet equivalent of whisper.cpp's `audio_ctx` window-trimming
+        // concept exists (parakeet.cpp's encoder is not the same
+        // architecture — see docs/parakeet-intel-backend.md's Phase 1
+        // integration checklist) — the former
+        // `WhisperEngine.audioContextFrames` boundary tests that lived here
+        // were removed along with `WhisperEngine.swift` itself, not ported.
+        try expect(
+            speechModelStartupStatusTitle(0),
+            equals: "Checking speech model files…",
+            "zero progress should be visible during first-launch model setup"
+        )
+        try expect(
+            speechModelStartupStatusTitle(0.5),
+            equals: "Downloading speech model… 50%",
+            "in-progress download should show quantized progress"
+        )
+        try expect(
+            speechModelStartupStatusTitle(1),
+            equals: "Preparing speech model…",
+            "completed download should be visible without exposing model internals"
+        )
+        try expect(
+            speechModelStartupProgressValue(0),
+            equals: nil,
+            "zero progress should show indeterminate model progress"
+        )
+        try expect(
+            speechModelStartupProgressValue(0.5),
+            equals: 0.5,
+            "in-progress download should expose normalized model progress"
+        )
+        try expect(
+            speechModelStartupProgressValue(1),
+            equals: nil,
+            "completed download should show indeterminate model progress"
+        )
+        let requiredBytes = speechModelDownloadRequiredBytes(for: .parakeetUltraOnnx,
+                                                             headroomBytes: 100)
+        try expect(
+            requiredBytes,
+            equals: PARAKEET_ULTRA_ONNX_SIZE_BYTES + 100,
+            "speech model download requirement should include model estimate plus headroom"
+        )
+        try expect(
+            speechModelDiskSpaceFailureDetail(profile: .parakeetUltraOnnx,
+                                              availableBytes: requiredBytes - 1,
+                                              requiredBytes: requiredBytes)?.contains("Free some disk space"),
+            equals: true,
+            "low disk-space failures should explain how to recover"
+        )
+        try expect(
+            speechModelDiskSpaceFailureDetail(profile: .parakeetUltraOnnx,
+                                              availableBytes: requiredBytes,
+                                              requiredBytes: requiredBytes),
+            equals: nil,
+            "disk-space check should pass once required space is available"
+        )
+        try expect(
+            speechModelDiskSpaceFailureDetail(profile: .parakeetUltraOnnx,
+                                              availableBytes: nil,
+                                              requiredBytes: requiredBytes),
+            equals: nil,
+            "unknown disk-space readings should not block model startup"
+        )
+    }
+
+    private static func testModelIntegrity() throws {
+        try testSpeechModelCachePathSafety()
+
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lexomorph-model-integrity-\(UUID().uuidString)",
+                                    isDirectory: true)
+        let modelDir = root.appendingPathComponent("Toy.mlmodelc", isDirectory: true)
+        try fm.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        let modelFile = modelDir.appendingPathComponent("model.mil")
+        try Data("hello".utf8).write(to: modelFile)
+        let expected = [
+            ModelFileDigest(
+                relativePath: "Toy.mlmodelc/model.mil",
+                sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+            )
+        ]
+        try ModelIntegrity.verifyFiles(root: root,
+                                       expectedFiles: expected,
+                                       strictDirectories: ["Toy.mlmodelc"])
+
+        var rejectedMismatch = false
+        do {
+            try ModelIntegrity.verifyFiles(
+                root: root,
+                expectedFiles: [
+                    ModelFileDigest(relativePath: "Toy.mlmodelc/model.mil",
+                                    sha256: String(repeating: "0", count: 64))
+                ],
+                strictDirectories: ["Toy.mlmodelc"]
+            )
+        } catch is ModelIntegrityError {
+            rejectedMismatch = true
+        }
+        try expect(rejectedMismatch, equals: true,
+                   "model integrity should reject digest mismatches")
+
+        try Data("extra".utf8).write(to: modelDir.appendingPathComponent("extra.bin"))
+        var rejectedUnexpectedFile = false
+        do {
+            try ModelIntegrity.verifyFiles(root: root,
+                                           expectedFiles: expected,
+                                           strictDirectories: ["Toy.mlmodelc"])
+        } catch is ModelIntegrityError {
+            rejectedUnexpectedFile = true
+        }
+        try expect(rejectedUnexpectedFile, equals: true,
+                   "model integrity should reject unpinned files in strict model bundles")
+
+        try fm.removeItem(at: modelDir.appendingPathComponent("extra.bin"))
+        try fm.createDirectory(at: modelDir.appendingPathComponent("empty-extra", isDirectory: true),
+                               withIntermediateDirectories: true)
+        var rejectedUnexpectedDirectory = false
+        do {
+            try ModelIntegrity.verifyFiles(root: root,
+                                           expectedFiles: expected,
+                                           strictDirectories: ["Toy.mlmodelc"])
+        } catch is ModelIntegrityError {
+            rejectedUnexpectedDirectory = true
+        }
+        try expect(rejectedUnexpectedDirectory, equals: true,
+                   "model integrity should reject unpinned directories in strict model bundles")
+
+        var rejectedBadDigest = false
+        do {
+            try ModelIntegrity.verifyFiles(
+                root: root,
+                expectedFiles: [
+                    ModelFileDigest(relativePath: "Toy.mlmodelc/model.mil",
+                                    sha256: "not-a-sha256")
+                ],
+                strictDirectories: ["Toy.mlmodelc"]
+            )
+        } catch is ModelIntegrityError {
+            rejectedBadDigest = true
+        }
+        try expect(rejectedBadDigest, equals: true,
+                   "model integrity should reject malformed manifest digests")
+
+        var rejectedDotSegment = false
+        do {
+            try ModelIntegrity.verifyFiles(
+                root: root,
+                expectedFiles: [
+                    ModelFileDigest(
+                        relativePath: "Toy.mlmodelc/./model.mil",
+                        sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+                    )
+                ],
+                strictDirectories: ["Toy.mlmodelc"]
+            )
+        } catch is ModelIntegrityError {
+            rejectedDotSegment = true
+        }
+        try expect(rejectedDotSegment, equals: true,
+                   "model integrity should reject dot path segments")
+
+        let symlinkedModelFile = modelDir.appendingPathComponent("model-link.mil")
+        try fm.createSymbolicLink(at: symlinkedModelFile, withDestinationURL: modelFile)
+        var rejectedSymlinkHashRead = false
+        do {
+            _ = try ModelIntegrity.sha256Hex(of: symlinkedModelFile,
+                                             relativePath: "Toy.mlmodelc/model-link.mil")
+        } catch is ModelIntegrityError {
+            rejectedSymlinkHashRead = true
+        }
+        try expect(rejectedSymlinkHashRead, equals: true,
+                   "model integrity hashing should not follow leaf symlinks")
+    }
+
+    private static func testSpeechModelCachePathSafety() throws {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lexomorph-cache-safety-\(UUID().uuidString)", isDirectory: true)
+        let support = root.appendingPathComponent("Lexomorph", isDirectory: true)
+        let cache = support.appendingPathComponent("Models/parakeet-tdt-0.6b-v3-q8_0.gguf", isDirectory: true)
+        try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        try expect(
+            isSafeSpeechModelCacheDirectory(
+                cache,
+                parakeetSupportDirectory: support
+            ),
+            equals: true,
+            "speech model cache reset should allow nested Parakeet cache paths"
+        )
+        try expect(
+            isExistingSpeechModelCacheDirectorySafeForRemoval(cache,
+                                                             parakeetSupportDirectory: support),
+            equals: true,
+            "speech model cache reset should allow existing plain cache directories"
+        )
+        try expect(
+            isSafeSpeechModelCacheDirectory(support, parakeetSupportDirectory: support),
+            equals: false,
+            "speech model cache reset should not remove the Lexomorph support root"
+        )
+        try expect(
+            isSafeSpeechModelCacheDirectory(
+                support.deletingLastPathComponent().appendingPathComponent("LexomorphBackup/parakeet-tdt-0.6b-v3-q8_0.gguf", isDirectory: true),
+                parakeetSupportDirectory: support
+            ),
+            equals: false,
+            "speech model cache reset should reject sibling support directories"
+        )
+        try expect(
+            isSafeSpeechModelCacheDirectory(
+                support.appendingPathComponent("../Outside/parakeet-tdt-0.6b-v3-q8_0.gguf", isDirectory: true),
+                parakeetSupportDirectory: support
+            ),
+            equals: false,
+            "speech model cache reset should reject paths that normalize outside Lexomorph support"
+        )
+
+        let outside = root.appendingPathComponent("Outside", isDirectory: true)
+        let outsideCache = outside.appendingPathComponent("parakeet-tdt-0.6b-v3-q8_0.gguf", isDirectory: true)
+        try fm.createDirectory(at: outsideCache, withIntermediateDirectories: true)
+
+        let leafLink = support.appendingPathComponent("Models/link-cache", isDirectory: true)
+        try fm.createSymbolicLink(at: leafLink, withDestinationURL: outsideCache)
+        try expect(
+            isSafeSpeechModelCacheDirectory(leafLink, parakeetSupportDirectory: support),
+            equals: true,
+            "speech model cache reset path check should remain string-only"
+        )
+        try expect(
+            isExistingSpeechModelCacheDirectorySafeForRemoval(leafLink,
+                                                             parakeetSupportDirectory: support),
+            equals: false,
+            "speech model cache reset should reject leaf symlink directories before deletion"
+        )
+
+        let linkedParent = support.appendingPathComponent("LinkedModels", isDirectory: true)
+        try fm.createSymbolicLink(at: linkedParent, withDestinationURL: outside)
+        try expect(
+            isExistingSpeechModelCacheDirectorySafeForRemoval(
+                linkedParent.appendingPathComponent("parakeet-tdt-0.6b-v3-q8_0.gguf", isDirectory: true),
+                parakeetSupportDirectory: support
+            ),
+            equals: false,
+            "speech model cache reset should reject symlinked parent directories before deletion"
+        )
+        try expect(
+            isSafeSpeechModelCacheDirectory(speechModelCacheDirectory(for: .productionDefault)),
+            equals: true,
+            "Parakeet cache path should remain inside Lexomorph Application Support"
+        )
+        let defaultCache = speechModelCacheDirectory(for: .productionDefault)
+        if fm.fileExists(atPath: defaultCache.path) {
+            try expect(
+                isExistingSpeechModelCacheDirectorySafeForRemoval(defaultCache),
+                equals: true,
+                "existing Parakeet cache path should remain removable"
+            )
+        }
+
+        // Exercise the file-leaf case directly: the real Parakeet cache path
+        // is a regular file, not a directory (fixed as part of the original
+        // Whisper port this inherited from —
+        // isExistingSpeechModelCacheDirectorySafeForRemoval previously walked
+        // every path component, including the leaf, through
+        // isExistingPlainDirectory, which meant it could never return true
+        // for a file-shaped cache target and removeSpeechModelCacheDirectory
+        // would permanently refuse to remove the cached model).
+        let fileLeafCache = support.appendingPathComponent("Models/parakeet-file-leaf.gguf", isDirectory: false)
+        try fm.createDirectory(at: fileLeafCache.deletingLastPathComponent(),
+                               withIntermediateDirectories: true)
+        try Data("fake model bytes".utf8).write(to: fileLeafCache)
+        try expect(
+            isExistingSpeechModelCacheDirectorySafeForRemoval(fileLeafCache,
+                                                             parakeetSupportDirectory: support),
+            equals: true,
+            "speech model cache reset should allow removing a file-shaped cache leaf"
+        )
+    }
+
+    private static func testUpdate() throws {
+        try testUpdateCheckParsing()
+        try testUpdateCheckState()
+        try testDirectUpdateManifest()
+        try testUpdateHelperScript()
+        try testDirectUpdateReplacement()
+        try testUpdateProgressState()
+    }
+
+    private static func testDirectUpdateManifest() throws {
+        let checksum = String(repeating: "a", count: 64)
+        let validData = Data("{\"version\":\"9.8.7\",\"sha256\":\"\(checksum)\"}".utf8)
+        try expect(
+            try LexomorphUpdateInstaller.parseManifest(validData,
+                                                           expectedVersion: "9.8.7"),
+            equals: LexomorphUpdateManifest(version: "9.8.7", sha256: checksum),
+            "direct update manifest should parse a canonical version and SHA-256"
+        )
+
+        do {
+            _ = try LexomorphUpdateInstaller.parseManifest(validData,
+                                                               expectedVersion: "9.8.8")
+            throw SelfTestFailure.failed("direct update manifest should reject version disagreement")
+        } catch let error as LexomorphUpdateInstallerError {
+            try expect(error,
+                       equals: .manifestVersionMismatch(expected: "9.8.8", actual: "9.8.7"),
+                       "direct update manifest should describe version disagreement")
+        }
+
+        let invalidChecksum = Data(#"{"version":"9.8.7","sha256":"not-a-checksum"}"#.utf8)
+        do {
+            _ = try LexomorphUpdateInstaller.parseManifest(invalidChecksum,
+                                                               expectedVersion: "9.8.7")
+            throw SelfTestFailure.failed("direct update manifest should reject malformed checksums")
+        } catch let error as LexomorphUpdateInstallerError {
+            try expect(error, equals: .invalidManifest,
+                       "direct update manifest should reject malformed checksums")
+        }
+    }
+
+    private static func testUpdateCheckParsing() throws {
+        let ok = HTTPURLResponse(url: GITHUB_RELEASES_API_URL,
+                                 statusCode: 200,
+                                 httpVersion: nil,
+                                 headerFields: nil)!
+        let notFound = HTTPURLResponse(url: GITHUB_RELEASES_API_URL,
+                                       statusCode: 404,
+                                       httpVersion: nil,
+                                       headerFields: nil)!
+        let releaseData = Data(
+            #"{"tag_name":"v9.8.7","body":"Notes","html_url":"https://github.com/shohart/SuperDictate-Next/releases/tag/v9.8.7"}"#.utf8
+        )
+
+        try expect(
+            UpdateCheck.parseLatest(data: releaseData, response: ok),
+            equals: .success(GitHubRelease(tagName: "v9.8.7",
+                                           version: "9.8.7",
+                                           body: "Notes",
+                                           htmlURL: "https://github.com/shohart/SuperDictate-Next/releases/tag/v9.8.7")),
+            "update parsing should decode typed GitHub release payloads"
+        )
+        try expect(
+            UpdateCheck.parseLatest(data: releaseData, response: notFound),
+            equals: .failure(.httpStatus(404)),
+            "update parsing should reject non-2xx HTTP responses with the status code"
+        )
+        let rateLimited = HTTPURLResponse(url: GITHUB_RELEASES_API_URL,
+                                          statusCode: 403,
+                                          httpVersion: nil,
+                                          headerFields: nil)!
+        try expect(
+            UpdateCheck.parseLatest(data: releaseData, response: rateLimited),
+            equals: .failure(.httpStatus(403)),
+            "update parsing should surface HTTP 403 distinctly (GitHub rate limiting)"
+        )
+        let oversizedReleaseData = Data(
+            """
+            {"tag_name":"v9.8.7","body":"\(String(repeating: "x", count: UpdateCheck.maxReleaseResponseBytes))","html_url":"https://github.com/shohart/SuperDictate-Next/releases/tag/v9.8.7"}
+            """.utf8
+        )
+        try expect(
+            oversizedReleaseData.count > UpdateCheck.maxReleaseResponseBytes,
+            equals: true,
+            "oversized release response fixture should exceed the parser limit"
+        )
+        try expect(
+            UpdateCheck.parseLatest(data: oversizedReleaseData, response: ok),
+            equals: .failure(.unexpectedResponse),
+            "update parsing should reject oversized release responses before decoding"
+        )
+        try expect(
+            UpdateCheck.parseLatest(data: Data(#"{"tag_name":""}"#.utf8), response: ok),
+            equals: .failure(.unexpectedResponse),
+            "update parsing should reject empty release tags"
+        )
+        try expect(
+            UpdateCheck.parseLatest(data: Data(#"{"tag_name":"latest"}"#.utf8), response: ok),
+            equals: .failure(.unexpectedResponse),
+            "update parsing should reject non-version release tags"
+        )
+        try expect(
+            UpdateCheck.parseLatest(data: Data(#"{"tag_name":"v01.2.3"}"#.utf8), response: ok),
+            equals: .failure(.unexpectedResponse),
+            "update parsing should reject non-normal semver tags"
+        )
+        try expect(
+            UpdateCheck.parseLatest(
+                data: Data(#"{"tag_name":"v999999999999999999999999.2.3"}"#.utf8),
+                response: ok
+            ),
+            equals: .failure(.unexpectedResponse),
+            "update parsing should reject oversized numeric version parts"
+        )
+        try expect(
+            parseSemver("999999999999999999999999.2.3"),
+            equals: [Int.max, 2, 3],
+            "tolerant version parsing should not overflow on oversized components"
+        )
+        try expect(
+            normalizedSkippedUpdateVersions([
+                "junk",
+                "v1.2.3",
+                "1.2.3",
+                " V2.0.0\n",
+                "01.2.3",
+                "3.999999999999999999999999.0"
+            ]),
+            equals: ["1.2.3", "2.0.0"],
+            "skipped update versions should normalize valid versions and discard malformed entries"
+        )
+        try expect(
+            normalizedSkippedUpdateVersions((0..<(MAX_SKIPPED_UPDATE_VERSIONS + 3)).map { "1.0.\($0)" }),
+            equals: (3..<(MAX_SKIPPED_UPDATE_VERSIONS + 3)).map { "1.0.\($0)" },
+            "skipped update versions should keep only the most recent bounded entries"
+        )
+        try expect(
+            UpdateCheck.parseLatest(
+                data: Data(#"{"tag_name":"9.8.7","html_url":"https://example.test/v9.8.7"}"#.utf8),
+                response: ok
+            ),
+            equals: .success(GitHubRelease(tagName: "9.8.7",
+                                           version: "9.8.7",
+                                           body: "",
+                                           htmlURL: GITHUB_RELEASES_PAGE.absoluteString)),
+            "update parsing should fall back from non-project release URLs"
+        )
+        try expect(
+            UpdateCheck.parseLatest(
+                data: Data(#"{"tag_name":"v9.8.7","html_url":"https://github.com/shohart/SuperDictate-Next/releases/tag/v9.8.8"}"#.utf8),
+                response: ok
+            ),
+            equals: .success(GitHubRelease(tagName: "v9.8.7",
+                                           version: "9.8.7",
+                                           body: "",
+                                           htmlURL: GITHUB_RELEASES_PAGE.absoluteString)),
+            "update parsing should fall back when release URL tag does not match the payload tag"
+        )
+        // macOS and Windows share the repository: the check lists the
+        // releases and must take the newest macOS one, never a Windows tag,
+        // draft or pre-release, and accept both mac-v and legacy v tags.
+        let listing = Data(
+            #"""
+            [{"tag_name":"win-v9.9.9","html_url":"https://github.com/shohart/SuperDictate-Next/releases/tag/win-v9.9.9"},
+             {"tag_name":"mac-v1.0.0","draft":true},
+             {"tag_name":"mac-v0.9.0","prerelease":true},
+             {"tag_name":"mac-v0.7.10","body":"Notes","html_url":"https://github.com/shohart/SuperDictate-Next/releases/tag/mac-v0.7.10"},
+             {"tag_name":"mac-v0.7.9"},
+             {"tag_name":"v0.7.0"},
+             {"tag_name":"windows-v0.7.0"}]
+            """#.utf8
+        )
+        try expect(
+            UpdateCheck.parseReleases(data: listing, response: ok),
+            equals: .success(GitHubRelease(tagName: "mac-v0.7.10",
+                                           version: "0.7.10",
+                                           body: "Notes",
+                                           htmlURL: "https://github.com/shohart/SuperDictate-Next/releases/tag/mac-v0.7.10")),
+            "the update check must pick the newest published macOS release"
+        )
+        try expect(
+            UpdateCheck.parseReleases(data: Data(#"[{"tag_name":"v0.7.0"},{"tag_name":"v0.6.0"}]"#.utf8), response: ok),
+            equals: .success(GitHubRelease(tagName: "v0.7.0", version: "0.7.0", body: "",
+                                           htmlURL: GITHUB_RELEASES_PAGE.absoluteString)),
+            "legacy v tags are macOS releases"
+        )
+        try expect(
+            UpdateCheck.parseReleases(data: Data(#"[{"tag_name":"win-v0.8.0"}]"#.utf8), response: ok),
+            equals: .failure(.unexpectedResponse),
+            "a listing with only Windows releases offers no macOS update"
+        )
+        try expect(
+            UpdateCheck.parseReleases(data: listing, response: notFound),
+            equals: .failure(.httpStatus(404)),
+            "the release listing must surface HTTP errors"
+        )
+        try expect(UpdateCheck.normalizedReleaseVersion(from: "mac-v1.2.3"), equals: "1.2.3",
+                   "mac-v tags must parse")
+        try expect(UpdateCheck.normalizedReleaseVersion(from: "win-v1.2.3"), equals: nil,
+                   "Windows tags must never read as macOS versions")
+        let manifest = LexomorphUpdateManifest(version: "0.7.1", sha256: String(repeating: "a", count: 64))
+        try expect(
+            try LexomorphUpdateInstaller.archiveURL(tagName: "mac-v0.7.1", manifest: manifest).absoluteString,
+            equals: "https://github.com/shohart/SuperDictate-Next/releases/download/mac-v0.7.1/Lexomorph.zip",
+            "the archive is downloaded from the release's own tag"
+        )
+        do {
+            _ = try LexomorphUpdateInstaller.archiveURL(tagName: "mac-v0.7.2", manifest: manifest)
+            throw SelfTestFailure.failed("an archive tag that does not name the manifest version must be refused")
+        } catch is LexomorphUpdateInstallerError {}
+
+        // Manual-check alert copy: each failure kind gets its own
+        // explanation instead of blaming the network for everything.
+        try expect(
+            manualUpdateCheckFailureText(.network).contains("internet connection"),
+            equals: true,
+            "network failure text should point at connectivity"
+        )
+        try expect(
+            manualUpdateCheckFailureText(.httpStatus(403)).contains("rate limiting"),
+            equals: true,
+            "HTTP 403 failure text should mention rate limiting"
+        )
+        try expect(
+            manualUpdateCheckFailureText(.httpStatus(500)).contains("HTTP 500"),
+            equals: true,
+            "HTTP failure text should include the status code"
+        )
+        try expect(
+            manualUpdateCheckFailureText(.unexpectedResponse).contains("couldn't read"),
+            equals: true,
+            "unexpected-response failure text should describe an unreadable response"
+        )
+        try expect(
+            UpdateCheck.normalizedReleaseVersion(from: " V1.2.3\n"),
+            equals: "1.2.3",
+            "release version normalization should allow one leading v"
+        )
+        try expect(
+            normalizedStoredAppVersion(" v2.3.4\n"),
+            equals: "2.3.4",
+            "stored app version normalization should canonicalize release-style versions"
+        )
+        try expect(
+            normalizedStoredAppVersion("2.3"),
+            equals: nil,
+            "stored app version normalization should reject incomplete versions"
+        )
+        try expect(
+            normalizedStoredAppVersion("v999999999999999999999999.2.3"),
+            equals: nil,
+            "stored app version normalization should reject oversized numeric components"
+        )
+        try expect(
+            UpdateCheck.sanitizedReleaseURL("http://github.com/shohart/SuperDictate-Next/releases/tag/v9.8.7",
+                                            expectedTag: "v9.8.7"),
+            equals: GITHUB_RELEASES_PAGE.absoluteString,
+            "release URL sanitizing should require HTTPS"
+        )
+        try expect(
+            UpdateCheck.sanitizedReleaseURL("https://user@github.com/shohart/SuperDictate-Next/releases/tag/v9.8.7",
+                                            expectedTag: "v9.8.7"),
+            equals: GITHUB_RELEASES_PAGE.absoluteString,
+            "release URL sanitizing should reject userinfo"
+        )
+        try expect(
+            UpdateCheck.sanitizedReleaseURL("https://github.com/shohart/SuperDictate-Next/releases/tag/v9.8.7?download=1",
+                                            expectedTag: "v9.8.7"),
+            equals: GITHUB_RELEASES_PAGE.absoluteString,
+            "release URL sanitizing should reject query strings"
+        )
+    }
+
+    private static func testUpdateCheckState() throws {
+        let release = GitHubRelease(tagName: "v1.2.4",
+                                    version: "1.2.4",
+                                    body: "",
+                                    htmlURL: GITHUB_RELEASES_PAGE.absoluteString)
+        try expect(
+            updateCheckResult(for: nil, currentVersion: "1.2.3", skippedVersions: []),
+            equals: .failed,
+            "nil update checks should be recorded as failed or unavailable"
+        )
+        try expect(
+            updateCheckResult(for: release, currentVersion: "1.2.4", skippedVersions: []),
+            equals: .upToDate,
+            "equal release versions should be recorded as up to date"
+        )
+        try expect(
+            updateCheckResult(for: release, currentVersion: "1.2.3", skippedVersions: []),
+            equals: .available,
+            "newer releases should be recorded as available"
+        )
+        try expect(
+            updateCheckResult(for: release, currentVersion: "1.2.3", skippedVersions: ["1.2.4"]),
+            equals: .skipped,
+            "skipped newer releases should be recorded distinctly"
+        )
+
+        let now = Date(timeIntervalSince1970: 1_000)
+        try expect(
+            shouldSuppressUpdateForReminder(version: "1.2.4",
+                                            reminderVersion: "1.2.4",
+                                            reminderUntil: now.addingTimeInterval(60),
+                                            now: now),
+            equals: true,
+            "active reminders should suppress the matching update version"
+        )
+        try expect(
+            shouldSuppressUpdateForReminder(version: "1.2.5",
+                                            reminderVersion: "1.2.4",
+                                            reminderUntil: now.addingTimeInterval(60),
+                                            now: now),
+            equals: false,
+            "reminders should not suppress newer versions"
+        )
+        try expect(
+            shouldSuppressUpdateForReminder(version: "1.2.4",
+                                            reminderVersion: "1.2.4",
+                                            reminderUntil: now.addingTimeInterval(-1),
+                                            now: now),
+            equals: false,
+            "expired reminders should not suppress updates"
+        )
+        try expect(
+            updateCheckDiagnosticText(checkedAt: nil,
+                                      source: nil,
+                                      result: nil,
+                                      releaseVersion: ""),
+            equals: "never",
+            "missing update-check metadata should render as never"
+        )
+
+        // Stale-pause clearing: equal version (expired pause about to
+        // be re-shown) and a newer superseding release both clear; an
+        // older fetched version or no pause leaves things alone.
+        try expect(
+            shouldClearUpdateReminderPause(fetchedVersion: "1.2.4", pausedVersion: "1.2.4"),
+            equals: true,
+            "a fetched release matching the paused version should clear the pause"
+        )
+        try expect(
+            shouldClearUpdateReminderPause(fetchedVersion: "1.2.5", pausedVersion: "1.2.4"),
+            equals: true,
+            "a newer fetched release should clear a stale pause for the superseded version"
+        )
+        try expect(
+            shouldClearUpdateReminderPause(fetchedVersion: "1.2.3", pausedVersion: "1.2.4"),
+            equals: false,
+            "an older fetched release should keep the existing pause"
+        )
+        try expect(
+            shouldClearUpdateReminderPause(fetchedVersion: "1.2.4", pausedVersion: nil),
+            equals: false,
+            "no pause means nothing to clear"
+        )
+
+        // Persisted pause expiry validation, mirroring the
+        // lastUpdateCheck* pattern: corrupt → nil, in-range round-trip,
+        // cleared/missing → nil.
+        let pauseNow = Date(timeIntervalSince1970: 2_000)
+        let validPauseUntil = pauseNow.addingTimeInterval(UPDATE_REMIND_LATER_SECONDS)
+        try expect(
+            normalizedUpdateReminderPauseExpiry(storedValue: validPauseUntil, now: pauseNow),
+            equals: validPauseUntil,
+            "a stored pause expiry inside the pause window should round-trip"
+        )
+        try expect(
+            normalizedUpdateReminderPauseExpiry(storedValue: pauseNow.addingTimeInterval(-60), now: pauseNow),
+            equals: pauseNow.addingTimeInterval(-60),
+            "an already-expired stored pause expiry is legitimate state and should round-trip"
+        )
+        try expect(
+            normalizedUpdateReminderPauseExpiry(storedValue: "not a date", now: pauseNow),
+            equals: nil,
+            "a corrupt (non-Date) stored pause expiry should degrade to nil"
+        )
+        try expect(
+            normalizedUpdateReminderPauseExpiry(storedValue: nil, now: pauseNow),
+            equals: nil,
+            "a cleared pause expiry should read back as nil"
+        )
+        try expect(
+            normalizedUpdateReminderPauseExpiry(
+                storedValue: pauseNow.addingTimeInterval(UPDATE_REMIND_LATER_SECONDS + 60),
+                now: pauseNow
+            ),
+            equals: nil,
+            "an out-of-range future pause expiry should degrade to nil instead of suppressing indefinitely"
+        )
+        // The paused-version half persists through the same validated
+        // app-version normalization tested in testUpdateCheckParsing
+        // (normalizedStoredAppVersion: corrupt → nil, round-trip).
+
+        try expect(
+            UpdateCheckSource(rawValue: "settings_toggle"),
+            equals: .settingsToggle,
+            "settings-toggle update checks should round-trip through their persisted raw value"
+        )
+        try expect(
+            UpdateCheckSource.settingsToggle.diagnosticLabel,
+            equals: "settings toggle",
+            "settings-toggle update checks should label themselves distinctly in diagnostics"
+        )
+    }
+
+    private static func testUpdateHelperScript() throws {
+        try expect(
+            shellSingleQuoted("a'b"),
+            equals: "'a'\"'\"'b'",
+            "shell quoting should preserve embedded single quotes"
+        )
+        try expect(
+            (UPDATE_HELPER_LOG_PATH as NSString).deletingLastPathComponent,
+            equals: (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs"),
+            "update helper log should live in the user's log directory"
+        )
+        let updateEnv = updateProcessEnvironment(current: [
+            "LANG": "C\nbad",
+            "USER": "lexomorph-user",
+            "LOGNAME": "lexomorph-logname",
+            "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0",
+            "BASH_ENV": "/tmp/pwn.sh",
+            "ENV": "/tmp/pwn.sh",
+            "SHELLOPTS": "xtrace",
+            "RUBYOPT": "-r/tmp/pwn.rb",
+            "HOMEBREW_BOTTLE_DOMAIN": "https://example.test",
+        ])
+        try expect(updateEnv["HOME"], equals: Optional(NSHomeDirectory()),
+                   "update environment should set HOME explicitly")
+        try expect(updateEnv["PATH"],
+                   equals: Optional("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"),
+                   "update environment should use a deterministic PATH")
+        try expect(updateEnv["LANG"], equals: Optional("en_US.UTF-8"),
+                   "update environment should reject unsafe locale values")
+        try expect(updateEnv["USER"], equals: Optional("lexomorph-user"),
+                   "update environment should preserve a safe USER value")
+        try expect(updateEnv["LOGNAME"], equals: Optional("lexomorph-logname"),
+                   "update environment should preserve a safe LOGNAME value")
+        for key in ["BASH_ENV", "ENV", "SHELLOPTS", "RUBYOPT", "HOMEBREW_BOTTLE_DOMAIN"] {
+            try expect(updateEnv[key], equals: String?.none,
+                       "update environment should not inherit \(key)")
+        }
+        let systemEnv = systemToolProcessEnvironment(current: [
+            "LANG": "en_GB.UTF-8",
+            "USER": "lexomorph-user",
+            "BASH_ENV": "/tmp/pwn.sh",
+            "DYLD_INSERT_LIBRARIES": "/tmp/pwn.dylib",
+            "PATH": "/tmp/bin",
+        ])
+        try expect(systemEnv["PATH"], equals: Optional("/usr/bin:/bin:/usr/sbin:/sbin"),
+                   "system tool environment should not include Homebrew or inherited PATH entries")
+        try expect(systemEnv["LANG"], equals: Optional("en_GB.UTF-8"),
+                   "system tool environment should preserve a safe locale")
+        try expect(systemEnv["USER"], equals: Optional("lexomorph-user"),
+                   "system tool environment should preserve a safe USER value")
+        for key in ["BASH_ENV", "DYLD_INSERT_LIBRARIES"] {
+            try expect(systemEnv[key], equals: String?.none,
+                       "system tool environment should not inherit \(key)")
+        }
+
+        let script = updateHelperScript(pid: 123,
+                                        brewPath: "/opt/homebrew/bin/brew",
+                                        targetVersion: "9.8.7",
+                                        statePath: "/tmp/lexomorph-update.state",
+                                        appPath: "/Applications/Lexomorph.app",
+                                        releasesPageURL: "https://example.test/releases")
+        for fragment in [
+            "umask 077",
+            "TARGET_VERSION='9.8.7'",
+            "STATE_PATH='/tmp/lexomorph-update.state'",
+            "LEXOMORPH_PID=123",
+            "SCRIPT_PATH=\"$0\"",
+            "trap cleanup EXIT",
+            "/bin/rm -f \"$SCRIPT_PATH\"",
+            "printf '[%s] %s\\n' \"$(timestamp)\" \"$*\"",
+            "printf '%s\\t%s\\n' \"$phase\" \"$message\" >\"$tmp\"",
+            "CASK_TAP='shlgd/superdictate'",
+            "CASK_TOKEN='shlgd/superdictate/superdictate'",
+            "CASK_INSTALLED_TOKEN='lexomorph'",
+            "PlistBuddy -c \"Print :CFBundleShortVersionString\"",
+            "version_at_least \"$installed\" \"$TARGET_VERSION\"",
+            "state \"preparing\" \"Preparing Homebrew for Lexomorph v$TARGET_VERSION...\"",
+            "state \"downloading\" \"Downloading Lexomorph v$TARGET_VERSION...\"",
+            "state \"installing\" \"Installing Lexomorph v$TARGET_VERSION...\"",
+            "run_brew tap \"$CASK_TAP\"",
+            "run_brew update --force",
+            "run_brew fetch --cask --force \"$CASK_TOKEN\"",
+            "run_brew upgrade --cask --force --appdir=\"$APP_DIR\" \"$CASK_TOKEN\"",
+            "run_brew reinstall --cask --force --appdir=\"$APP_DIR\" \"$CASK_TOKEN\"",
+            "installed_target_version",
+            "sleep 2",
+            "state \"complete\" \"Lexomorph v$TARGET_VERSION is installed.\"",
+            "/usr/bin/open \"$APP_PATH\""
+        ] {
+            guard script.contains(fragment) else {
+                throw SelfTestFailure.failed("update helper script missing fragment: \(fragment)")
+            }
+        }
+        for fragment in ["LOG=", ">>\"$LOG\"", ">\"$LOG\"", "prepare_log"] {
+            guard !script.contains(fragment) else {
+                throw SelfTestFailure.failed("update helper script should not reopen a log path: \(fragment)")
+            }
+        }
+
+        let directScript = lexomorphDirectUpdateHelperScript(
+            pid: 123,
+            targetVersion: "9.8.7",
+            statePath: "/tmp/lexomorph-update.state",
+            stagedAppPath: "/tmp/work/release/Lexomorph.app",
+            workDirectory: "/tmp/work",
+            backupAppPath: "/Applications/.Lexomorph-update-backup-test.app",
+            appPath: "/Applications/Lexomorph.app",
+            language: .english
+        )
+        for fragment in [
+            "PANEL_PID=123",
+            "TARGET_VERSION='9.8.7'",
+            "STAGED_APP='/tmp/work/release/Lexomorph.app'",
+            "BACKUP_APP='/Applications/.Lexomorph-update-backup-test.app'",
+            "wait_for_panel_exit || rollback",
+            "launchctl bootout \"$SERVICE\"",
+            "/bin/mv \"$APP_PATH\" \"$BACKUP_APP\" || rollback",
+            "/usr/bin/ditto \"$STAGED_APP\" \"$APP_PATH\" || rollback",
+            "/usr/bin/codesign --verify --deep --strict \"$APP_PATH\"",
+            "if [ -d \"$BACKUP_APP\" ]; then",
+            "state \"complete\" 'Lexomorph v9.8.7 is installed.'",
+        ] {
+            guard directScript.contains(fragment) else {
+                throw SelfTestFailure.failed("direct update helper missing fragment: \(fragment)")
+            }
+        }
+        let directTmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lexomorph-direct-update-self-test-\(UUID().uuidString).sh")
+        try directScript.write(to: directTmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: directTmp) }
+        let directProc = Process()
+        directProc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        directProc.arguments = ["-n", directTmp.path]
+        directProc.standardOutput = Pipe()
+        directProc.standardError = Pipe()
+        try directProc.run()
+        directProc.waitUntilExit()
+        guard directProc.terminationStatus == 0 else {
+            throw SelfTestFailure.failed("direct update helper script should pass bash -n")
+        }
+
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lexomorph-update-self-test-\(UUID().uuidString).sh")
+        try script.write(to: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        proc.arguments = ["-n", tmp.path]
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
+        try proc.run()
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else {
+            throw SelfTestFailure.failed("update helper script should pass bash -n")
+        }
+
+        let fm = FileManager.default
+        let helperRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lexomorph-update-helper-test-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: helperRoot, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: helperRoot) }
+
+        let helperPath = try writePrivateUpdateHelperScript(script,
+                                                            directory: helperRoot.path,
+                                                            fileName: "helper.sh")
+        var createdStat = stat()
+        guard lstat(helperPath, &createdStat) == 0 else {
+            throw SelfTestFailure.failed("update helper script file should exist")
+        }
+        try expect((createdStat.st_mode & S_IFMT) == S_IFREG,
+                   equals: true,
+                   "update helper script should be a regular file")
+        try expect(Int(createdStat.st_mode & mode_t(0o777)),
+                   equals: 0o600,
+                   "update helper script should be private to the current user")
+        try expect(Int(createdStat.st_nlink),
+                   equals: 1,
+                   "update helper script should not be hard-linked")
+        try expect(
+            String(data: try Data(contentsOf: URL(fileURLWithPath: helperPath)), encoding: .utf8),
+            equals: script,
+            "update helper script file should contain the generated script"
+        )
+
+        let existing = helperRoot.appendingPathComponent("existing.sh")
+        try Data("existing\n".utf8).write(to: existing)
+        var existingRejected = false
+        do {
+            _ = try writePrivateUpdateHelperScript("bad",
+                                                   directory: helperRoot.path,
+                                                   fileName: "existing.sh")
+        } catch {
+            existingRejected = true
+        }
+        try expect(existingRejected, equals: true,
+                   "update helper script writer should reject existing files")
+        try expect(
+            String(data: try Data(contentsOf: existing), encoding: .utf8),
+            equals: "existing\n",
+            "update helper script writer should leave existing files untouched"
+        )
+
+        let target = helperRoot.appendingPathComponent("target.sh")
+        try Data("target\n".utf8).write(to: target)
+        let link = helperRoot.appendingPathComponent("linked.sh")
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+        var symlinkRejected = false
+        do {
+            _ = try writePrivateUpdateHelperScript("bad",
+                                                   directory: helperRoot.path,
+                                                   fileName: "linked.sh")
+        } catch {
+            symlinkRejected = true
+        }
+        try expect(symlinkRejected, equals: true,
+                   "update helper script writer should reject leaf symlinks")
+        try expect(
+            String(data: try Data(contentsOf: target), encoding: .utf8),
+            equals: "target\n",
+            "update helper script writer should leave symlink targets untouched"
+        )
+
+        let preferredLog = helperRoot.appendingPathComponent("Lexomorph-update.log")
+        let helperLog = try openPrivateUpdateHelperLog(preferredPath: preferredLog.path,
+                                                       fallbackDirectory: helperRoot.path)
+        helperLog.handle.write(Data("log\n".utf8))
+        helperLog.handle.closeFile()
+        try expect(helperLog.path, equals: preferredLog.path,
+                   "update helper log should use the preferred path when safe")
+        var logStat = stat()
+        guard lstat(preferredLog.path, &logStat) == 0 else {
+            throw SelfTestFailure.failed("update helper log file should exist")
+        }
+        try expect((logStat.st_mode & S_IFMT) == S_IFREG,
+                   equals: true,
+                   "update helper log should be a regular file")
+        try expect(Int(logStat.st_mode & mode_t(0o777)),
+                   equals: 0o600,
+                   "update helper log should be private to the current user")
+        try expect(Int(logStat.st_nlink),
+                   equals: 1,
+                   "update helper log should not be hard-linked")
+        try expect(
+            String(data: try Data(contentsOf: preferredLog), encoding: .utf8),
+            equals: "log\n",
+            "update helper log should receive helper output"
+        )
+
+        let linkedLogTarget = helperRoot.appendingPathComponent("linked-log-target.log")
+        try Data("target log\n".utf8).write(to: linkedLogTarget)
+        let linkedLog = helperRoot.appendingPathComponent("linked-log.log")
+        try fm.createSymbolicLink(at: linkedLog, withDestinationURL: linkedLogTarget)
+        let fallbackForSymlink = try openPrivateUpdateHelperLog(preferredPath: linkedLog.path,
+                                                                fallbackDirectory: helperRoot.path)
+        fallbackForSymlink.handle.write(Data("fallback\n".utf8))
+        fallbackForSymlink.handle.closeFile()
+        try expect(fallbackForSymlink.path == linkedLog.path,
+                   equals: false,
+                   "update helper log should fall back when preferred path is a symlink")
+        try expect(
+            String(data: try Data(contentsOf: linkedLogTarget), encoding: .utf8),
+            equals: "target log\n",
+            "update helper log fallback should leave symlink targets untouched"
+        )
+
+        let hardLogTarget = helperRoot.appendingPathComponent("hard-log-target.log")
+        try Data("hard target\n".utf8).write(to: hardLogTarget)
+        let hardLog = helperRoot.appendingPathComponent("hard-log.log")
+        try fm.linkItem(at: hardLogTarget, to: hardLog)
+        let fallbackForHardLink = try openPrivateUpdateHelperLog(preferredPath: hardLog.path,
+                                                                 fallbackDirectory: helperRoot.path)
+        fallbackForHardLink.handle.write(Data("hard fallback\n".utf8))
+        fallbackForHardLink.handle.closeFile()
+        try expect(fallbackForHardLink.path == hardLog.path,
+                   equals: false,
+                   "update helper log should fall back when preferred path is hard-linked")
+        try expect(
+            String(data: try Data(contentsOf: hardLogTarget), encoding: .utf8),
+            equals: "hard target\n",
+            "update helper log fallback should leave hard-linked targets untouched"
+        )
+    }
+
+    private static func testDirectUpdateReplacement() throws {
+        let fileManager = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("lexomorph-update-replacement-test-\(UUID().uuidString)",
+                                    isDirectory: true)
+        let applications = root.appendingPathComponent("Applications", isDirectory: true)
+        let currentApp = applications.appendingPathComponent("Lexomorph.app", isDirectory: true)
+        let workDirectory = root.appendingPathComponent("work", isDirectory: true)
+        let stagedApp = workDirectory
+            .appendingPathComponent("release", isDirectory: true)
+            .appendingPathComponent("Lexomorph.app", isDirectory: true)
+        let backupApp = applications.appendingPathComponent(".Lexomorph-update-backup.app",
+                                                             isDirectory: true)
+        let statePath = root.appendingPathComponent("state.txt")
+        let helperPath = root.appendingPathComponent("helper.sh")
+        try fileManager.createDirectory(at: applications, withIntermediateDirectories: true)
+        try makeSyntheticSignedUpdateApp(at: currentApp, version: "1.0.0")
+        try makeSyntheticSignedUpdateApp(at: stagedApp, version: "9.8.7")
+        try Data("starting\tStarting update…\n".utf8).write(to: statePath)
+        defer { try? fileManager.removeItem(at: root) }
+
+        let script = lexomorphDirectUpdateHelperScript(
+            pid: Int32.max,
+            targetVersion: "9.8.7",
+            statePath: statePath.path,
+            stagedAppPath: stagedApp.path,
+            workDirectory: workDirectory.path,
+            backupAppPath: backupApp.path,
+            appPath: currentApp.path,
+            language: .english,
+            relaunch: false
+        )
+        try script.write(to: helperPath, atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [helperPath.path]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let processOutput = String(data: output.fileHandleForReading.readDataToEndOfFile(),
+                                   encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else {
+            throw SelfTestFailure.failed("direct update replacement failed: \(processOutput)")
+        }
+
+        try LexomorphUpdateInstaller.validateApp(at: currentApp,
+                                                     expectedVersion: "9.8.7")
+        try expect(fileManager.fileExists(atPath: backupApp.path), equals: false,
+                   "successful direct update should remove its backup")
+        try expect(fileManager.fileExists(atPath: workDirectory.path), equals: false,
+                   "successful direct update should remove staged files")
+        try expect(UpdateProgressState.read(from: statePath.path)?.phase,
+                   equals: Optional("complete"),
+                   "successful direct update should report completion")
+    }
+
+    private static func makeSyntheticSignedUpdateApp(at appURL: URL,
+                                                     version: String) throws {
+        guard let sourceExecutable = Bundle.main.executableURL else {
+            throw SelfTestFailure.failed("self-test executable URL is unavailable")
+        }
+        let fileManager = FileManager.default
+        let executableDirectory = appURL.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try fileManager.createDirectory(at: executableDirectory, withIntermediateDirectories: true)
+        let executableURL = executableDirectory.appendingPathComponent("Lexomorph")
+        try fileManager.copyItem(at: sourceExecutable, to: executableURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755],
+                                      ofItemAtPath: executableURL.path)
+        let info: [String: Any] = [
+            "CFBundleExecutable": "Lexomorph",
+            "CFBundleIdentifier": "com.local.lexomorph",
+            "CFBundleName": "Lexomorph",
+            "CFBundlePackageType": "APPL",
+            "CFBundleShortVersionString": version,
+            "CFBundleVersion": "1",
+        ]
+        let infoData = try PropertyListSerialization.data(fromPropertyList: info,
+                                                          format: .xml,
+                                                          options: 0)
+        try infoData.write(to: appURL.appendingPathComponent("Contents/Info.plist"))
+        let signing = LexomorphAgentService.run("/usr/bin/codesign",
+                                                   ["--force", "--deep", "--sign", "-", appURL.path])
+        guard signing.status == 0 else {
+            throw SelfTestFailure.failed("could not sign synthetic update app: \(signing.output)")
+        }
+    }
+
+    private static func testUpdateProgressState() throws {
+        let launch = UpdateProgressLaunch(arguments: [
+            UPDATE_PROGRESS_ARGUMENT,
+            "/tmp/lexomorph.state",
+            "/tmp/lexomorph.log",
+            "9.8.7",
+            "/tmp/\(UPDATE_PROGRESS_APP_PREFIX)test.app",
+        ])
+        try expect(launch != nil, equals: true,
+                   "update progress launch arguments should parse")
+        try expect(launch?.targetVersion, equals: Optional("9.8.7"),
+                   "update progress launch should retain target version")
+        try expect(
+            UpdateProgressLaunch(arguments: [UPDATE_PROGRESS_ARGUMENT, "", "/tmp/lexomorph.log", "9.8.7", "/tmp/app"]) != nil,
+            equals: false,
+            "update progress launch should reject empty paths"
+        )
+
+        let statePath = try createPrivateUpdateProgressStateFile()
+        defer { try? FileManager.default.removeItem(atPath: statePath) }
+
+        var st = stat()
+        guard lstat(statePath, &st) == 0 else {
+            throw SelfTestFailure.failed("update progress state file should exist")
+        }
+        try expect((st.st_mode & S_IFMT) == S_IFREG, equals: true,
+                   "update progress state file should be regular")
+        try expect(Int(st.st_nlink), equals: 1,
+                   "update progress state file should not be hard-linked")
+        try expect(Int(st.st_mode & mode_t(0o777)), equals: 0o600,
+                   "update progress state file should be private to the current user")
+
+        let initial = UpdateProgressState.read(from: statePath)
+        try expect(initial?.phase, equals: Optional("starting"),
+                   "update progress state should default to starting")
+        try expect(initial?.message, equals: Optional("Starting update..."),
+                   "update progress state should default to the startup message")
+
+        try writePrivateUpdateProgressState(phase: "failed\tbad",
+                                            message: "Line 1\nLine 2",
+                                            to: statePath)
+        let failed = UpdateProgressState.read(from: statePath)
+        try expect(failed?.phase, equals: Optional("failed bad"),
+                   "update progress state should sanitize tab characters in phases")
+        try expect(failed?.message, equals: Optional("Line 1 Line 2"),
+                   "update progress state should sanitize newlines in messages")
+
+        let safeCleanupPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("\(UPDATE_PROGRESS_APP_PREFIX)test.app")
+        try expect(isSafeUpdateProgressCleanupPath(safeCleanupPath), equals: true,
+                   "update progress cleanup should allow copied temp app bundles")
+        try expect(isSafeUpdateProgressCleanupPath("/Applications/Lexomorph.app"), equals: false,
+                   "update progress cleanup should reject non-temp app bundles")
+        let unsafeTempPath = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("Lexomorph.app")
+        try expect(isSafeUpdateProgressCleanupPath(unsafeTempPath), equals: false,
+                   "update progress cleanup should reject temp app bundles without the copied-helper prefix")
+    }
+
+    private static func testHostileRegistryEnvDetection() throws {
+        try expect(
+            detectedHostileRegistryEnvVars(in: [:]),
+            equals: [],
+            "empty environment should not flag any registry override"
+        )
+        try expect(
+            detectedHostileRegistryEnvVars(in: ["HF_TOKEN": "redacted",
+                                                "PATH": "/usr/bin"]),
+            equals: [],
+            "unrelated env vars (incl. HF_TOKEN) must not flag as hostile"
+        )
+        try expect(
+            detectedHostileRegistryEnvVars(in: ["REGISTRY_URL": "https://evil.example/"]),
+            equals: ["REGISTRY_URL"],
+            "REGISTRY_URL must be flagged"
+        )
+        try expect(
+            detectedHostileRegistryEnvVars(in: ["MODEL_REGISTRY_URL": "https://evil.example/"]),
+            equals: ["MODEL_REGISTRY_URL"],
+            "MODEL_REGISTRY_URL must be flagged"
+        )
+        try expect(
+            detectedHostileRegistryEnvVars(in: ["REGISTRY_URL": "",
+                                                "MODEL_REGISTRY_URL": ""]),
+            equals: ["MODEL_REGISTRY_URL", "REGISTRY_URL"],
+            "an empty-string value still represents a tampered launch env"
+        )
+    }
+
+    // MARK: - Sync bridge for actor calls from the (synchronous) self-test runner
+    //
+    // `ParakeetEngine` is an actor; calling any of its methods from outside
+    // requires crossing an isolation boundary, which is always `async` at
+    // the call site even for a nominally-synchronous-bodied method. The
+    // self-test entry point (`LexomorphSelfTest.run`, called from top-level
+    // code in this file) is plain synchronous code, so a small
+    // semaphore-based bridge is needed to call into the actor and get a
+    // result back before returning. Write-then-signal / wait-then-read
+    // through the semaphore is the standard safe pattern here: the
+    // semaphore itself provides the happens-before relationship, so
+    // `@unchecked Sendable` on the box is justified by construction (single
+    // writer before signal, single reader after wait).
+    private final class ParakeetSyncBridgeBox<T>: @unchecked Sendable {
+        var result: Result<T, Error>?
+    }
+
+    private static func runParakeetEngineSynchronously<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ParakeetSyncBridgeBox<T>()
+        Task {
+            do {
+                box.result = .success(try await operation())
+            } catch {
+                box.result = .failure(error)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        switch box.result! {
+        case .success(let value): return value
+        case .failure(let error): throw error
+        }
+    }
+
+    // MARK: - Parakeet transcript repair (spec §13's required test coverage:
+    // sentence-initial, mid-word/mid-sentence, punctuation-adjacent, repeated
+    // tokens, Russian/auto/non-Russian). `testRecordingLifecycle()` already
+    // exercises a few of these cases end-to-end through
+    // `processedDictationText`; this group calls `ParakeetTranscriptRepair`
+    // directly for focused, addressable coverage of the full matrix.
+
+    private static func testParakeetTranscriptRepair() throws {
+        try expect(
+            ParakeetTranscriptRepair.apply(to: "<unk>лка стоит в углу.", language: .russian),
+            equals: "Ёлка стоит в углу.",
+            "sentence-initial <unk> should repair to capitalized Ё for Russian"
+        )
+        try expect(
+            ParakeetTranscriptRepair.apply(to: "Моя л<unk>бимая песня.", language: .russian),
+            equals: "Моя лёбимая песня.",
+            "mid-word <unk> should repair to lowercase ё"
+        )
+        try expect(
+            ParakeetTranscriptRepair.apply(to: "Привет, <unk>! Как дела?", language: .auto),
+            equals: "Привет, ё! Как дела?",
+            "punctuation-adjacent <unk> should repair correctly under auto-detect"
+        )
+        try expect(
+            ParakeetTranscriptRepair.apply(to: "<unk> и <unk> и <unk>.", language: .russian),
+            equals: "Ё и ё и ё.",
+            "repeated <unk> tokens should each repair independently"
+        )
+        try expect(
+            ParakeetTranscriptRepair.apply(to: "Hello <unk> world.", language: .english),
+            equals: "Hello world.",
+            "non-Russian language should remove <unk> rather than substitute Cyrillic ё"
+        )
+        try expect(
+            ParakeetTranscriptRepair.apply(to: "No unknown tokens here.", language: .russian),
+            equals: "No unknown tokens here.",
+            "text without <unk> should pass through unchanged (the guard makes this a no-op)"
+        )
+    }
+
+    // MARK: - Russian number ITN (spec 2026-07-29-clipboard-race-and-number-itn):
+    // ported from the plan's XCTest cases into this project's `--self-test`
+    // harness, since there is no XCTest target / `Tests/` directory in this
+    // package (confirmed via `find swift/Tests` and `grep testTarget
+    // Package.swift`, both empty). Same assertions, same inputs/outputs.
+    private static func testRussianNumberITNCardinal() throws {
+        try expect(RussianNumberNormalizer.normalize("двадцать девять"), equals: "29", "simple tens: двадцать девять")
+        try expect(RussianNumberNormalizer.normalize("двадцать пять"), equals: "25", "simple tens: двадцать пять")
+        try expect(RussianNumberNormalizer.normalize("двадцать шесть"), equals: "26", "simple tens: двадцать шесть")
+
+        try expect(RussianNumberNormalizer.normalize("пять"), equals: "5", "single digit: пять")
+        try expect(RussianNumberNormalizer.normalize("ноль"), equals: "0", "single digit: ноль")
+
+        try expect(RussianNumberNormalizer.normalize("пятнадцать"), equals: "15", "teen: пятнадцать")
+        try expect(RussianNumberNormalizer.normalize("девятнадцать"), equals: "19", "teen: девятнадцать")
+
+        try expect(RussianNumberNormalizer.normalize("сто пятьдесят три"), equals: "153", "hundreds and compound: сто пятьдесят три")
+        try expect(RussianNumberNormalizer.normalize("девятьсот девяносто девять"), equals: "999", "hundreds and compound: девятьсот девяносто девять")
+
+        try expect(RussianNumberNormalizer.normalize("две тысячи двадцать шесть"), equals: "2026", "thousands: две тысячи двадцать шесть")
+        try expect(RussianNumberNormalizer.normalize("один миллион"), equals: "1000000", "millions: один миллион")
+
+        try expect(RussianNumberNormalizer.normalize("привет, как дела?"), equals: "привет, как дела?", "non-number text left unchanged")
+
+        try expect(RussianNumberNormalizer.normalize("мне двадцать пять лет"), equals: "мне 25 лет", "number embedded in sentence preserves surrounding text")
+
+        try expect(RussianNumberNormalizer.normalize("один из способов"), equals: "один из способов", "ambiguous standalone 'один' before 'из' is left unchanged")
+
+        // Regression for a group-boundary bug found while reviewing
+        // parseCardinalRun: `break` inside the category `switch` only exits
+        // the switch (Swift's break targets the nearest enclosing loop OR
+        // switch), so a malformed continuation like a second same-category
+        // word used to fall through to `consumed += 1` without contributing
+        // to the value — silently eating the second word instead of leaving
+        // it for the next parse attempt. Fixed by labeling the `for` loop
+        // (`wordLoop:`) and using `break wordLoop`/`continue wordLoop`
+        // explicitly, so a malformed continuation stops the run without
+        // consuming the offending word.
+        try expect(RussianNumberNormalizer.normalize("пять шесть"), equals: "5 6", "two standalone single-digit numbers in a row must not merge or drop a word")
+    }
+
+    private static func testRussianNumberITNOrdinal() throws {
+        try expect(RussianNumberNormalizer.normalize("пятый"), equals: "5-й", "simple ordinal: пятый")
+        try expect(RussianNumberNormalizer.normalize("третий"), equals: "3-й", "simple ordinal: третий")
+
+        try expect(RussianNumberNormalizer.normalize("двадцать пятый"), equals: "25-й", "compound ordinal masc nom: двадцать пятый")
+        try expect(RussianNumberNormalizer.normalize("двадцать пятого"), equals: "25-го", "compound ordinal gen: двадцать пятого")
+        try expect(RussianNumberNormalizer.normalize("двадцать пятое"), equals: "25-е", "compound ordinal neut nom: двадцать пятое")
+
+        try expect(RussianNumberNormalizer.normalize("это был двадцать пятый раз"), equals: "это был 25-й раз", "ordinal embedded in sentence preserves surrounding text")
+
+        // Regression: ordinalWordSuffixes originally only covered 1-10, 20,
+        // 30 as given in the plan's literal table, leaving 11-19, 40-90 and
+        // 100 unconvertible — a teen-day ordinal ("одиннадцатое") is neither
+        // a recognized ordinal wordform nor a cardinal wordform (the
+        // cardinal table has "одиннадцать", not "одиннадцатое"), so it fell
+        // straight through unchanged. That silently broke roughly a third
+        // of calendar days for the plan's own flagship date example. Also
+        // covers the one irregular stem in the run: 40 is "сороковой"
+        // (-ой), not the regular "-ый" pattern every other decade uses.
+        try expect(RussianNumberNormalizer.normalize("одиннадцатое июля две тысячи двадцать шестого года"), equals: "11-е июля 2026-го года", "teen-day ordinal (11-19) in a date")
+        try expect(RussianNumberNormalizer.normalize("сороковой день"), equals: "40-й день", "irregular ordinal stem 40: сороковой")
+        try expect(RussianNumberNormalizer.normalize("сотый раз"), equals: "100-й раз", "ordinal 100: сотый")
+
+        // Regression (code review finding): parseOrdinalRun used to try
+        // every prefix length from the end of the ENTIRE remaining
+        // document down to zero, merging the first (longest) cardinal
+        // prefix that happened to be followed by any recognized ordinal
+        // wordform — with no check that the ordinal actually completes
+        // THAT cardinal run rather than starting an unrelated one.
+        // "сто двадцать пять" is already a complete number (125; its
+        // units slot is filled by "пять"), so a further ordinal
+        // "первого" (a unit-level ordinal, "1st") must NOT merge into it
+        // — that produced a fabricated "126-го" ("one hundred twenty six,
+        // -го") which does not correspond to anything the speaker said.
+        // Fixed by requiring the ordinal's category to be a legal
+        // continuation of the cardinal run's last category (the same
+        // rule that already stops "пять шесть" from merging into one
+        // cardinal) rather than accepting any adjacent ordinal wordform.
+        try expect(
+            RussianNumberNormalizer.normalize("сто двадцать пять первого"),
+            equals: "125 1-го",
+            "a complete cardinal (125) followed by an unrelated ordinal (1st) must not fuse into a fabricated value"
+        )
+    }
+
+    private static func testRussianNumberITNContext() throws {
+        // Date/money phrases are not special-cased: they fall out of the
+        // existing cardinal/ordinal parsing because context words like
+        // "года"/"июля"/"рублей" were deliberately never added to
+        // numberWordValues or ordinalWordSuffixes, so they pass through
+        // normalize(_:) unchanged via the "not a recognized number word"
+        // fallback. Diagnosed per the plan's Task B3 Step 3: hand-traced
+        // each case against parseCardinalRun/parseOrdinalRun and confirmed
+        // no stray context word was added to either table and no
+        // group-boundary bug is exercised here beyond the one already
+        // fixed in Task B1 (see the "пять шесть" regression test above).
+        try expect(
+            RussianNumberNormalizer.normalize("двадцать девятое июля две тысячи двадцать шестого года"),
+            equals: "29-е июля 2026-го года",
+            "date: ordinal day + cardinal year, context words untouched"
+        )
+        try expect(RussianNumberNormalizer.normalize("пятьсот рублей"), equals: "500 рублей", "money phrase: пятьсот рублей")
+        try expect(RussianNumberNormalizer.normalize("сто долларов"), equals: "100 долларов", "money phrase: сто долларов")
+        try expect(
+            RussianNumberNormalizer.normalize("это стоит две тысячи пятьсот рублей"),
+            equals: "это стоит 2500 рублей",
+            "money amount with compound cardinal number"
+        )
+    }
+
+    private static func testRussianNumberITNPunctuation() throws {
+        // Spoken "точка"/"двоеточие"/"запятая" convert to symbols only when
+        // a number sits on both sides (an IP-style address, a time, a
+        // decimal) -- never as an ordinary word. Parakeet also routinely
+        // inserts a stray comma at the pause right before the spoken
+        // punctuation word ("168, точка, 1"); that artifact comma must be
+        // absorbed, not left dangling next to the converted symbol.
+        try expect(
+            RussianNumberNormalizer.normalize("19 точка 168 точка 1 точка 122"),
+            equals: "19.168.1.122",
+            "IP-style address, clean dictation with no stray commas"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("19, точка, 168, точка, 1, точка, 122, двоеточие, 31, 28"),
+            equals: "19.168.1.122:31, 28",
+            "IP-style address with a trailing port-like pair, reproducing Parakeet's stray pause-commas around each spoken punctuation word"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("двадцать пять запятая семь"),
+            equals: "25,7",
+            "decimal number spelled out as words on both sides of запятая"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("5 запятая 5 килограмма"),
+            equals: "5,5 килограмма",
+            "decimal number already in digit form on both sides"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("5 точка первая"),
+            equals: "5.1-я",
+            "digit before точка, spelled-out ordinal word after -- hands off to the existing ordinal branch instead of double-processing"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("это моя точка зрения"),
+            equals: "это моя точка зрения",
+            "точка as an ordinary word (point of view), no number on either side"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("я закончил и точка"),
+            equals: "я закончил и точка",
+            "точка as emphasis at the end of a sentence, no number after it"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("это точка стиля"),
+            equals: "это точка стиля",
+            "точка as an ordinary word (matter of style), no number on either side"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("5 точка зрения"),
+            equals: "5 точка зрения",
+            "digit before точка but no number after it -- must not convert"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("122 двоеточие. 31"),
+            equals: "122:31",
+            "Parakeet's stray pause-artifact is a period after the spoken punctuation word, not just a comma -- must still convert"
+        )
+        try expect(
+            RussianNumberNormalizer.normalize("122. двоеточие 31"),
+            equals: "122:31",
+            "stray pause-artifact period before the spoken punctuation word -- must still convert"
+        )
+    }
+
+    private static func testProcessedDictationTextITN() throws {
+        let enabled = processedDictationText(
+            rawTranscript: "мне двадцать пять лет",
+            corrections: [],
+            removeFillerWords: false,
+            normalizeNumbersToDigits: true,
+            language: .russian
+        )
+        try expect(enabled.text, equals: "мне 25 лет", "processedDictationText should normalize numbers when the flag is on")
+
+        let disabled = processedDictationText(
+            rawTranscript: "мне двадцать пять лет",
+            corrections: [],
+            removeFillerWords: false,
+            normalizeNumbersToDigits: false,
+            language: .russian
+        )
+        try expect(disabled.text, equals: "мне двадцать пять лет", "processedDictationText should leave numbers as words when the flag is off")
+
+        let correction = TranscriptCorrection(source: "25 лет", replacement: "25 years old")
+        let corrected = processedDictationText(
+            rawTranscript: "мне двадцать пять лет",
+            corrections: [correction],
+            removeFillerWords: false,
+            normalizeNumbersToDigits: true,
+            language: .russian
+        )
+        try expect(corrected.text, equals: "мне 25 years old", "ITN should run before user corrections so corrections can match on the digit form")
+    }
+
+    // MARK: - LLM GPU probe
+
+    /// Parsing of `LexomorphLLMHost --list-devices`, plus (when the
+    /// helper is built next to this binary) a live probe that must agree
+    /// with what the helper prints.
+    private static func testLLMGPUProbe() throws {
+        try expect(parseLLMGPUDeviceList("DEVICE Vulkan0\tAMD Radeon Vega\n"), equals: ["AMD Radeon Vega"],
+                   "one device line yields its description")
+        try expect(parseLLMGPUDeviceList("DEVICE Vulkan0\tAMD Radeon RX 6600\nDEVICE Vulkan1\t\n"),
+                   equals: ["AMD Radeon RX 6600", "Vulkan1"],
+                   "an empty description falls back to the device name")
+        try expect(parseLLMGPUDeviceList("ggml_vulkan: Found 1 Vulkan devices:\n\n"), equals: [],
+                   "anything but DEVICE lines is ignored")
+        try expect(parseLLMGPUDeviceList(""), equals: [], "no output means no GPU")
+        let devices = LLMGPUProbe.shared.devices()
+        print("llm-gpu-probe: \(devices.isEmpty ? "no Vulkan device (or helper not built)" : devices.joined(separator: ", "))")
+    }
+
+    // MARK: - Post-insertion anchor
+
+    private static func testInsertionAnchor() throws {
+        let find = PostInsertionEditWatcher.insertedRange
+        try expect(find("привет мир", "Текст: привет мир", 17), equals: NSRange(location: 7, length: 10),
+                   "exact span ending at the cursor")
+        // ChatGPT-style editor: trailing space dropped, cursor one short.
+        try expect(find("Привет мир. ", "Привет мир.", 11), equals: NSRange(location: 0, length: 11),
+                   "a dropped trailing space still anchors on the trimmed text")
+        try expect(find("Привет мир ", "Привет\u{00A0}мир\u{00A0}", 10), equals: NSRange(location: 0, length: 10),
+                   "no-break spaces match plain spaces")
+        try expect(find("да", "да или да", 9), equals: NSRange(location: 7, length: 2),
+                   "the occurrence nearest the cursor wins")
+        try expect(find("да", "да или да", nil), equals: NSRange(location: 7, length: 2),
+                   "without a cursor the latest occurrence wins")
+        try expect(find("привет мир", "Спросить ChatGPT\n", 0) == nil, equals: true,
+                   "a stale placeholder value never anchors")
+    }
+
+    // MARK: - ASR thread policy
+
+    private static func testASRThreadPolicy() throws {
+        // Thread-count policy: max(2, min(16, physical - 2)), with a
+        // validated LEXOMORPH_ASR_THREADS override (1...32).
+        try expect(
+            TranscriptionWorker.resolvedASRThreadCount(physicalCoreCount: 2, environmentOverride: nil),
+            equals: 2,
+            "2 physical cores should floor to the minimum of 2 threads"
+        )
+        try expect(
+            TranscriptionWorker.resolvedASRThreadCount(physicalCoreCount: 8, environmentOverride: nil),
+            equals: 6,
+            "8 physical cores should leave two cores free (6 threads)"
+        )
+        try expect(
+            TranscriptionWorker.resolvedASRThreadCount(physicalCoreCount: 18, environmentOverride: nil),
+            equals: 16,
+            "18 physical cores should use 16 threads"
+        )
+        try expect(
+            TranscriptionWorker.resolvedASRThreadCount(physicalCoreCount: 44, environmentOverride: nil),
+            equals: 16,
+            "a high core count should cap at the maximum of 16 threads"
+        )
+        try expect(
+            TranscriptionWorker.resolvedASRThreadCount(physicalCoreCount: 8, environmentOverride: "4"),
+            equals: 4,
+            "a valid LEXOMORPH_ASR_THREADS override should take precedence over the default policy"
+        )
+        try expect(
+            TranscriptionWorker.resolvedASRThreadCount(physicalCoreCount: 8, environmentOverride: "0"),
+            equals: 6,
+            "an out-of-range (below 1) override should be ignored, falling back to the default"
+        )
+        try expect(
+            TranscriptionWorker.resolvedASRThreadCount(physicalCoreCount: 8, environmentOverride: "64"),
+            equals: 6,
+            "an out-of-range (above 32) override should be ignored, falling back to the default"
+        )
+        try expect(
+            TranscriptionWorker.resolvedASRThreadCount(physicalCoreCount: 8, environmentOverride: "not-a-number"),
+            equals: 6,
+            "a non-numeric override should be ignored, falling back to the default"
+        )
+        try expect(TranscriptionWorker.physicalCPUCoreCount() >= 1, equals: true,
+                   "hw.physicalcpu should report at least one core")
+    }
+
+    /// NULL-argument / invalid-path coverage for the `sd_silero_vad_*` C
+    /// bridge (Task 2) — mirrors `testParakeetBridge`'s shape but calls the
+    /// C API directly (no Swift-side VAD engine wrapper exists yet; wiring
+    /// that up is a later task). No real model is needed for any of these
+    /// cases — every one is rejected before (or without ever) touching the
+    /// vendored whisper_vad_* implementation. `sample_count == 0` ->
+    /// EMPTY_AUDIO is NOT covered here: the bridge's NULL checks
+    /// (context/context->native/samples) run before the empty-audio check
+    /// (same ordering as sd_parakeet_transcribe's NULL-then-EMPTY_AUDIO
+    /// checks), so observing EMPTY_AUDIO specifically requires a live,
+    /// successfully-created context — that path is covered by the gated
+    /// `silero-vad-real` group instead, alongside the real-model inference
+    /// assertions.
+    private static func testSileroVadBridge() throws {
+        // sd_silero_vad_create: NULL model_path -> NULL_ARGUMENT, and
+        // *out_context stays NULL.
+        var ctx: OpaquePointer? = OpaquePointer(bitPattern: 1) // poison value
+        let statusNullPath = sd_silero_vad_create(nil, &ctx)
+        try expect(statusNullPath, equals: SD_SILERO_VAD_ERR_NULL_ARGUMENT,
+                   "sd_silero_vad_create with a NULL model_path should return NULL_ARGUMENT")
+        try expect(ctx == nil, equals: true,
+                   "sd_silero_vad_create must set *out_context to NULL even on a NULL_ARGUMENT failure")
+
+        // sd_silero_vad_create: NULL out_context -> NULL_ARGUMENT (checked
+        // before model_path is even read, matching sd_parakeet_create's
+        // out_context-first ordering).
+        let statusNullOutContext = "/nonexistent/path.bin".withCString { path in
+            sd_silero_vad_create(path, nil)
+        }
+        try expect(statusNullOutContext, equals: SD_SILERO_VAD_ERR_NULL_ARGUMENT,
+                   "sd_silero_vad_create with a NULL out_context should return NULL_ARGUMENT")
+
+        // sd_silero_vad_create: nonexistent model path -> MODEL_LOAD_FAILED,
+        // *out_context left NULL.
+        var ctx2: OpaquePointer? = OpaquePointer(bitPattern: 1) // poison value
+        let statusBadPath = "/nonexistent/path/to/silero-vad-\(UUID().uuidString).bin".withCString { path in
+            sd_silero_vad_create(path, &ctx2)
+        }
+        try expect(statusBadPath, equals: SD_SILERO_VAD_ERR_MODEL_LOAD_FAILED,
+                   "sd_silero_vad_create with a nonexistent model path should return MODEL_LOAD_FAILED")
+        try expect(ctx2 == nil, equals: true,
+                   "sd_silero_vad_create must leave *out_context NULL on a load failure")
+
+        // sd_silero_vad_speech_probabilities: NULL context -> NULL_ARGUMENT,
+        // and the output pointers are left NULL/zero rather than
+        // uninitialized.
+        var samples: [Float] = [0.1, 0.2, 0.3]
+        var outProbs: UnsafeMutablePointer<Float>? = UnsafeMutablePointer(bitPattern: 1) // poison
+        var outCount: UInt64 = 42 // poison
+        var outWindow: UInt64 = 42 // poison
+        let statusNullContext = samples.withUnsafeMutableBufferPointer { buf in
+            sd_silero_vad_speech_probabilities(
+                nil, buf.baseAddress, UInt64(buf.count), &outProbs, &outCount, &outWindow
+            )
+        }
+        try expect(statusNullContext, equals: SD_SILERO_VAD_ERR_NULL_ARGUMENT,
+                   "sd_silero_vad_speech_probabilities with a NULL context should return NULL_ARGUMENT")
+        try expect(outProbs == nil, equals: true,
+                   "a NULL_ARGUMENT failure must set *out_probabilities to NULL")
+        try expect(outCount, equals: 0,
+                   "a NULL_ARGUMENT failure must set *out_count to zero")
+        try expect(outWindow, equals: 0,
+                   "a NULL_ARGUMENT failure must set *out_window_size_samples to zero")
+
+        // sd_silero_vad_speech_probabilities: NULL samples -> NULL_ARGUMENT.
+        //
+        // The context argument here is NULL too, and deliberately so: the
+        // bridge's guard is a single short-circuiting
+        // `!context || !context->native || !samples || ...` (mirroring
+        // sd_parakeet_transcribe:247), so ANY non-NULL context value is
+        // read as a real SDSileroVadContext and `context->native` is
+        // dereferenced before `samples` is ever looked at. Fabricating a
+        // plausible-looking handle (e.g. OpaquePointer(bitPattern: 0xdeadbeef))
+        // to "isolate" the samples check therefore does not isolate anything
+        // — it is simply a wild pointer dereference, and it crashed this
+        // very self-test with EXC_BAD_ACCESS at 0x00000000deadbeef. There is
+        // no valid non-NULL context obtainable without a real model file, so
+        // isolating the individual NULL checks is not possible in this
+        // model-free group; the contract this group actually owns is the one
+        // the task requires — "a NULL context or NULL samples yields
+        // NULL_ARGUMENT, and the out-parameters are cleared, never
+        // uninitialized."
+        var outProbs2: UnsafeMutablePointer<Float>? = UnsafeMutablePointer(bitPattern: 1)
+        var outCount2: UInt64 = 42
+        let statusNullSamples = sd_silero_vad_speech_probabilities(
+            nil, nil, 3, &outProbs2, &outCount2, nil
+        )
+        try expect(statusNullSamples, equals: SD_SILERO_VAD_ERR_NULL_ARGUMENT,
+                   "sd_silero_vad_speech_probabilities with NULL samples should return NULL_ARGUMENT")
+        try expect(outProbs2 == nil, equals: true,
+                   "a NULL_ARGUMENT failure must set *out_probabilities to NULL")
+        try expect(outCount2, equals: 0,
+                   "a NULL_ARGUMENT failure must set *out_count to zero")
+
+        // sd_silero_vad_speech_probabilities: NULL out_probabilities/out_count
+        // -> NULL_ARGUMENT (both are required together per the header doc).
+        // Same reasoning as above: the context stays NULL rather than a
+        // fabricated handle, since any non-NULL value would be dereferenced.
+        var dummySample: Float = 0.1
+        let statusNullOutProbs = withUnsafeMutablePointer(to: &dummySample) { samplePtr in
+            sd_silero_vad_speech_probabilities(nil, samplePtr, 1, nil, &outCount2, nil)
+        }
+        try expect(statusNullOutProbs, equals: SD_SILERO_VAD_ERR_NULL_ARGUMENT,
+                   "sd_silero_vad_speech_probabilities with a NULL out_probabilities should return NULL_ARGUMENT")
+
+        // sd_silero_vad_destroy / sd_silero_vad_free_probabilities /
+        // sd_silero_vad_last_error_message must all be safe (no crash) on
+        // NULL input.
+        sd_silero_vad_destroy(nil)
+        sd_silero_vad_free_probabilities(nil)
+        let emptyErrorMessage = String(cString: sd_silero_vad_last_error_message(nil))
+        try expect(emptyErrorMessage, equals: "",
+                   "sd_silero_vad_last_error_message(NULL) should return an empty string, never crash")
+    }
+
+    /// Skipped (not failed) unless `LEXOMORPH_SILERO_VAD_MODEL` points at
+    /// a real, already-downloaded Silero VAD ggml model file — mirrors
+    /// `testParakeetCPUIntegration`'s gating pattern exactly. Task 1
+    /// deliberately left the Silero VAD model-download wiring for a later
+    /// task (see upstream-vad/PROVENANCE.md's "Model download wiring: OUT
+    /// OF SCOPE" note), so no model is staged on this dev machine yet —
+    /// this test is expected to SKIP here and only exercise its real-model
+    /// assertions on a machine/CI box that has explicitly staged one via
+    /// the env var.
+    private static func testSileroVadRealModel() throws {
+        guard let modelPath = ProcessInfo.processInfo.environment["LEXOMORPH_SILERO_VAD_MODEL"],
+              FileManager.default.fileExists(atPath: modelPath) else {
+            print("SKIP silero-vad-real: LEXOMORPH_SILERO_VAD_MODEL not set to an existing file")
+            return
+        }
+
+        var context: OpaquePointer?
+        let createStatus = modelPath.withCString { path in
+            sd_silero_vad_create(path, &context)
+        }
+        try expect(createStatus, equals: SD_SILERO_VAD_OK,
+                   "sd_silero_vad_create should succeed against a real, staged Silero VAD model")
+        guard let liveContext = context else {
+            throw SelfTestFailure.failed("sd_silero_vad_create reported OK but *out_context is NULL")
+        }
+        defer { sd_silero_vad_destroy(liveContext) }
+
+        // sample_count == 0 -> EMPTY_AUDIO, now observable with a real
+        // live context (unreachable in the non-gated silero-vad-bridge
+        // group — see that test's doc comment).
+        var dummySample: Float = 0
+        var emptyOutProbs: UnsafeMutablePointer<Float>?
+        var emptyOutCount: UInt64 = 0
+        let emptyStatus = withUnsafeMutablePointer(to: &dummySample) { samplePtr in
+            sd_silero_vad_speech_probabilities(liveContext, samplePtr, 0, &emptyOutProbs, &emptyOutCount, nil)
+        }
+        try expect(emptyStatus, equals: SD_SILERO_VAD_ERR_EMPTY_AUDIO,
+                   "sample_count == 0 against a live context should return EMPTY_AUDIO")
+        try expect(emptyOutProbs == nil, equals: true,
+                   "an EMPTY_AUDIO failure must leave *out_probabilities NULL")
+
+        // 2 seconds of alternating silence/tone at 16kHz — a short
+        // synthetic buffer built the same way testParakeetCPUIntegration
+        // builds its own (no bundled speech fixture needed): 0.5s silence,
+        // 0.5s of a 440Hz tone, repeated once.
+        let sampleRate = SAMPLE_RATE
+        func toneBlock(seconds: Double, frequency: Double, amplitude: Float) -> [Float] {
+            let count = Int(seconds * sampleRate)
+            return (0..<count).map { i in
+                amplitude * Float(sin(2.0 * Double.pi * frequency * Double(i) / sampleRate))
+            }
+        }
+        var synthetic: [Float] = []
+        synthetic.append(contentsOf: [Float](repeating: 0.0, count: Int(0.5 * sampleRate)))
+        synthetic.append(contentsOf: toneBlock(seconds: 0.5, frequency: 440.0, amplitude: 0.2))
+        synthetic.append(contentsOf: [Float](repeating: 0.0, count: Int(0.5 * sampleRate)))
+        synthetic.append(contentsOf: toneBlock(seconds: 0.5, frequency: 440.0, amplitude: 0.2))
+
+        var outProbs: UnsafeMutablePointer<Float>?
+        var outCount: UInt64 = 0
+        var outWindow: UInt64 = 0
+        let status = synthetic.withUnsafeMutableBufferPointer { buf in
+            sd_silero_vad_speech_probabilities(
+                liveContext, buf.baseAddress, UInt64(buf.count), &outProbs, &outCount, &outWindow
+            )
+        }
+        try expect(status, equals: SD_SILERO_VAD_OK,
+                   "sd_silero_vad_speech_probabilities should succeed on a real 2s synthetic buffer")
+        guard let probsPtr = outProbs else {
+            throw SelfTestFailure.failed("sd_silero_vad_speech_probabilities reported OK but *out_probabilities is NULL")
+        }
+        defer { sd_silero_vad_free_probabilities(probsPtr) }
+
+        try expect(outCount > 0, equals: true,
+                   "a 2s buffer should produce at least one analysis-window probability")
+        try expect(outWindow > 0, equals: true,
+                   "out_window_size_samples should be a real, nonzero probed window size")
+
+        let probsBuffer = UnsafeBufferPointer(start: probsPtr, count: Int(outCount))
+        for (index, p) in probsBuffer.enumerated() {
+            try expect(p >= 0.0 && p <= 1.0, equals: true,
+                       "probability at window \(index) (\(p)) must lie in [0, 1]")
+        }
+
+        print("SILERO VAD: model=\(modelPath), windows=\(outCount), window_size_samples=\(outWindow)")
+    }
+
+    /// Skipped (not failed) unless `LEXOMORPH_SILERO_VAD_MODEL` points at
+    /// a real, already-downloaded Silero VAD ggml model file -- same gating
+    /// pattern as `testSileroVadRealModel`. Runs the REAL `VadBoundaryOracle`
+    /// (backed by a real, load-once `SileroVadEngine`) over a short
+    /// synthetic buffer with a genuine pause in the middle, and confirms the
+    /// chosen split lands inside that pause.
+    private static func testVadBoundaryOracleRealModel() throws {
+        guard let modelPath = ProcessInfo.processInfo.environment["LEXOMORPH_SILERO_VAD_MODEL"],
+              FileManager.default.fileExists(atPath: modelPath) else {
+            print("SKIP vad-boundary-oracle-real: LEXOMORPH_SILERO_VAD_MODEL not set to an existing file")
+            return
+        }
+
+        let engine = try SileroVadEngine(modelPath: modelPath)
+        defer { engine.shutdown() }
+
+        // tone - silence - tone: 1s / 1s / 1s at 16kHz. The pause occupies
+        // the middle third, [16_000, 32_000) in zone-relative samples.
+        let sampleRate = SAMPLE_RATE
+        func toneBlock(seconds: Double, frequency: Double, amplitude: Float) -> [Float] {
+            let count = Int(seconds * sampleRate)
+            return (0..<count).map { i in
+                amplitude * Float(sin(2.0 * Double.pi * frequency * Double(i) / sampleRate))
+            }
+        }
+        var zoneSamples: [Float] = []
+        zoneSamples.append(contentsOf: toneBlock(seconds: 1.0, frequency: 440.0, amplitude: 0.3))
+        let pauseStartOffset = zoneSamples.count
+        zoneSamples.append(contentsOf: [Float](repeating: 0.0, count: Int(1.0 * sampleRate)))
+        let pauseEndOffset = zoneSamples.count
+        zoneSamples.append(contentsOf: toneBlock(seconds: 1.0, frequency: 440.0, amplitude: 0.3))
+
+        let zoneStart = 100_000
+        let zoneEnd = zoneStart + zoneSamples.count
+        let oracle = VadBoundaryOracle(engine: engine)
+        guard let split = oracle.chooseSplit(samples: zoneSamples, zoneStartSample: zoneStart, zoneEndSample: zoneEnd, sampleRate: sampleRate) else {
+            throw SelfTestFailure.failed("VadBoundaryOracle declined against a real model on a buffer with an obvious pause")
+        }
+        let splitOffsetInZone = split - zoneStart
+        try expect(splitOffsetInZone >= pauseStartOffset && splitOffsetInZone < pauseEndOffset, equals: true,
+                   "VadBoundaryOracle should pick a split inside the actual pause (got offset \(splitOffsetInZone), pause range [\(pauseStartOffset), \(pauseEndOffset)))")
+
+        print("VAD BOUNDARY ORACLE: model=\(modelPath), split_offset_in_zone=\(splitOffsetInZone)")
+    }
+
+    /// Pure algorithm coverage for `PauseSegmenter.segment` — no model, no
+    /// audio hardware. Every case asserts the coverage invariant (segments
+    /// exactly tile the input, no samples dropped or duplicated) plus the
+    /// specific behavior under test.
+    private static func testPauseSegmentation() throws {
+        let sampleRate = 16_000.0
+
+        // Empty input -> no segments.
+        try expect(PauseSegmenter.segment(samples: [], sampleRate: sampleRate).count,
+                   equals: 0, "empty input produces zero segments")
+
+        // Short, uninterrupted "speech" (no silence anywhere) well under
+        // both the min and max thresholds -> exactly one segment, and nothing
+        // is dropped.
+        let shortSpeech = [Float](repeating: 0.2, count: Int(2.0 * sampleRate))
+        let shortSegments = PauseSegmenter.segment(samples: shortSpeech, sampleRate: sampleRate)
+        try expect(shortSegments.count, equals: 1, "short uninterrupted speech stays a single segment")
+        try expect(shortSegments.reduce(0) { $0 + $1.samples.count }, equals: shortSpeech.count,
+                   "single-segment case preserves every sample")
+        try expect(shortSegments[0].hasSignal, equals: true, "non-silent audio is flagged as having signal")
+
+        // Continuous non-silent audio longer than the safety cap -> forced
+        // cuts, no segment exceeds the cap, and total sample count is
+        // preserved exactly (coverage invariant).
+        let longSpeech = [Float](repeating: 0.2, count: Int(70.0 * sampleRate))
+        let longSegments = PauseSegmenter.segment(samples: longSpeech, sampleRate: sampleRate,
+                                                   maxSegmentSeconds: 25.0)
+        try expect(longSegments.count >= 3, equals: true,
+                   "70s of unbroken speech with a 25s cap forces at least 3 segments")
+        let maxAllowedSamples = Int(25.0 * sampleRate)
+        for seg in longSegments {
+            try expect(seg.samples.count <= maxAllowedSamples, equals: true,
+                       "no forced segment exceeds the safety cap")
+        }
+        try expect(longSegments.reduce(0) { $0 + $1.samples.count }, equals: longSpeech.count,
+                   "forced-cut segments cover the whole buffer with no gaps or overlap")
+
+        // An ORDINARY dictation — 5s of speech, a normal 600ms
+        // inter-sentence pause, 5 more seconds (10.6s total, under the 15s
+        // minimum segment length) -> must stay ONE segment. This is the
+        // whole point of the 15s minimum: everyday short dictations go
+        // through ASR exactly once, exactly as before this feature existed,
+        // so their punctuation/clause structure is never split up.
+        var withPause = [Float](repeating: 0.2, count: Int(5.0 * sampleRate))
+        withPause.append(contentsOf: [Float](repeating: 0.0, count: Int(0.6 * sampleRate)))
+        withPause.append(contentsOf: [Float](repeating: 0.2, count: Int(5.0 * sampleRate)))
+        let pausedSegments = PauseSegmenter.segment(samples: withPause, sampleRate: sampleRate)
+        try expect(pausedSegments.count, equals: 1,
+                   "an ordinary sub-15s dictation with a normal pause is NOT fragmented")
+        try expect(pausedSegments.reduce(0) { $0 + $1.samples.count }, equals: withPause.count,
+                   "the single-segment case preserves every sample")
+
+        // The same shape, but genuinely LONG: 16s of speech (past the 15s
+        // minimum) + a 600ms pause + 5s more -> the pause now qualifies and
+        // the buffer splits in two at it. Proves cutting still happens once
+        // a recording is actually long, which is the case this feature
+        // exists for.
+        var longWithPause = [Float](repeating: 0.2, count: Int(16.0 * sampleRate))
+        longWithPause.append(contentsOf: [Float](repeating: 0.0, count: Int(0.6 * sampleRate)))
+        longWithPause.append(contentsOf: [Float](repeating: 0.2, count: Int(5.0 * sampleRate)))
+        let longPausedSegments = PauseSegmenter.segment(samples: longWithPause, sampleRate: sampleRate)
+        try expect(longPausedSegments.count, equals: 2,
+                   "a qualifying pause past the 15s minimum splits a long dictation into two segments")
+        try expect(longPausedSegments[0].samples.count, equals: Int(16.0 * sampleRate),
+                   "the cut lands at the start of the silent run, so segment 1 carries no trailing pause")
+        try expect(longPausedSegments.reduce(0) { $0 + $1.samples.count }, equals: longWithPause.count,
+                   "pause-split segments cover the whole buffer with no gaps or overlap")
+
+        // The same 16s/0.6s/5s shape, but over a realistic low-amplitude
+        // noise floor (0.008 RMS — non-zero, yet well under the 0.02 silence
+        // threshold) instead of mathematically perfect digital silence, so
+        // the cut logic is exercised against something closer to a real
+        // microphone than 0.0/0.2 extremes. NOTE: the 0.02 threshold itself
+        // is still uncalibrated against real hardware; this test pins the
+        // algorithm's SHAPE so a future recalibration only has to move the
+        // constant.
+        var noisy = [Float](repeating: 0.2, count: Int(16.0 * sampleRate))
+        noisy.append(contentsOf: (0..<Int(0.6 * sampleRate)).map { $0 % 2 == 0 ? 0.008 : -0.008 })
+        noisy.append(contentsOf: [Float](repeating: 0.2, count: Int(5.0 * sampleRate)))
+        let noisySegments = PauseSegmenter.segment(samples: noisy, sampleRate: sampleRate)
+        try expect(noisySegments.count, equals: 2,
+                   "a pause over a realistic non-zero noise floor is still detected as a pause")
+        try expect(noisySegments[0].samples.count, equals: Int(16.0 * sampleRate),
+                   "the noise-floor pause cuts at the same place perfect silence would")
+        try expect(noisySegments.reduce(0) { $0 + $1.samples.count }, equals: noisy.count,
+                   "noise-floor-split segments cover the whole buffer with no gaps or overlap")
+
+        // A pause before the minimum segment length is NOT a
+        // qualifying cut point -> stays a single segment.
+        var earlyPause = [Float](repeating: 0.2, count: Int(1.0 * sampleRate))
+        earlyPause.append(contentsOf: [Float](repeating: 0.0, count: Int(0.6 * sampleRate)))
+        earlyPause.append(contentsOf: [Float](repeating: 0.2, count: Int(1.0 * sampleRate)))
+        let earlyPauseSegments = PauseSegmenter.segment(samples: earlyPause, sampleRate: sampleRate)
+        try expect(earlyPauseSegments.count, equals: 1,
+                   "a pause before the minimum segment length is not a qualifying cut point")
+
+        // Long leading silence (60s, well past the 25s max cap) must still be
+        // split into segments respecting the max cap, NOT bundled into a
+        // single unbounded segment. This is the critical safety invariant
+        // that prevents a single ASR call from growing long enough to hit
+        // the Parakeet encoder's superlinear-cost regime, even when the
+        // recording opens with dead air (background noise, mic left on).
+        let longSilence = [Float](repeating: 0.0, count: Int(60.0 * sampleRate))
+        let longSilentSegments = PauseSegmenter.segment(samples: longSilence, sampleRate: sampleRate,
+                                                        maxSegmentSeconds: 25.0)
+        try expect(longSilentSegments.count >= 2, equals: true,
+                   "60s of silence with a 25s cap must force-cut into multiple segments (max safety enforced even through silence)")
+        let maxAllowedSamplesLong = Int(25.0 * sampleRate)
+        for seg in longSilentSegments {
+            try expect(seg.samples.count <= maxAllowedSamplesLong, equals: true,
+                       "no silence segment exceeds the safety cap, even leading silence")
+        }
+        try expect(longSilentSegments.reduce(0) { $0 + $1.samples.count }, equals: longSilence.count,
+                   "leading-silence segments cover the whole buffer with no gaps or overlap")
+
+        // All-silent buffer -> a single segment flagged as having no signal.
+        let silence = [Float](repeating: 0.0, count: Int(4.0 * sampleRate))
+        let silentSegments = PauseSegmenter.segment(samples: silence, sampleRate: sampleRate)
+        try expect(silentSegments.count, equals: 1, "an all-silent buffer stays a single segment")
+        try expect(silentSegments[0].hasSignal, equals: false, "an all-silent segment is flagged as having no signal")
+
+        // hasSignal needs SUSTAINED content, not one stray window: a single
+        // ~20ms blip (a mic bump, a keyboard click, a breath) in an
+        // otherwise silent buffer must NOT read as speech, or it would
+        // trigger a pointless retry and a spurious "dictation lost" signal
+        // on a recording that never contained speech at all.
+        var blip = [Float](repeating: 0.0, count: Int(4.0 * sampleRate))
+        let blipStart = Int(2.0 * sampleRate)
+        for i in blipStart..<(blipStart + Int(PauseSegmenter.defaultWindowSeconds * sampleRate)) {
+            blip[i] = 0.5
+        }
+        let blipSegments = PauseSegmenter.segment(samples: blip, sampleRate: sampleRate)
+        try expect(blipSegments.count, equals: 1, "a mostly-silent buffer with one blip stays a single segment")
+        try expect(blipSegments[0].hasSignal, equals: false,
+                   "a single non-silent window is below the minimum-signal threshold")
+
+        // A sustained run at/above the threshold (5 windows = ~100ms) in the
+        // same otherwise-silent buffer DOES count as signal.
+        var sustained = [Float](repeating: 0.0, count: Int(4.0 * sampleRate))
+        let runStart = Int(2.0 * sampleRate)
+        let runLength = PauseSegmenter.defaultSignalMinWindows * Int(PauseSegmenter.defaultWindowSeconds * sampleRate)
+        for i in runStart..<(runStart + runLength) {
+            sustained[i] = 0.5
+        }
+        let sustainedSegments = PauseSegmenter.segment(samples: sustained, sampleRate: sampleRate)
+        try expect(sustainedSegments.count, equals: 1, "the sustained-signal buffer stays a single segment")
+        try expect(sustainedSegments[0].hasSignal, equals: true,
+                   "a run at the minimum-signal threshold is flagged as having signal")
+    }
+
+    // MARK: - Recording-time (incremental) transcription
+
+    /// Lock-guarded counters shared with fake ASR closures.
+    private final class IncrementalTestProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _calls = 0
+        private var _active = 0
+        private var _maxActive = 0
+        func enter() { lock.lock(); _calls += 1; _active += 1; _maxActive = max(_maxActive, _active); lock.unlock() }
+        func leave() { lock.lock(); _active -= 1; lock.unlock() }
+        var calls: Int { lock.lock(); defer { lock.unlock() }; return _calls }
+        var active: Int { lock.lock(); defer { lock.unlock() }; return _active }
+        var maxActive: Int { lock.lock(); defer { lock.unlock() }; return _maxActive }
+    }
+
+    /// A growing "recording": each `sampleCount()` poll lets `step` more
+    /// samples in, so the driver sees the buffer grow deterministically
+    /// regardless of wall time.
+    private final class IncrementalTestFeed: @unchecked Sendable {
+        private let samples: [Float]
+        private let step: Int
+        private let lock = NSLock()
+        private var available = 0
+        init(samples: [Float], step: Int) { self.samples = samples; self.step = step }
+        func poll() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            available = min(samples.count, available + step)
+            return available
+        }
+        func prefix() -> [Float] {
+            lock.lock(); let count = available; lock.unlock()
+            return Array(samples[0..<count])
+        }
+        var isFullyFed: Bool { lock.lock(); defer { lock.unlock() }; return available == samples.count }
+    }
+
+    /// Synthetic long dictation: deterministic noise "speech" (RMS ≈ 0.17)
+    /// and near-silent pauses. The pattern covers ordinary pause cuts, a
+    /// 25 s hard-cap cut, and a long pause that starts before the segment
+    /// reaches the 15 s minimum — the case where the open segment is later
+    /// cut BACK at the pause start, so a naive "it is already this long"
+    /// stability rule would be wrong.
+    private static func incrementalTestRecording() -> [Float] {
+        let pattern: [(speech: Bool, seconds: Double)] = [
+            (true, 16), (false, 0.5), (true, 1), (false, 15), (true, 12), (false, 0.6),
+            (true, 5), (false, 0.3), (true, 30), (false, 1), (true, 3), (false, 0.5),
+            (true, 20), (false, 0.45), (true, 16), (false, 2), (true, 9),
+        ]
+        var state: UInt64 = 0x2545_f491_4f6c_dd1d
+        var out: [Float] = []
+        for part in pattern {
+            let count = Int(part.seconds * SAMPLE_RATE)
+            let amplitude: Float = part.speech ? 0.3 : 0.001
+            for _ in 0..<count {
+                state ^= state << 13; state ^= state >> 7; state ^= state << 17
+                let unit = Float(state % 20_001) / 10_000 - 1
+                out.append(unit * amplitude)
+            }
+        }
+        return out
+    }
+
+    /// Deterministic fake word-timestamp ASR: one word per non-silent
+    /// 0.5 s block of the window, its text derived from the block's audio.
+    private static func incrementalFakeWords(_ samples: [Float]) -> [TranscribedWord] {
+        let block = Int(0.5 * SAMPLE_RATE)
+        var words: [TranscribedWord] = []
+        var offset = 0
+        while offset < samples.count {
+            let end = min(samples.count, offset + block)
+            let slice = Array(samples[offset..<end])
+            let rms = sqrt(slice.reduce(Float(0)) { $0 + $1 * $1 } / Float(max(1, slice.count)))
+            if rms > 0.02 {
+                let start = Double(offset) / SAMPLE_RATE
+                words.append(TranscribedWord(w: "w\(speculativeWindowChecksum(slice) % 9973)",
+                                             start: start, end: start + 0.4, conf: 0.9))
+            }
+            offset = end
+        }
+        return words
+    }
+
+    private static func incrementalFakeResult(_ samples: [Float]) -> TokenTranscriptionWorkerResult {
+        let words = incrementalFakeWords(samples)
+        return TokenTranscriptionWorkerResult(
+            transcription: TokenTranscription(text: words.map(\.w).joined(separator: " "),
+                                              frameSec: 0.08, tokens: [], words: words),
+            workerQueueSeconds: 0, engineCallSeconds: 0.01, engineProcessingSeconds: 0.01)
+    }
+
+    /// Hermetic coverage for IncrementalTranscription.swift: no model, no
+    /// audio device, no LLM host (the coordinator below runs with every
+    /// stage off). Seam placement is forced onto the mel-energy oracle so
+    /// a Silero model on this Mac cannot make the test non-hermetic.
+    private static func testIncrementalTranscription() throws {
+        let previousVad = ProcessInfo.processInfo.environment["LEXOMORPH_SILERO_VAD_MODEL"]
+        setenv("LEXOMORPH_SILERO_VAD_MODEL", "/nonexistent/silero-vad-for-self-test.onnx", 1)
+        defer {
+            if let previousVad { setenv("LEXOMORPH_SILERO_VAD_MODEL", previousVad, 1) }
+            else { unsetenv("LEXOMORPH_SILERO_VAD_MODEL") }
+        }
+
+        let full = incrementalTestRecording()
+        let segments = PauseSegmenter.segment(samples: full, sampleRate: SAMPLE_RATE)
+        let finalWindows = OverlapWindower.addOverlap(to: segments, sampleRate: SAMPLE_RATE)
+        try expect(finalWindows.count >= 5, equals: true, "the synthetic recording takes the multi-window overlap path")
+
+        // 1) Growing buffer: every window declared stable on a prefix equals
+        // the full buffer's window at the same index, for odd chunk sizes too.
+        for chunk in [Int(2.3 * SAMPLE_RATE), 59_123] {
+            var length = 0
+            var lastStableCount = 0
+            while length < full.count {
+                length = min(full.count, length + chunk)
+                let stable = SpeculativeWindowPlanner.stableWindows(prefix: Array(full[0..<length]))
+                for (index, window) in stable.enumerated() {
+                    guard index < finalWindows.count, window == finalWindows[index] else {
+                        throw SelfTestFailure.failed("stable window \(index) at prefix \(length) (chunk \(chunk)) differs from the full-buffer window")
+                    }
+                }
+                try expect(stable.count >= lastStableCount, equals: true,
+                           "the stable prefix never shrinks as the buffer grows (chunk \(chunk), prefix \(length))")
+                lastStableCount = stable.count
+            }
+            try expect(lastStableCount >= finalWindows.count - 2, equals: true,
+                       "at release at most the last two windows are left (chunk \(chunk))")
+        }
+        // The pending-pause case: at 20 s the open segment is 4 s long but
+        // will be cut back to 1.5 s, so window 0's trailing overlap is not
+        // known yet.
+        try expect(SpeculativeWindowPlanner.stableWindows(prefix: Array(full[0..<Int(20 * SAMPLE_RATE)])).count, equals: 0,
+                   "a window whose next segment can still be cut back at an open pause is not stable")
+        try expect(SpeculativeWindowPlanner.stableWindows(prefix: Array(full[0..<Int(14 * SAMPLE_RATE)])).count, equals: 0,
+                   "nothing is stable before the first cut (short dictations get no recording-time work)")
+
+        // Reference: the batch overlap path without any cache.
+        let referenceProbe = IncrementalTestProbe()
+        let reference = try runParakeetEngineSynchronously {
+            try await transcribeWithOverlapWindows(samples: full, segments: segments,
+                                                   speculativeCache: nil, engineGeneration: 1) { samples in
+                referenceProbe.enter(); defer { referenceProbe.leave() }
+                return incrementalFakeResult(samples)
+            }
+        }
+        try expect(referenceProbe.calls, equals: finalWindows.count, "the batch path transcribes every window")
+
+        // 2) The driver over a growing feed builds a cache; the release path
+        // with it yields byte-identical text and transcribes only the rest.
+        // 5) ...and the LLM stage sees only the final text, once.
+        let llmSettings = Settings(defaults: UserDefaults(suiteName: "com.local.lexomorph.selftest.incremental-transcription")!,
+                                   vocabularyStore: .inMemoryFallback())
+        llmSettings.textPostprocessingMode = .off
+        llmSettings.rewriteEnabled = false
+        let pipeline = try runParakeetEngineSynchronously { () -> (TranscriptionWorkerResult, Int, Int, Int, [String], [String], String) in
+            let feed = IncrementalTestFeed(samples: full, step: Int(2 * SAMPLE_RATE))
+            let recordingProbe = IncrementalTestProbe()
+            let coordinator = LLMPostprocessingCoordinator()
+            let driver = IncrementalOverlapTranscriber(
+                engineGeneration: 1, pollInterval: 0.01,
+                snapshot: { feed.prefix() },
+                sampleCount: { feed.poll() },
+                transcribeWindow: { samples in
+                    recordingProbe.enter(); defer { recordingProbe.leave() }
+                    return incrementalFakeResult(samples)
+                })
+            await driver.start()
+            while !feed.isFullyFed { try await Task.sleep(nanoseconds: 5_000_000) }
+            try await Task.sleep(nanoseconds: 100_000_000)
+            let llmCallsDuringRecording = await coordinator.finalizedTextInputsForTest
+
+            let releaseProbe = IncrementalTestProbe()
+            let result = try await transcribeAfterRecording(speculative: driver) { cache in
+                try await transcribeWithOverlapWindows(samples: full, segments: segments,
+                                                       speculativeCache: cache, engineGeneration: 1) { samples in
+                    releaseProbe.enter(); defer { releaseProbe.leave() }
+                    return incrementalFakeResult(samples)
+                }
+            }
+            let processed = processedDictationText(rawTranscript: result.text, corrections: [],
+                                                   removeFillerWords: false)
+            _ = await coordinator.finalizedText(processed.text, settings: llmSettings)
+            let llmCalls = await coordinator.finalizedTextInputsForTest
+            await coordinator.stop()
+            return (result, releaseProbe.calls, recordingProbe.calls, recordingProbe.maxActive,
+                    llmCallsDuringRecording, llmCalls, processed.text)
+        }
+        let (streamed, releaseCalls, recordingCalls, recordingMaxActive, llmDuringRecording, llmCalls, finalText) = pipeline
+        try expect(streamed.text, equals: reference.text,
+                   "text with the recording-time cache is byte-identical to the batch path")
+        try expect(streamed.speculativeWindowsReused >= finalWindows.count - 2, equals: true,
+                   "all but the last one or two windows come from the recording-time cache")
+        try expect(releaseCalls, equals: finalWindows.count - streamed.speculativeWindowsReused,
+                   "the release path transcribes exactly the windows the cache did not cover")
+        try expect(recordingCalls >= streamed.speculativeWindowsReused, equals: true,
+                   "every reused window was transcribed during the recording")
+        try expect(recordingMaxActive, equals: 1, "recording-time ASR is one call at a time")
+        try expect(llmDuringRecording, equals: [], "the LLM stage is never called during the recording")
+        try expect(llmCalls, equals: [finalText],
+                   "the LLM stage runs exactly once, after release, on the full assembled text")
+        try expect(finalText.contains(reference.text.prefix(20)) && finalText.hasSuffix(String(reference.text.suffix(20))),
+                   equals: true, "the text handed to the LLM stage is the whole dictation, not a window")
+
+        // 3) A cache entry with different audio, a different length, or from
+        // a reloaded engine is ignored and the window re-transcribed.
+        var tampered = full
+        for window in finalWindows {
+            tampered[window.startSample + window.samples.count / 2] += 0.25
+        }
+        var mismatched = SpeculativeWindowCache(engineGeneration: 1)
+        for (index, window) in finalWindows.enumerated() {
+            let shortened = index % 2 == 0
+            let samples = shortened
+                ? Array(full[window.startSample..<(window.startSample + window.samples.count - 320)])
+                : Array(tampered[window.startSample..<(window.startSample + window.samples.count)])
+            mismatched.insert(SpeculativeWindowResult(startSample: window.startSample,
+                                                      sampleCount: samples.count,
+                                                      checksum: speculativeWindowChecksum(samples),
+                                                      words: [TranscribedWord(w: "WRONG", start: 0.1, end: 0.3, conf: 1)],
+                                                      engineCallSeconds: 1))
+        }
+        var exact = SpeculativeWindowCache(engineGeneration: 1)
+        for window in finalWindows {
+            exact.insert(SpeculativeWindowResult(startSample: window.startSample, sampleCount: window.samples.count,
+                                                 checksum: speculativeWindowChecksum(window.samples),
+                                                 words: [TranscribedWord(w: "WRONG", start: 0.1, end: 0.3, conf: 1)],
+                                                 engineCallSeconds: 1))
+        }
+        for (label, cache, generation) in [("mismatched audio/length", mismatched, UInt64(1)),
+                                           ("a reloaded engine", exact, UInt64(2))] {
+            let probe = IncrementalTestProbe()
+            let rerun = try runParakeetEngineSynchronously {
+                try await transcribeWithOverlapWindows(samples: full, segments: segments,
+                                                       speculativeCache: cache, engineGeneration: generation) { samples in
+                    probe.enter(); defer { probe.leave() }
+                    return incrementalFakeResult(samples)
+                }
+            }
+            try expect(rerun.speculativeWindowsReused, equals: 0, "no cache entry from \(label) is reused")
+            try expect(probe.calls, equals: finalWindows.count, "every window is re-transcribed for \(label)")
+            try expect(rerun.text, equals: reference.text, "text is unchanged for \(label)")
+        }
+
+        // 4) Cancellation mid-recording: cancel() returns only once the
+        // in-flight call is done, nothing runs afterwards, nothing is kept.
+        let cancelled = try runParakeetEngineSynchronously { () -> (Int, Int, Int, Bool) in
+            let probe = IncrementalTestProbe()
+            let driver = IncrementalOverlapTranscriber(
+                engineGeneration: 1, pollInterval: 0.01,
+                snapshot: { full },
+                sampleCount: { full.count },
+                transcribeWindow: { samples in
+                    probe.enter(); defer { probe.leave() }
+                    try await Task.sleep(nanoseconds: 60_000_000)
+                    return incrementalFakeResult(samples)
+                })
+            await driver.start()
+            try await Task.sleep(nanoseconds: 90_000_000)
+            await driver.cancel()
+            let activeAfterCancel = probe.active
+            let callsAtCancel = probe.calls
+            try await Task.sleep(nanoseconds: 200_000_000)
+            let cache = await driver.finish()
+            return (activeAfterCancel, callsAtCancel, probe.calls, cache == nil)
+        }
+        try expect(cancelled.0, equals: 0, "cancel() waits for the in-flight recording-time window")
+        try expect(cancelled.1 >= 1, equals: true, "the cancellation test really had recording-time work in flight")
+        try expect(cancelled.2, equals: cancelled.1, "no recording-time ASR starts after cancel()")
+        try expect(cancelled.3, equals: true, "a cancelled recording hands no cache to the release path")
+
+        // A throw from recording-time ASR drops the cache instead of
+        // failing anything.
+        let failedCache = try runParakeetEngineSynchronously { () -> Bool in
+            let driver = IncrementalOverlapTranscriber(
+                engineGeneration: 1, pollInterval: 0.01,
+                snapshot: { full }, sampleCount: { full.count },
+                transcribeWindow: { _ in throw NSError(domain: "selftest", code: 1) })
+            await driver.start()
+            try await Task.sleep(nanoseconds: 80_000_000)
+            return await driver.finish() == nil
+        }
+        try expect(failedCache, equals: true, "a recording-time ASR failure drops the cache")
+    }
+
+    /// Direct regression coverage for `OverlapWindower.addOverlap`, and in
+    /// particular for the single most safety-critical invariant in the
+    /// overlap-segmentation plan: overlap is carved OUT of the existing
+    /// max-segment-seconds safety cap, never added on top of it, so a
+    /// window can never grow long enough to reintroduce the Parakeet
+    /// encoder hang that the original 25s cap exists to prevent.
+    private static func testOverlapWindowing() throws {
+        let sampleRate = 16_000.0
+
+        // 1) Single segment -> exactly one AudioWindow, samples identical to
+        // the input, no overlap added. This is the majority-case invariant:
+        // ordinary short dictations that never get split must be completely
+        // unaffected by this feature's existence.
+        let single = [AudioSegment(samples: [Float](repeating: 0.2, count: Int(2.0 * sampleRate)),
+                                    hasSignal: true, startSample: 0)]
+        let singleWindows = OverlapWindower.addOverlap(to: single, sampleRate: sampleRate)
+        try expect(singleWindows.count, equals: 1, "a single segment produces exactly one window")
+        try expect(singleWindows[0].samples, equals: single[0].samples,
+                   "a single segment's window samples are byte-identical to the input (no overlap added)")
+        try expect(singleWindows[0].startSample, equals: 0, "single-segment window startSample is unshifted")
+        try expect(singleWindows[0].ownedStartSample, equals: 0, "single-segment ownedStartSample is unshifted")
+        try expect(singleWindows[0].ownedEndSample, equals: single[0].samples.count,
+                   "single-segment ownedEndSample covers exactly the input")
+
+        // Also confirm the zero-segment edge case doesn't crash and returns
+        // nothing.
+        let emptyWindows = OverlapWindower.addOverlap(to: [], sampleRate: sampleRate)
+        try expect(emptyWindows.count, equals: 0, "zero segments produces zero windows")
+
+        // 2) BUDGET-SAFETY INVARIANT (the most important assertion in this
+        // task): construct three back-to-back segments EACH AT the 25s
+        // safety cap (as PauseSegmenter would actually emit for a very long
+        // unbroken dictation -- see the "forced cuts" case in
+        // testPauseSegmentation), request a real 4s overlap, and verify
+        // EVERY resulting window's sample count still respects the cap.
+        // Hand-traced arithmetic (sampleRate = 16_000, maxSegmentSeconds =
+        // 25.0 -> maxSegmentSamples = 400_000; each segment.samples.count
+        // == 400_000 exactly, so budget = max(0, 400_000 - 400_000) = 0,
+        // halfBudget = 0, so overlapBefore == overlapAfter == 0 for every
+        // segment regardless of the requested 4s -- i.e. the budget clamp
+        // must reduce the requested overlap all the way to zero when a
+        // segment is already AT the cap, and the resulting window count
+        // must equal exactly maxSegmentSamples, never more).
+        let maxSegmentSeconds = PauseSegmenter.defaultMaxSegmentSeconds
+        let maxSegmentSamples = Int(maxSegmentSeconds * sampleRate)
+        let atCapSegments: [AudioSegment] = (0..<3).map { i in
+            AudioSegment(samples: [Float](repeating: 0.2, count: maxSegmentSamples),
+                         hasSignal: true, startSample: i * maxSegmentSamples)
+        }
+        let atCapWindows = OverlapWindower.addOverlap(to: atCapSegments, sampleRate: sampleRate,
+                                                       overlapSeconds: 4.0,
+                                                       maxSegmentSeconds: maxSegmentSeconds)
+        try expect(atCapWindows.count, equals: 3, "budget-safety case produces one window per input segment")
+        for (i, w) in atCapWindows.enumerated() {
+            try expect(w.samples.count <= maxSegmentSamples, equals: true,
+                       "window \(i) built from an at-cap segment must not exceed the safety cap even with overlap requested")
+            try expect(w.samples.count, equals: maxSegmentSamples,
+                       "window \(i) built from an at-cap segment gets zero overlap (budget fully consumed), so it equals the cap exactly")
+        }
+
+        // 2b) A near-cap variant where segments are NOT exactly at the cap,
+        // so there IS a small budget, and confirm the clamp still respects
+        // both the per-side budget AND the 4s request. Each segment is
+        // 24.5s (392_000 samples); budget = 400_000 - 392_000 = 8_000;
+        // halfBudget = 4_000 samples (0.25s) per side -- far less than the
+        // requested 4s (64_000 samples), so overlapBefore/overlapAfter must
+        // clamp to 4_000, and total window length must be
+        // 392_000 + 4_000 + 4_000 = 400_000 == exactly the cap, for the
+        // middle segment (which has neighbors on both sides).
+        let nearCapSamples = Int(24.5 * sampleRate)
+        let nearCapSegments: [AudioSegment] = (0..<3).map { i in
+            AudioSegment(samples: [Float](repeating: 0.2, count: nearCapSamples),
+                         hasSignal: true, startSample: i * nearCapSamples)
+        }
+        let nearCapWindows = OverlapWindower.addOverlap(to: nearCapSegments, sampleRate: sampleRate,
+                                                         overlapSeconds: 4.0,
+                                                         maxSegmentSeconds: maxSegmentSeconds)
+        for (i, w) in nearCapWindows.enumerated() {
+            try expect(w.samples.count <= maxSegmentSamples, equals: true,
+                       "near-cap window \(i) never exceeds the safety cap")
+        }
+        let expectedHalfBudget = (maxSegmentSamples - nearCapSamples) / 2
+        try expect(expectedHalfBudget, equals: 4_000, "hand-traced half-budget for the near-cap case is 4_000 samples")
+        try expect(nearCapWindows[1].samples.count, equals: nearCapSamples + 2 * expectedHalfBudget,
+                   "the middle near-cap window borrows exactly the clamped per-side budget on both sides")
+        try expect(nearCapWindows[1].samples.count, equals: maxSegmentSamples,
+                   "the middle near-cap window lands exactly at the cap, never over it")
+
+        // 3) Normal case: three moderate segments, well under the cap, so
+        // overlap is limited only by the requested overlapSeconds (4s) and
+        // by neighbor length, never by the budget clamp. Hand-computed
+        // expected values below.
+        let segLen = Int(10.0 * sampleRate) // 160_000 samples each, 10s
+        let seg0 = AudioSegment(samples: [Float](repeating: 0.1, count: segLen), hasSignal: true, startSample: 0)
+        let seg1 = AudioSegment(samples: [Float](repeating: 0.2, count: segLen), hasSignal: true, startSample: segLen)
+        let seg2 = AudioSegment(samples: [Float](repeating: 0.3, count: segLen), hasSignal: true, startSample: 2 * segLen)
+        let normalSegments = [seg0, seg1, seg2]
+        let normalWindows = OverlapWindower.addOverlap(to: normalSegments, sampleRate: sampleRate,
+                                                        overlapSeconds: 4.0,
+                                                        maxSegmentSeconds: maxSegmentSeconds)
+        try expect(normalWindows.count, equals: 3, "normal case produces one window per input segment")
+
+        let overlapSamples = Int(4.0 * sampleRate) // 64_000 -- well under segLen and under budget/2
+        // Middle window (index 1): borrows the LAST `overlapSamples` of seg0
+        // as a leading prefix, then all of seg1, then the FIRST
+        // `overlapSamples` of seg2 as a trailing suffix.
+        let middle = normalWindows[1]
+        let expectedMiddle = Array(seg0.samples.suffix(overlapSamples))
+            + seg1.samples
+            + Array(seg2.samples.prefix(overlapSamples))
+        try expect(middle.samples.count, equals: expectedMiddle.count,
+                   "middle window length equals borrowed-prefix + owned + borrowed-suffix")
+        try expect(middle.samples, equals: expectedMiddle,
+                   "middle window samples exactly match the hand-assembled borrowed-tail + owned + borrowed-head")
+        try expect(middle.startSample, equals: seg1.startSample - overlapSamples,
+                   "middle window startSample is shifted left by the borrowed leading overlap")
+        try expect(middle.ownedStartSample, equals: seg1.startSample,
+                   "middle window ownedStartSample is unchanged from the segment's own startSample")
+        try expect(middle.ownedEndSample, equals: seg1.startSample + seg1.samples.count,
+                   "middle window ownedEndSample is unchanged from the segment's own end")
+
+        // 4) Edge segments get no outward overlap: first window has no
+        // leading overlap (startSample == ownedStartSample), and its
+        // trailing borrowed audio (if any) never reaches past its own
+        // ownedEndSample plus the borrowed suffix -- concretely, the FIRST
+        // window's samples must equal seg0 + borrowed head of seg1 (no
+        // borrowed tail from a nonexistent segment "before" it), and the
+        // LAST window's samples must equal borrowed tail of seg1 + seg2 (no
+        // borrowed head from a nonexistent segment "after" it).
+        let first = normalWindows[0]
+        try expect(first.startSample, equals: first.ownedStartSample,
+                   "the first window has no leading overlap: startSample == ownedStartSample")
+        let expectedFirst = seg0.samples + Array(seg1.samples.prefix(overlapSamples))
+        try expect(first.samples, equals: expectedFirst,
+                   "the first window borrows only a trailing head from segment 2, nothing leading")
+
+        let last = normalWindows[2]
+        let expectedLast = Array(seg1.samples.suffix(overlapSamples)) + seg2.samples
+        try expect(last.samples, equals: expectedLast,
+                   "the last window borrows only a leading tail from segment 2, nothing trailing")
+        try expect(last.ownedEndSample, equals: seg2.startSample + seg2.samples.count,
+                   "the last window's ownedEndSample is its own true end, with nothing borrowed past it")
+        try expect(last.startSample + last.samples.count, equals: last.ownedEndSample,
+                   "the last window's samples end exactly at its own ownedEndSample -- no trailing overlap exists to overrun it")
+    }
+
+    /// Coverage for the `BoundaryOracle` chain (Task 6): `MidpointBoundaryOracle`,
+    /// `MelEnergyBoundaryOracle`, and `chainBoundaryOracle`'s fallthrough +
+    /// defensive clamping. No VAD oracle exists yet -- that's Task 7.
+    private static func testBoundaryOracle() throws {
+        let sampleRate = 16_000.0
+
+        // 1) MidpointBoundaryOracle: zone [100, 200) -> 150.
+        let midpointOracle = MidpointBoundaryOracle()
+        let midpointSplit = midpointOracle.chooseSplit(samples: [], zoneStartSample: 100, zoneEndSample: 200, sampleRate: sampleRate)
+        try expect(midpointSplit, equals: 150, "midpoint of [100, 200) is 150")
+
+        // Zero-width zone -> returns the zone start, doesn't crash.
+        let zeroWidthSplit = midpointOracle.chooseSplit(samples: [], zoneStartSample: 300, zoneEndSample: 300, sampleRate: sampleRate)
+        try expect(zeroWidthSplit, equals: 300, "a zero-width zone's midpoint is its own start")
+
+        // 2) MelEnergyBoundaryOracle: loud-quiet-loud synthetic buffer, same
+        // style as PauseSegmenter's own silence tests -- the returned offset
+        // must land inside the quiet stretch.
+        let loudSeconds = 1.0
+        let quietSeconds = 1.0
+        var meZone = [Float](repeating: 0.2, count: Int(loudSeconds * sampleRate))
+        let quietStartOffset = meZone.count
+        meZone.append(contentsOf: [Float](repeating: 0.0, count: Int(quietSeconds * sampleRate)))
+        let quietEndOffset = meZone.count
+        meZone.append(contentsOf: [Float](repeating: 0.2, count: Int(loudSeconds * sampleRate)))
+
+        let zoneStart = 5_000
+        let zoneEnd = zoneStart + meZone.count
+        let melOracle = MelEnergyBoundaryOracle()
+        guard let melSplit = melOracle.chooseSplit(samples: meZone, zoneStartSample: zoneStart, zoneEndSample: zoneEnd, sampleRate: sampleRate) else {
+            throw SelfTestFailure.failed("MelEnergyBoundaryOracle declined on a non-empty zone")
+        }
+        let melSplitOffsetInZone = melSplit - zoneStart
+        try expect(melSplitOffsetInZone >= quietStartOffset && melSplitOffsetInZone < quietEndOffset, equals: true,
+                   "MelEnergyBoundaryOracle picks an offset inside the quiet stretch (got offset \(melSplitOffsetInZone), quiet range [\(quietStartOffset), \(quietEndOffset)))")
+
+        // 3) chainBoundaryOracle: a declining (always-nil) oracle is skipped
+        // in favor of the next one in the chain.
+        struct DecliningOracle: BoundaryOracle {
+            func chooseSplit(samples: [Float], zoneStartSample: Int, zoneEndSample: Int, sampleRate: Double) -> Int? { nil }
+        }
+        struct FixedOracle: BoundaryOracle {
+            let answer: Int
+            func chooseSplit(samples: [Float], zoneStartSample: Int, zoneEndSample: Int, sampleRate: Double) -> Int? { answer }
+        }
+        let fallthroughChain = chainBoundaryOracle([DecliningOracle(), FixedOracle(answer: 175)])
+        let fallthroughResult = fallthroughChain([], 100, 200, sampleRate)
+        try expect(fallthroughResult, equals: 175, "a declining oracle is skipped in favor of the next oracle in the chain")
+
+        // An empty oracle list still produces an answer -- falls through to
+        // the always-appended MidpointBoundaryOracle.
+        let emptyChain = chainBoundaryOracle([])
+        let emptyChainResult = emptyChain([], 100, 200, sampleRate)
+        try expect(emptyChainResult, equals: 150, "a chain with zero oracles still falls through to MidpointBoundaryOracle")
+
+        // 4) Clamping: a deliberately-broken oracle that returns an offset
+        // OUTSIDE [zoneStartSample, zoneEndSample] gets clamped before being
+        // returned, both above the top and below the bottom of the zone.
+        let tooHighChain = chainBoundaryOracle([FixedOracle(answer: 9_999)])
+        try expect(tooHighChain([], 100, 200, sampleRate), equals: 200,
+                   "an out-of-range answer above the zone is clamped to zoneEndSample")
+
+        let tooLowChain = chainBoundaryOracle([FixedOracle(answer: -5)])
+        try expect(tooLowChain([], 100, 200, sampleRate), equals: 100,
+                   "an out-of-range answer below the zone is clamped to zoneStartSample")
+    }
+
+    /// Pure decision-logic coverage for `VadBoundaryOracle.chooseSplit` --
+    /// no real model, no native context. Injects a mock
+    /// `SpeechProbabilitySource` (mirroring how `testSegmentedTranscription`
+    /// injects a mock `transcribeOne` closure instead of a real
+    /// `ParakeetEngine`) so the longest-quiet-run selection, center
+    /// computation, and decline paths can all be exercised deterministically.
+    private static func testVadBoundaryOracle() throws {
+        let sampleRate = 16_000.0
+        let zoneStart = 10_000
+        let zoneEnd = 20_000
+
+        struct MockSource: SpeechProbabilitySource {
+            let result: Result<SpeechProbabilities, Error>
+            func speechProbabilities(samples: [Float]) throws -> SpeechProbabilities {
+                switch result {
+                case .success(let value): return value
+                case .failure(let error): throw error
+                }
+            }
+        }
+        struct MockError: Error {}
+
+        // 1) One clear low-probability run in the middle -> its center.
+        // Windows: [high, high, low, low, low, high, high] with windowSize 100.
+        // Run is indices [2, 3, 4] (length 3), center index = 2 + 3/2 = 3.
+        let singleRunProbs = SpeechProbabilities(
+            values: [0.9, 0.8, 0.1, 0.2, 0.1, 0.85, 0.95],
+            windowSizeSamples: 100
+        )
+        let singleRunOracle = VadBoundaryOracle(engine: MockSource(result: .success(singleRunProbs)))
+        let singleRunSplit = singleRunOracle.chooseSplit(samples: [Float](repeating: 0, count: 10_000), zoneStartSample: zoneStart, zoneEndSample: zoneEnd, sampleRate: sampleRate)
+        try expect(singleRunSplit, equals: zoneStart + 3 * 100,
+                   "a single clear low-probability run picks its own center window")
+
+        // 2) Multiple runs of different lengths -> the LONGEST one's center,
+        // not the first one encountered. First run: indices [1] (length 1).
+        // Second (longest) run: indices [4, 5, 6, 7] (length 4), center
+        // index = 4 + 4/2 = 6.
+        let multiRunProbs = SpeechProbabilities(
+            values: [0.9, 0.1, 0.9, 0.9, 0.2, 0.1, 0.3, 0.15, 0.9],
+            windowSizeSamples: 50
+        )
+        let multiRunOracle = VadBoundaryOracle(engine: MockSource(result: .success(multiRunProbs)))
+        let multiRunSplit = multiRunOracle.chooseSplit(samples: [Float](repeating: 0, count: 10_000), zoneStartSample: zoneStart, zoneEndSample: zoneEnd, sampleRate: sampleRate)
+        try expect(multiRunSplit, equals: zoneStart + 6 * 50,
+                   "the LONGEST run's center is picked over an earlier, shorter run")
+
+        // 3) Nothing below the threshold -> declines (nil).
+        let allLoudProbs = SpeechProbabilities(values: [0.9, 0.8, 0.95, 0.7], windowSizeSamples: 100)
+        let allLoudOracle = VadBoundaryOracle(engine: MockSource(result: .success(allLoudProbs)))
+        let allLoudSplit = allLoudOracle.chooseSplit(samples: [Float](repeating: 0, count: 10_000), zoneStartSample: zoneStart, zoneEndSample: zoneEnd, sampleRate: sampleRate)
+        try expect(allLoudSplit == nil, equals: true,
+                   "an array with nothing below the silence threshold declines (returns nil)")
+
+        // 4) VAD-fetch failure -> declines (nil), doesn't crash/throw out.
+        let failingOracle = VadBoundaryOracle(engine: MockSource(result: .failure(MockError())))
+        let failingSplit = failingOracle.chooseSplit(samples: [Float](repeating: 0, count: 10_000), zoneStartSample: zoneStart, zoneEndSample: zoneEnd, sampleRate: sampleRate)
+        try expect(failingSplit == nil, equals: true,
+                   "a VAD-fetch failure declines (returns nil) rather than throwing/crashing")
+
+        // 5) Empty zone -> declines without even consulting the source.
+        let emptyZoneOracle = VadBoundaryOracle(engine: MockSource(result: .success(singleRunProbs)))
+        let emptyZoneSplit = emptyZoneOracle.chooseSplit(samples: [], zoneStartSample: 500, zoneEndSample: 500, sampleRate: sampleRate)
+        try expect(emptyZoneSplit == nil, equals: true,
+                   "a zero-width zone declines immediately")
+
+        // 6) windowSizeSamples == 0 -> declines (can't convert window index
+        // to a sample offset).
+        let zeroWindowProbs = SpeechProbabilities(values: [0.1, 0.1], windowSizeSamples: 0)
+        let zeroWindowOracle = VadBoundaryOracle(engine: MockSource(result: .success(zeroWindowProbs)))
+        let zeroWindowSplit = zeroWindowOracle.chooseSplit(samples: [Float](repeating: 0, count: 10_000), zoneStartSample: zoneStart, zoneEndSample: zoneEnd, sampleRate: sampleRate)
+        try expect(zeroWindowSplit == nil, equals: true,
+                   "a zero window size declines rather than dividing/producing a bogus offset")
+
+        // 7) Custom silenceProbabilityThreshold is honored: a value that
+        // would qualify under the default 0.4 threshold no longer qualifies
+        // under a stricter 0.05 threshold -> declines.
+        var strictOracle = VadBoundaryOracle(engine: MockSource(result: .success(singleRunProbs)))
+        strictOracle.silenceProbabilityThreshold = 0.05
+        let strictSplit = strictOracle.chooseSplit(samples: [Float](repeating: 0, count: 10_000), zoneStartSample: zoneStart, zoneEndSample: zoneEnd, sampleRate: sampleRate)
+        try expect(strictSplit == nil, equals: true,
+                   "a stricter silenceProbabilityThreshold can turn a would-be run into nothing qualifying")
+    }
+
+    /// Pure orchestration coverage for `transcribeSegments` using a mock
+    /// `transcribeOne` closure — no model, no engine, no audio hardware.
+    /// Bridged through `runParakeetEngineSynchronously` since this test
+    /// suite's entry point is synchronous (see that helper's doc comment).
+    private static func testSegmentedTranscription() throws {
+        // All segments succeed on the first try -> concatenated with a
+        // single space, no failure flagged.
+        let allOk: [AudioSegment] = [
+            AudioSegment(samples: [0.1], hasSignal: true),
+            AudioSegment(samples: [0.1], hasSignal: true),
+        ]
+        nonisolated(unsafe) var callIndex = 0
+        let okTexts = ["hello", "world"]
+        let okOutcome = try runParakeetEngineSynchronously {
+            await transcribeSegments(allOk) { _ in
+                defer { callIndex += 1 }
+                return okTexts[callIndex]
+            }
+        }
+        try expect(okOutcome.text, equals: "hello world", "successful segments are joined with a space")
+        try expect(okOutcome.hadSegmentFailure, equals: false, "no failure flagged when every segment succeeds")
+
+        // A signal-bearing segment that returns empty on the first call but
+        // real text on the retry -> succeeds, no failure flagged, and the
+        // closure was actually called twice for that segment.
+        let retrySucceeds: [AudioSegment] = [AudioSegment(samples: [0.1], hasSignal: true)]
+        nonisolated(unsafe) var retryCallCount = 0
+        let retryOutcome = try runParakeetEngineSynchronously {
+            await transcribeSegments(retrySucceeds) { _ in
+                retryCallCount += 1
+                return retryCallCount == 1 ? "" : "recovered"
+            }
+        }
+        try expect(retryCallCount, equals: 2, "an empty signal-bearing segment is retried exactly once")
+        try expect(retryOutcome.text, equals: "recovered", "a successful retry contributes its text")
+        try expect(retryOutcome.hadSegmentFailure, equals: false, "a retry that succeeds is not a failure")
+
+        // A signal-bearing segment that stays empty after the retry ->
+        // flagged as a failure, contributes nothing to the joined text, but
+        // does not discard an earlier segment's text.
+        let stillFails: [AudioSegment] = [
+            AudioSegment(samples: [0.1], hasSignal: true),
+            AudioSegment(samples: [0.1], hasSignal: true),
+        ]
+        nonisolated(unsafe) var stillFailsCallIndex = 0
+        let failOutcome = try runParakeetEngineSynchronously {
+            await transcribeSegments(stillFails) { _ in
+                defer { stillFailsCallIndex += 1 }
+                // Segment 0 always succeeds; segment 1 (calls 2 and 3, since
+                // segment 0 only ever calls once) always returns empty.
+                return stillFailsCallIndex == 0 ? "kept" : ""
+            }
+        }
+        try expect(failOutcome.text, equals: "kept",
+                   "a persistently-empty segment doesn't discard an earlier segment's text")
+        try expect(failOutcome.hadSegmentFailure, equals: true,
+                   "a signal-bearing segment still empty after retry is flagged as a failure")
+
+        // A segment with no signal (silence) that returns empty is NOT
+        // retried and is NOT flagged as a failure.
+        let silentSegment: [AudioSegment] = [AudioSegment(samples: [0.0], hasSignal: false)]
+        nonisolated(unsafe) var silentCallCount = 0
+        let silentOutcome = try runParakeetEngineSynchronously {
+            await transcribeSegments(silentSegment) { _ in
+                silentCallCount += 1
+                return ""
+            }
+        }
+        try expect(silentCallCount, equals: 1, "a silent segment is not retried")
+        try expect(silentOutcome.text, equals: "", "a silent segment contributes no text")
+        try expect(silentOutcome.hadSegmentFailure, equals: false, "a silent segment is never a failure")
+
+        // A segment whose transcribeOne throws is treated like an empty
+        // result: retried once (since it has signal), and doesn't crash the
+        // whole run.
+        let throwing: [AudioSegment] = [AudioSegment(samples: [0.1], hasSignal: true)]
+        nonisolated(unsafe) var throwCallCount = 0
+        struct DummyError: Error {}
+        let throwOutcome = try runParakeetEngineSynchronously {
+            await transcribeSegments(throwing) { _ in
+                throwCallCount += 1
+                throw DummyError()
+            }
+        }
+        try expect(throwCallCount, equals: 2, "a throwing segment is retried exactly once, same as empty text")
+        try expect(throwOutcome.hadSegmentFailure, equals: true, "a segment that keeps throwing is flagged as a failure")
+        try expect(throwOutcome.lastErrorDescription != nil, equals: true,
+                   "a thrown error's description is surfaced for logging")
+
+        // REGRESSION GUARD: a segment with NO detected signal whose closure
+        // THROWS is a broken engine, not legitimate silence. It must still be
+        // retried and must still be flagged as a failure — otherwise a
+        // recording where every segment fell under the RMS threshold (or a
+        // nil engine) silently deletes the user's recovery audio with no
+        // failure signal at all, which is the exact bug this feature exists
+        // to prevent.
+        let silentThrowing: [AudioSegment] = [AudioSegment(samples: [0.0], hasSignal: false)]
+        nonisolated(unsafe) var silentThrowCallCount = 0
+        struct EngineUnavailable: LocalizedError {
+            var errorDescription: String? { "engine unavailable" }
+        }
+        let silentThrowOutcome = try runParakeetEngineSynchronously {
+            await transcribeSegments(silentThrowing) { _ in
+                silentThrowCallCount += 1
+                throw EngineUnavailable()
+            }
+        }
+        try expect(silentThrowCallCount, equals: 2,
+                   "a THROWING segment is retried even when it carries no detected signal")
+        try expect(silentThrowOutcome.hadSegmentFailure, equals: true,
+                   "a throw is never treated as legitimate silence, even with hasSignal == false")
+        try expect(silentThrowOutcome.lastErrorDescription ?? "", equals: "engine unavailable",
+                   "the most recent thrown error's description is captured verbatim")
+
+        // A throw whose retry SUCCEEDS is not a failure — but the error is
+        // still reported so it can be logged. Non-nil error != failure.
+        let throwThenSucceed: [AudioSegment] = [AudioSegment(samples: [0.1], hasSignal: true)]
+        nonisolated(unsafe) var mixedCallCount = 0
+        let mixedOutcome = try runParakeetEngineSynchronously {
+            await transcribeSegments(throwThenSucceed) { _ in
+                mixedCallCount += 1
+                if mixedCallCount == 1 { throw EngineUnavailable() }
+                return "second try"
+            }
+        }
+        try expect(mixedOutcome.text, equals: "second try", "a throw whose retry succeeds keeps its text")
+        try expect(mixedOutcome.hadSegmentFailure, equals: false,
+                   "a throw whose retry succeeds is not a failure")
+        try expect(mixedOutcome.lastErrorDescription ?? "", equals: "engine unavailable",
+                   "a recovered throw still reports its error for logging")
+
+        // Nothing ever threw -> no error description at all.
+        try expect(okOutcome.lastErrorDescription == nil, equals: true,
+                   "lastErrorDescription is nil when no call ever threw")
+    }
+
+    // MARK: - Seam token dedup (achetronic/parakeet DD-014 port)
+
+    /// Tests timestamp-based deduplication of tokens at overlap boundaries.
+    /// Pure and deterministic — no model, no I/O.
+    private static func testSeamDedup() throws {
+        let tolerance = 0.24
+        let lookbackCount = 3
+
+        // 1. Exact duplicate: two tokens with identical text and timestamps
+        // within tolerance -> only the first is kept
+        let exactDupInput = [
+            AbsoluteToken(text: "hello", absoluteSeconds: 1.0),
+            AbsoluteToken(text: "hello", absoluteSeconds: 1.0),
+        ]
+        let exactDupOutput = dedupSeam(exactDupInput, toleranceSeconds: tolerance, lookbackCount: lookbackCount)
+        try expect(exactDupOutput.count, equals: 1, "exact duplicate should keep only the first token")
+        try expect(exactDupOutput[0].text, equals: "hello", "exact duplicate should keep the first token's text")
+        try expect(exactDupOutput[0].absoluteSeconds, equals: 1.0, "exact duplicate should keep the first token's timestamp")
+
+        // 2. Collision: two tokens with DIFFERENT text but timestamps within
+        // tolerance -> only the first (earlier) is kept, regardless of text
+        let collisionInput = [
+            AbsoluteToken(text: "hello", absoluteSeconds: 1.0),
+            AbsoluteToken(text: "helo", absoluteSeconds: 1.15),  // within tolerance, different text
+        ]
+        let collisionOutput = dedupSeam(collisionInput, toleranceSeconds: tolerance, lookbackCount: lookbackCount)
+        try expect(collisionOutput.count, equals: 1, "collision should keep only the earlier token")
+        try expect(collisionOutput[0].text, equals: "hello", "collision should keep the earlier token's text")
+
+        // 3. Correctly-kept-far-token: two tokens whose timestamps differ by
+        // MORE than toleranceSeconds -> both kept
+        let farTokenInput = [
+            AbsoluteToken(text: "hello", absoluteSeconds: 1.0),
+            AbsoluteToken(text: "world", absoluteSeconds: 1.5),  // more than tolerance apart
+        ]
+        let farTokenOutput = dedupSeam(farTokenInput, toleranceSeconds: tolerance, lookbackCount: lookbackCount)
+        try expect(farTokenOutput.count, equals: 2, "tokens further apart than tolerance should both be kept")
+        try expect(farTokenOutput[0].text, equals: "hello", "first token should be preserved")
+        try expect(farTokenOutput[1].text, equals: "world", "second token should be preserved")
+
+        // 4. Empty input: dedupSeam([]) returns []
+        let emptyInput: [AbsoluteToken] = []
+        let emptyOutput = dedupSeam(emptyInput, toleranceSeconds: tolerance, lookbackCount: lookbackCount)
+        try expect(emptyOutput.count, equals: 0, "empty input should produce empty output")
+
+        // 5. Lookback window respected: a token that collides in TIME with
+        // something more than lookbackCount POSITIONS back should NOT be
+        // deduped against it (positional lookback, not time window).
+        // Construct: 5 tokens where token[0] and token[4] collide in time
+        // (both at 1.0s) but token[4] is more than lookbackCount=3 positions
+        // away. Tokens 1-3 have distinct timestamps to fill the gap.
+        let lookbackInput = [
+            AbsoluteToken(text: "token0", absoluteSeconds: 1.0),
+            AbsoluteToken(text: "token1", absoluteSeconds: 2.0),  // distinct, will be kept
+            AbsoluteToken(text: "token2", absoluteSeconds: 3.0),  // distinct, will be kept
+            AbsoluteToken(text: "token3", absoluteSeconds: 4.0),  // distinct, will be kept
+            AbsoluteToken(text: "token4", absoluteSeconds: 1.0),  // collides in TIME with token0 (at 1.0s)
+            // but token0 is 4 positions back, outside lookbackCount=3 window
+        ]
+        let lookbackOutput = dedupSeam(lookbackInput, toleranceSeconds: tolerance, lookbackCount: lookbackCount)
+        // Expected: token0, token1, token2, token3, token4 ALL kept
+        // because token4's collision is with token0 which is outside the
+        // lookback window of 3 preceding tokens (only token1, token2, token3 are checked)
+        try expect(lookbackOutput.count, equals: 5,
+                   "token colliding with something beyond lookbackCount positions back should not be deduped")
+        try expect(lookbackOutput[0].text, equals: "token0", "token0 kept")
+        try expect(lookbackOutput[1].text, equals: "token1", "token1 kept")
+        try expect(lookbackOutput[2].text, equals: "token2", "token2 kept")
+        try expect(lookbackOutput[3].text, equals: "token3", "token3 kept")
+        try expect(lookbackOutput[4].text, equals: "token4", "token4 kept (collision outside lookback window)")
+    }
+
+    // MARK: - Minimal WAV reader (self-test fixtures only)
+
+    /// Parses a canonical 16-bit PCM WAV file into mono Float32 samples in
+    /// [-1, 1] at its native sample rate. Deliberately minimal (no
+    /// float/24-bit/extensible fmt chunk support) — this exists ONLY to
+    /// feed self-test fixtures (16-bit PCM mono/stereo WAV), not as production audio I/O
+    /// (the app's real capture path uses AVFoundation, never a file).
+    private static func loadWavMonoFloat32(path: String) throws -> (samples: [Float], sampleRate: UInt32) {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        func u32(_ offset: Int) -> UInt32 {
+            UInt32(data[offset]) | (UInt32(data[offset+1]) << 8) | (UInt32(data[offset+2]) << 16) | (UInt32(data[offset+3]) << 24)
+        }
+        func u16(_ offset: Int) -> UInt16 {
+            UInt16(data[offset]) | (UInt16(data[offset+1]) << 8)
+        }
+        guard data.count > 44, data[0...3].elementsEqual("RIFF".utf8), data[8...11].elementsEqual("WAVE".utf8) else {
+            throw NSError(domain: "Lexomorph", code: -10, userInfo: [NSLocalizedDescriptionKey: "not a RIFF/WAVE file: \(path)"])
+        }
+        var offset = 12
+        var channels: UInt16 = 1
+        var sampleRate: UInt32 = 16000
+        var bitsPerSample: UInt16 = 16
+        var dataRange: Range<Int>?
+        while offset + 8 <= data.count {
+            let chunkID = data[offset...offset+3]
+            let chunkSize = Int(u32(offset + 4))
+            let bodyStart = offset + 8
+            if chunkID.elementsEqual("fmt ".utf8) {
+                channels = u16(bodyStart + 2)
+                sampleRate = u32(bodyStart + 4)
+                bitsPerSample = u16(bodyStart + 14)
+            } else if chunkID.elementsEqual("data".utf8) {
+                dataRange = bodyStart..<min(bodyStart + chunkSize, data.count)
+            }
+            offset = bodyStart + chunkSize + (chunkSize % 2)
+        }
+        guard let dataRange, bitsPerSample == 16 else {
+            throw NSError(domain: "Lexomorph", code: -11, userInfo: [NSLocalizedDescriptionKey: "unsupported/missing WAV data chunk (need 16-bit PCM): \(path)"])
+        }
+        let bytes = [UInt8](data[dataRange])
+        let frameCount = bytes.count / (2 * Int(channels))
+        var samples = [Float](repeating: 0, count: frameCount)
+        bytes.withUnsafeBytes { raw in
+            let i16 = raw.bindMemory(to: Int16.self)
+            for frame in 0..<frameCount {
+                var sum: Int32 = 0
+                for ch in 0..<Int(channels) {
+                    sum += Int32(i16[frame * Int(channels) + ch])
+                }
+                samples[frame] = Float(sum) / Float(Int(channels)) / 32768.0
+            }
+        }
+        return (samples, sampleRate)
+    }
+
+    private static func testAudioRouteChangeDecision() throws {
+        try expect(
+            audioStartupRetryDelaySeconds(afterFailedAttempt: 1),
+            equals: Optional(1 as UInt64),
+            "first audio startup failure should retry after one second"
+        )
+        try expect(
+            audioStartupRetryDelaySeconds(afterFailedAttempt: 2),
+            equals: Optional(3 as UInt64),
+            "second audio startup failure should retry after three seconds"
+        )
+        try expect(
+            audioStartupRetryDelaySeconds(afterFailedAttempt: 3),
+            equals: Optional(8 as UInt64),
+            "third audio startup failure should retry after eight seconds"
+        )
+        try expect(
+            audioStartupRetryDelaySeconds(afterFailedAttempt: 4),
+            equals: UInt64?.none,
+            "audio startup should stop retrying after the configured backoff schedule"
+        )
+        try expect(
+            audioRouteChangeAction(isTerminating: true,
+                                   isRestartingAudioInput: false,
+                                   isCoreRuntimeReady: true,
+                                   isRecording: false,
+                                   isBusy: false,
+                                   hasStartupTask: false),
+            equals: .ignore,
+            "route changes during termination should be ignored"
+        )
+        try expect(
+            audioRouteChangeAction(isTerminating: false,
+                                   isRestartingAudioInput: false,
+                                   isCoreRuntimeReady: false,
+                                   isRecording: false,
+                                   isBusy: false,
+                                   hasStartupTask: false),
+            equals: .rebuildMenuOnly,
+            "route changes before runtime readiness should only refresh the menu"
+        )
+        try expect(
+            audioRouteChangeAction(isTerminating: false,
+                                   isRestartingAudioInput: false,
+                                   isCoreRuntimeReady: true,
+                                   isRecording: true,
+                                   isBusy: false,
+                                   hasStartupTask: false),
+            equals: .deferRefresh,
+            "route changes during recording should defer the restart"
+        )
+        try expect(
+            audioRouteChangeAction(isTerminating: false,
+                                   isRestartingAudioInput: false,
+                                   isCoreRuntimeReady: true,
+                                   isRecording: false,
+                                   isBusy: false,
+                                   hasStartupTask: false),
+            equals: .restartNow,
+            "idle ready route changes should restart audio immediately"
+        )
+        try expect(
+            audioConfigurationChangeIsSuppressed(now: 10, suppressedUntil: nil),
+            equals: false,
+            "configuration changes should not be suppressed without a suppression deadline"
+        )
+        try expect(
+            audioConfigurationChangeIsSuppressed(now: 10, suppressedUntil: 11),
+            equals: true,
+            "configuration changes before the app-owned deadline should be ignored"
+        )
+        try expect(
+            audioConfigurationChangeIsSuppressed(now: 11, suppressedUntil: 11),
+            equals: false,
+            "configuration changes at the suppression deadline should be handled normally"
+        )
+    }
+
+    private static func testRecordingLifecycle() throws {
+        try expect(
+            recordingReleaseAction(capturedSampleCount: 3_999,
+                                   sampleRate: 16_000,
+                                   minimumClipSeconds: 0.25),
+            equals: .discardTooShort(duration: 0.2499375),
+            "release decision should discard clips under the minimum duration"
+        )
+        try expect(
+            recordingReleaseAction(capturedSampleCount: 4_000,
+                                   sampleRate: 16_000,
+                                   minimumClipSeconds: 0.25),
+            equals: .transcribe(duration: 0.25),
+            "release decision should transcribe clips at the minimum duration"
+        )
+        try expect(
+            recordingReleaseAction(capturedSampleCount: 4_000,
+                                   sampleRate: 0,
+                                   minimumClipSeconds: 0.25),
+            equals: .discardTooShort(duration: 0),
+            "release decision should handle invalid sample rates defensively"
+        )
+
+        let recoveryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lexomorph-recovery-test-\(UUID().uuidString)")
+            .appendingPathExtension("sdaudio")
+        defer { try? FileManager.default.removeItem(at: recoveryURL) }
+        let expectedSamples: [Float] = [-0.75, -0.125, 0, 0.25, 0.875]
+        let journal = try PendingDictationJournal(url: recoveryURL)
+        journal.append(Array(expectedSamples.prefix(2)))
+        journal.append(Array(expectedSamples.dropFirst(2)))
+        journal.finish()
+        try expect(
+            try PendingDictationRecovery.loadSamples(from: recoveryURL),
+            equals: expectedSamples,
+            "pending dictation journal should round-trip captured samples"
+        )
+        let recoveryHandle = try FileHandle(forWritingTo: recoveryURL)
+        try recoveryHandle.seekToEnd()
+        try recoveryHandle.write(contentsOf: Data([0x7f]))
+        try recoveryHandle.close()
+        try expect(
+            try PendingDictationRecovery.loadSamples(from: recoveryURL),
+            equals: expectedSamples,
+            "pending dictation recovery should ignore a partial trailing sample after a crash"
+        )
+        let recoveryAttributes = try FileManager.default.attributesOfItem(atPath: recoveryURL.path)
+        guard let recoveryMode = recoveryAttributes[.posixPermissions] as? NSNumber else {
+            throw SelfTestFailure.failed("pending dictation journal should expose POSIX permissions")
+        }
+        try expect(
+            recoveryMode.intValue,
+            equals: 0o600,
+            "pending dictation journal should be private"
+        )
+
+        let processed = processedDictationText(
+            rawTranscript: "  Um, parakeet is fast.  ",
+            corrections: [TranscriptCorrection(source: "parakeet", replacement: "Lexomorph")],
+            removeFillerWords: true
+        )
+        try expect(
+            processed,
+            equals: DictationTextProcessingResult(text: "Lexomorph is fast.",
+                                                  appliedCorrectionCount: 1,
+                                                  removedFillerWordCount: 1),
+            "dictation text processing should trim, apply corrections, then remove fillers"
+        )
+
+        let preservedFillers = processedDictationText(
+            rawTranscript: "  Um, parakeet is fast.  ",
+            corrections: [TranscriptCorrection(source: "parakeet", replacement: "Lexomorph")],
+            removeFillerWords: false
+        )
+        try expect(
+            preservedFillers,
+            equals: DictationTextProcessingResult(text: "Um, Lexomorph is fast.",
+                                                  appliedCorrectionCount: 1,
+                                                  removedFillerWordCount: 0),
+            "dictation text processing should preserve fillers when the setting is off"
+        )
+
+        let repairedYo = processedDictationText(
+            rawTranscript: "  <unk>лка, мо<UNK> и е<unk>. Потом <unk>жик.  ",
+            corrections: [],
+            removeFillerWords: false
+        )
+        try expect(
+            repairedYo.text,
+            equals: "Ёлка, моё и её. Потом ёжик.",
+            "dictation text processing should repair Parakeet unknown tokens used for Cyrillic yo"
+        )
+
+        let repairedYoRussian = processedDictationText(
+            rawTranscript: "  <unk>лка.  ",
+            corrections: [],
+            removeFillerWords: false,
+            language: .russian
+        )
+        try expect(
+            repairedYoRussian.text,
+            equals: "Ёлка.",
+            "explicit Russian language should repair <unk> to ё"
+        )
+
+        let removedUnkEnglish = processedDictationText(
+            rawTranscript: "  Hello <unk> world.  ",
+            corrections: [],
+            removeFillerWords: false,
+            language: .english
+        )
+        try expect(
+            removedUnkEnglish.text,
+            equals: "Hello world.",
+            "non-Russian language should remove <unk> tokens, not replace with Cyrillic ё"
+        )
+
+        let removedUnkPunctuation = ParakeetTranscriptRepair.apply(
+            to: "Hello <unk>, world.",
+            language: .english
+        )
+        try expect(
+            removedUnkPunctuation,
+            equals: "Hello, world.",
+            "removing <unk> should not leave a space before punctuation"
+        )
+
+        let removedUnkMultiSpace = ParakeetTranscriptRepair.apply(
+            to: "Hello <unk>   world",
+            language: .english
+        )
+        try expect(
+            removedUnkMultiSpace,
+            equals: "Hello world",
+            "removing <unk> should collapse multi-space runs left behind"
+        )
+
+        let removedUnkFrench = ParakeetTranscriptRepair.apply(
+            to: "Bonjour <unk> le monde.",
+            language: .french
+        )
+        try expect(
+            removedUnkFrench,
+            equals: "Bonjour le monde.",
+            "ParakeetTranscriptRepair should strip <unk> for French"
+        )
+
+        let autoYo = ParakeetTranscriptRepair.apply(
+            to: "<unk>лка",
+            language: .auto
+        )
+        try expect(
+            autoYo,
+            equals: "Ёлка",
+            "auto-detect language should preserve the ё repair for the default audience"
+        )
+
+        let markerText = systemAudioMuteMarkerText(pid: 12345,
+                                                   date: Date(timeIntervalSince1970: 0))
+        try expect(
+            systemAudioMuteMarkerProcessID(from: markerText),
+            equals: Optional(pid_t(12345)),
+            "system audio mute marker should preserve the owning pid"
+        )
+        try expect(
+            systemAudioMuteMarkerProcessID(from: "created=bad\n"),
+            equals: pid_t?.none,
+            "system audio mute marker parsing should ignore missing pids"
+        )
+
+        let script = systemAudioMuteWatchdogScript()
+        for fragment in [
+            #"PID="$1""#,
+            #"MARKER="$2""#,
+            #"/bin/kill -0 "$PID""#,
+            "/usr/bin/osascript -e 'set volume without output muted'",
+            #"/bin/rm -f "$MARKER""#,
+        ] {
+            guard script.contains(fragment) else {
+                throw SelfTestFailure.failed("system audio mute watchdog script missing fragment: \(fragment)")
+            }
+        }
+
+        // Mute command outcome: command failure and verified-unmuted
+        // are definitive "not muted"; an ambiguous verification after
+        // a successful command must be assumed muted so the recovery
+        // marker + watchdog stay armed.
+        try expect(
+            systemAudioMuteCommandOutcome(commandSucceeded: true, verifiedMuted: true),
+            equals: .muted,
+            "verified mute should report muted"
+        )
+        try expect(
+            systemAudioMuteCommandOutcome(commandSucceeded: true, verifiedMuted: nil),
+            equals: .assumedMuted,
+            "successful command with failed verification must assume muted"
+        )
+        try expect(
+            systemAudioMuteCommandOutcome(commandSucceeded: true, verifiedMuted: false),
+            equals: .failed,
+            "verified-unmuted after the command is a definitive failure"
+        )
+        try expect(
+            systemAudioMuteCommandOutcome(commandSucceeded: false, verifiedMuted: true),
+            equals: .failed,
+            "a failed command is not muted regardless of verification"
+        )
+
+        // Probe decision: only a definitive "output is live" while the
+        // recording still wants the mute arms recovery and mutes.
+        try expect(
+            systemAudioMuteProbeDecision(mutedState: false, unmuteAlreadyRequested: false),
+            equals: .armRecoveryAndMute,
+            "live output during an active recording should mute"
+        )
+        try expect(
+            systemAudioMuteProbeDecision(mutedState: true, unmuteAlreadyRequested: false),
+            equals: .standDown,
+            "a user-set mute must not be stomped"
+        )
+        try expect(
+            systemAudioMuteProbeDecision(mutedState: nil, unmuteAlreadyRequested: false),
+            equals: .standDown,
+            "a failed probe must not risk stomping an unseen user mute"
+        )
+        try expect(
+            systemAudioMuteProbeDecision(mutedState: false, unmuteAlreadyRequested: true),
+            equals: .standDown,
+            "a recording that already ended should not mute"
+        )
+
+        // Mute completion decision: assumed mutes behave exactly like
+        // verified mutes (recovery stays armed); a definitive failure
+        // disarms; a release that raced the command unmutes at once.
+        try expect(
+            systemAudioMuteCommandDecision(outcome: .muted, unmuteAlreadyRequested: false),
+            equals: .stayMuted,
+            "verified mute during recording should hold"
+        )
+        try expect(
+            systemAudioMuteCommandDecision(outcome: .assumedMuted, unmuteAlreadyRequested: false),
+            equals: .stayMuted,
+            "assumed mute must keep recovery armed, not disarm it"
+        )
+        try expect(
+            systemAudioMuteCommandDecision(outcome: .failed, unmuteAlreadyRequested: false),
+            equals: .disarmRecovery,
+            "definitive mute failure should disarm marker and watchdog"
+        )
+        try expect(
+            systemAudioMuteCommandDecision(outcome: .muted, unmuteAlreadyRequested: true),
+            equals: .beginUnmute,
+            "release during the mute command should unmute immediately"
+        )
+        try expect(
+            systemAudioMuteCommandDecision(outcome: .assumedMuted, unmuteAlreadyRequested: true),
+            equals: .beginUnmute,
+            "release during an assumed mute should also unmute immediately"
+        )
+
+        // Unmute request routing per lifecycle phase.
+        try expect(
+            systemAudioUnmuteRequestDecision(phase: .idle),
+            equals: .nothingToDo,
+            "no lifecycle → nothing to unmute"
+        )
+        try expect(
+            systemAudioUnmuteRequestDecision(phase: .probing),
+            equals: .deferUntilCommandSettles,
+            "release during the probe defers to the probe completion"
+        )
+        try expect(
+            systemAudioUnmuteRequestDecision(phase: .muting),
+            equals: .deferUntilCommandSettles,
+            "release during the mute command defers to its completion"
+        )
+        try expect(
+            systemAudioUnmuteRequestDecision(phase: .muted),
+            equals: .beginUnmute,
+            "release while muted unmutes immediately"
+        )
+        try expect(
+            systemAudioUnmuteRequestDecision(phase: .unmuting),
+            equals: .nothingToDo,
+            "release while an unmute is in flight should not double-issue"
+        )
+
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lexomorph-mute-marker-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: root) }
+
+        let marker = root.appendingPathComponent("system-audio-muted")
+        try writeSystemAudioMuteMarker(to: marker, text: markerText)
+        var markerStat = stat()
+        guard lstat(marker.path, &markerStat) == 0 else {
+            throw SelfTestFailure.failed("system audio mute marker should exist")
+        }
+        try expect((markerStat.st_mode & S_IFMT) == S_IFREG,
+                   equals: true,
+                   "system audio mute marker should be a regular file")
+        try expect(Int(markerStat.st_mode & mode_t(0o777)),
+                   equals: 0o600,
+                   "system audio mute marker should be private")
+        try expect(
+            String(data: try Data(contentsOf: marker), encoding: .utf8),
+            equals: markerText,
+            "system audio mute marker should contain the expected pid"
+        )
+
+        let target = root.appendingPathComponent("target-marker")
+        try Data("target\n".utf8).write(to: target)
+        let symlink = root.appendingPathComponent("linked-marker")
+        try fm.createSymbolicLink(at: symlink, withDestinationURL: target)
+        var symlinkRejected = false
+        do {
+            try writeSystemAudioMuteMarker(to: symlink, text: "bad\n")
+        } catch {
+            symlinkRejected = true
+        }
+        try expect(symlinkRejected,
+                   equals: true,
+                   "system audio mute marker should reject leaf symlinks")
+        try expect(
+            String(data: try Data(contentsOf: target), encoding: .utf8),
+            equals: "target\n",
+            "system audio mute marker should leave symlink targets untouched"
+        )
+    }
+
+    private static func testPowerStateRecoveryDecision() throws {
+        try expect(
+            shouldResumeRuntimeAfterSystemSleep(isTerminating: true,
+                                                isCoreRuntimeReady: true,
+                                                isReady: true,
+                                                isRecording: true,
+                                                audioIsRunning: true),
+            equals: false,
+            "sleep during termination should not schedule wake recovery"
+        )
+        try expect(
+            shouldResumeRuntimeAfterSystemSleep(isTerminating: false,
+                                                isCoreRuntimeReady: false,
+                                                isReady: false,
+                                                isRecording: false,
+                                                audioIsRunning: false),
+            equals: false,
+            "sleep before runtime startup should not schedule wake recovery"
+        )
+        try expect(
+            shouldResumeRuntimeAfterSystemSleep(isTerminating: false,
+                                                isCoreRuntimeReady: false,
+                                                isReady: false,
+                                                isRecording: true,
+                                                audioIsRunning: true),
+            equals: true,
+            "active recording should schedule wake recovery even if readiness is already down"
+        )
+        try expect(
+            wakeRuntimeRecoveryAction(shouldResumeAfterWake: false,
+                                      isTerminating: false,
+                                      hasStartupTask: false,
+                                      isBusy: false,
+                                      isSpeechModelReady: true),
+            equals: .ignore,
+            "wake without a sleep-paused runtime should do nothing"
+        )
+        try expect(
+            wakeRuntimeRecoveryAction(shouldResumeAfterWake: true,
+                                      isTerminating: false,
+                                      hasStartupTask: false,
+                                      isBusy: true,
+                                      isSpeechModelReady: true),
+            equals: .deferUntilIdle,
+            "wake during transcription should defer runtime recovery"
+        )
+        try expect(
+            wakeRuntimeRecoveryAction(shouldResumeAfterWake: true,
+                                      isTerminating: false,
+                                      hasStartupTask: true,
+                                      isBusy: false,
+                                      isSpeechModelReady: true),
+            equals: .deferUntilIdle,
+            "wake during startup should defer runtime recovery"
+        )
+        try expect(
+            wakeRuntimeRecoveryAction(shouldResumeAfterWake: true,
+                                      isTerminating: false,
+                                      hasStartupTask: false,
+                                      isBusy: false,
+                                      isSpeechModelReady: true),
+            equals: .startAudioRuntime,
+            "wake after a loaded model should restart audio without reloading the model"
+        )
+        try expect(
+            wakeRuntimeRecoveryAction(shouldResumeAfterWake: true,
+                                      isTerminating: false,
+                                      hasStartupTask: false,
+                                      isBusy: false,
+                                      isSpeechModelReady: false),
+            equals: .startFullStartup,
+            "wake without a loaded model should fall back to full startup"
+        )
+    }
+
+    private static func testHandledHotkeySuppression() throws {
+        var state = HotkeyTransitionState()
+        let f5 = hotkeyChoice(forKeycode: 96)
+        let f7 = hotkeyChoice(forKeycode: 98)
+
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "F-key keyDown should suppress and press"
+        )
+        try expect(
+            state.transition(for: event(.keyDown, keycode: 97), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: .pass,
+            "non-hotkey keyDown should pass through"
+        )
+        try expect(
+            state.transition(for: event(.keyUp, keycode: f5.keycode), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.release]),
+            "F-key keyUp should suppress and release"
+        )
+
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f7.keycode), hotkey: f7, triggerMode: .hold, isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "recorded F-key keyDown should suppress and press"
+        )
+    }
+
+    private static func testCustomShortcutMatching() throws {
+        var state = HotkeyTransitionState()
+        let shortcut = hotkeyChoice(forKeycode: 40,
+                                    modifiers: [.maskCommand, .maskShift])
+        let commandShift = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue
+
+        try expect(
+            state.transition(for: event(.keyDown, keycode: 40, flags: commandShift),
+                             hotkey: shortcut,
+                             triggerMode: .hold,
+                             isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "custom shortcut should trigger when its exact modifiers are held"
+        )
+        try expect(
+            state.transition(for: event(.keyUp, keycode: 40),
+                             hotkey: shortcut,
+                             triggerMode: .hold,
+                             isRecording: true),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.release]),
+            "custom shortcut release should not depend on modifier release order"
+        )
+        try expect(
+            state.transition(for: event(.keyDown,
+                                        keycode: 40,
+                                        flags: CGEventFlags.maskCommand.rawValue),
+                             hotkey: shortcut,
+                             triggerMode: .hold,
+                             isRecording: false),
+            equals: .pass,
+            "custom shortcut should ignore incomplete modifier combinations"
+        )
+    }
+
+    private static func testModifierOnlyChordMatching() throws {
+        var state = HotkeyTransitionState()
+        let shortcut = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE,
+                                    modifiers: [.maskAlternate, .maskCommand])
+        let unrelatedEnterShortcut = hotkeyChoice(forKeycode: 80)
+        let alternate = CGEventFlags.maskAlternate.rawValue
+        let commandAlternate = alternate | CGEventFlags.maskCommand.rawValue
+
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_OPTION_KEYCODE,
+                                        flags: alternate),
+                             hotkey: shortcut,
+                             enterHotkey: unrelatedEnterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: false),
+            equals: .pass,
+            "an incomplete modifier chord must not reserve Option globally"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_OPTION_KEYCODE),
+                             hotkey: shortcut,
+                             enterHotkey: unrelatedEnterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: false),
+            equals: .pass,
+            "releasing an incomplete modifier chord must reach the frontmost app"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_OPTION_KEYCODE,
+                                        flags: alternate),
+                             hotkey: shortcut,
+                             enterHotkey: unrelatedEnterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: false),
+            equals: .pass,
+            "Option should still pass through before the full shortcut activates"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_COMMAND_KEYCODE,
+                                        flags: commandAlternate),
+                             hotkey: shortcut,
+                             enterHotkey: unrelatedEnterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: false),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.press]),
+            "Option+Command should start dictation without stealing modifier events"
+        )
+        _ = state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_COMMAND_KEYCODE,
+                                        flags: alternate),
+                             hotkey: shortcut,
+                             enterHotkey: unrelatedEnterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: true)
+        _ = state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_OPTION_KEYCODE),
+                             hotkey: shortcut,
+                             enterHotkey: unrelatedEnterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: true)
+        _ = state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_COMMAND_KEYCODE,
+                                        flags: CGEventFlags.maskCommand.rawValue),
+                             hotkey: shortcut,
+                             enterHotkey: unrelatedEnterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: true)
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_OPTION_KEYCODE,
+                                        flags: commandAlternate),
+                             hotkey: shortcut,
+                             enterHotkey: unrelatedEnterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: true),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.release]),
+            "the same modifier chord should stop dictation without stealing modifiers"
+        )
+
+        var holdState = HotkeyTransitionState()
+        try expect(
+            holdState.transition(for: event(.flagsChanged,
+                                           keycode: RIGHT_OPTION_KEYCODE,
+                                           flags: alternate),
+                                 hotkey: shortcut,
+                                 enterHotkey: unrelatedEnterShortcut,
+                                 triggerMode: .hold,
+                                 isRecording: false),
+            equals: .pass,
+            "hold-mode chord prefixes must pass through"
+        )
+        try expect(
+            holdState.transition(for: event(.flagsChanged,
+                                           keycode: RIGHT_COMMAND_KEYCODE,
+                                           flags: commandAlternate),
+                                 hotkey: shortcut,
+                                 enterHotkey: unrelatedEnterShortcut,
+                                 triggerMode: .hold,
+                                 isRecording: false),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.press]),
+            "hold-mode modifier chords should press without stealing modifiers"
+        )
+        try expect(
+            holdState.transition(for: event(.flagsChanged,
+                                           keycode: RIGHT_OPTION_KEYCODE,
+                                           flags: CGEventFlags.maskCommand.rawValue),
+                                 hotkey: shortcut,
+                                 enterHotkey: unrelatedEnterShortcut,
+                                 triggerMode: .hold,
+                                 isRecording: true),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.release]),
+            "hold-mode modifier chords should release without stealing modifiers"
+        )
+        try expect(
+            holdState.transition(for: event(.flagsChanged,
+                                           keycode: RIGHT_COMMAND_KEYCODE),
+                                 hotkey: shortcut,
+                                 enterHotkey: unrelatedEnterShortcut,
+                                 triggerMode: .hold,
+                                 isRecording: false),
+            equals: .pass,
+            "the final modifier release must pass through"
+        )
+    }
+
+    private static func testConfigurableEnterShortcut() throws {
+        var state = HotkeyTransitionState()
+        let standard = hotkeyChoice(forKeycode: 96)
+        let enterShortcut = hotkeyChoice(forKeycode: 40,
+                                         modifiers: [.maskCommand, .maskShift])
+        let commandShift = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue
+
+        try expect(
+            state.transition(for: event(.keyDown,
+                                        keycode: 40,
+                                        flags: commandShift),
+                             hotkey: standard,
+                             enterHotkey: enterShortcut,
+                             triggerMode: .toggle,
+                             isRecording: true),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.releaseAlternate]),
+            "a user-configured Enter shortcut should use the Enter completion path"
+        )
+    }
+
+    /// A release-first recorder capture of Ctrl+Command is represented as
+    /// "Command + Left Control": Command is the required modifier and
+    /// Control is the primary key. With bare Right Command as the primary
+    /// dictation shortcut, this must still finish the active recording —
+    /// the shared Command is intentional, not an ambiguous prefix.
+    private static func testCommandModifierEnterShortcutWithPrimaryCommand() throws {
+        var state = HotkeyTransitionState()
+        let primary = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE)
+        let commandControl = hotkeyChoice(forKeycode: LEFT_CONTROL_KEYCODE,
+                                          modifiers: .maskCommand)
+        let commandControlFlags = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue
+
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_COMMAND_KEYCODE,
+                                        flags: CGEventFlags.maskCommand.rawValue),
+                             hotkey: primary,
+                             enterHotkey: commandControl,
+                             triggerMode: .hold,
+                             isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "Right Command should start the primary dictation shortcut"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: LEFT_CONTROL_KEYCODE,
+                                        flags: commandControlFlags),
+                             hotkey: primary,
+                             enterHotkey: commandControl,
+                             triggerMode: .hold,
+                             isRecording: true),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.releaseAlternate]),
+            "Command + Control should finish an active Right Command recording"
+        )
+    }
+
+    /// Hold-mode fix: when the alternate-completion chord is built on the
+    /// same modifier keycode as the primary dictation hotkey (e.g.
+    /// primary "Right Command", chord "Control + Right Command"), the
+    /// shared modifier is necessarily pressed BEFORE the recording
+    /// starts — pressing it is what starts the recording — so the enter
+    /// state machine never sees its flagsChanged. The recording edge
+    /// must adopt the held modifier, or the chord could never fire.
+    private static func testEnterChordBuiltOnHeldPrimaryModifier() throws {
+        let rightCommand = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE)
+        let enterChord = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE,
+                                      modifiers: [.maskControl])
+        let controlCommand = CGEventFlags.maskControl.rawValue | CGEventFlags.maskCommand.rawValue
+        // This test's own enterChord happens to be built on the same
+        // Right-Command-plus-Control combination as the correction
+        // hotkey's default (see HotkeyListener.correctionHotkey) -- pass a
+        // deliberately distinct one so the two shortcuts' shared
+        // "adopt the held primary modifier" mechanism doesn't race for
+        // this event. Unrelated to what this test actually verifies.
+        let unrelatedCorrectionHotkey = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE,
+                                                     modifiers: [.maskShift, .maskAlternate])
+
+        var state = HotkeyTransitionState()
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_COMMAND_KEYCODE,
+                                        flags: CGEventFlags.maskCommand.rawValue),
+                             hotkey: rightCommand,
+                             enterHotkey: enterChord,
+                             correctionHotkey: unrelatedCorrectionHotkey,
+                             triggerMode: .hold,
+                             isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "Right Command press should start dictation"
+        )
+        // The app flips isRecording=true only after .press above, so the
+        // enter state machine missed the Right Command flagsChanged —
+        // exactly the real-world hold-mode sequence.
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: LEFT_CONTROL_KEYCODE,
+                                        flags: controlCommand),
+                             hotkey: rightCommand,
+                             enterHotkey: enterChord,
+                             correctionHotkey: unrelatedCorrectionHotkey,
+                             triggerMode: .hold,
+                             isRecording: true),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.releaseAlternate]),
+            "pressing the extra chord modifier mid-recording should fire alternate completion (held primary adopted)"
+        )
+
+        // The default ⌥⌘ chord must behave the same way.
+        var defaultChordState = HotkeyTransitionState()
+        let defaultEnterChord = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE,
+                                             modifiers: [.maskAlternate])
+        _ = defaultChordState.transition(for: event(.flagsChanged,
+                                                     keycode: RIGHT_COMMAND_KEYCODE,
+                                                     flags: CGEventFlags.maskCommand.rawValue),
+                                         hotkey: rightCommand,
+                                         enterHotkey: defaultEnterChord,
+                                         triggerMode: .hold,
+                                         isRecording: false)
+        try expect(
+            defaultChordState.transition(for: event(.flagsChanged,
+                                                     keycode: RIGHT_OPTION_KEYCODE,
+                                                     flags: CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskCommand.rawValue),
+                                         hotkey: rightCommand,
+                                         enterHotkey: defaultEnterChord,
+                                         triggerMode: .hold,
+                                         isRecording: true),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.releaseAlternate]),
+            "the default Option+Right Command chord should fire alternate completion mid-recording"
+        )
+
+        // Negative: a primary hotkey that is NOT the chord's base key
+        // must not adopt anything — the chord still requires its own
+        // modifier press to be seen.
+        var unrelatedState = HotkeyTransitionState()
+        let f5Primary = hotkeyChoice(forKeycode: 96)
+        try expect(
+            unrelatedState.transition(for: event(.flagsChanged,
+                                                  keycode: LEFT_CONTROL_KEYCODE,
+                                                  flags: CGEventFlags.maskControl.rawValue),
+                                       hotkey: f5Primary,
+                                       enterHotkey: enterChord,
+                                       triggerMode: .hold,
+                                       isRecording: true),
+            equals: .pass,
+            "without the chord's base modifier held, the extra modifier alone must not fire alternate completion"
+        )
+    }
+
+    private static func testFKeyAutoRepeatSuppressesWithoutAction() throws {
+        var state = HotkeyTransitionState()
+        let f5 = hotkeyChoice(forKeycode: 96)
+
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "initial F-key keyDown should press"
+        )
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode, isAutoRepeat: true), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: .suppressOnly,
+            "F-key autorepeat keyDown should suppress without action"
+        )
+    }
+
+    private static func testRightModifierReleaseWithLeftFlagStillSet() throws {
+        var state = HotkeyTransitionState()
+        let rightOption = hotkeyChoice(forKeycode: 61)
+        let alternate = CGEventFlags.maskAlternate.rawValue
+
+        try expect(
+            state.transition(for: event(.flagsChanged, keycode: rightOption.keycode, flags: alternate), hotkey: rightOption, triggerMode: .hold, isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "right modifier flagsChanged should press"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged, keycode: rightOption.keycode, flags: alternate), hotkey: rightOption, triggerMode: .hold, isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.release]),
+            "right modifier release should be recognized while left-side flag remains set"
+        )
+
+        var toggleState = HotkeyTransitionState()
+        try expect(
+            toggleState.transition(for: event(.flagsChanged,
+                                              keycode: rightOption.keycode,
+                                              flags: alternate),
+                                   hotkey: rightOption,
+                                   triggerMode: .toggle,
+                                   isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "right Option should start when it is the configured toggle hotkey"
+        )
+        _ = toggleState.transition(for: event(.flagsChanged,
+                                              keycode: rightOption.keycode),
+                                   hotkey: rightOption,
+                                   triggerMode: .toggle,
+                                   isRecording: true)
+        try expect(
+            toggleState.transition(for: event(.flagsChanged,
+                                              keycode: rightOption.keycode,
+                                              flags: alternate),
+                                   hotkey: rightOption,
+                                   triggerMode: .toggle,
+                                   isRecording: true),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.release]),
+            "right Option should stop instead of being swallowed by the Enter chord"
+        )
+    }
+
+    private static func testHistoryChordShowsOverlay() throws {
+        let rightCommand = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE)
+        let commandShift = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue
+
+        var shiftAlone = HotkeyTransitionState()
+        try expect(
+            shiftAlone.transition(for: event(.flagsChanged,
+                                            keycode: RIGHT_SHIFT_KEYCODE,
+                                            flags: CGEventFlags.maskShift.rawValue),
+                                  hotkey: rightCommand,
+                                  triggerMode: .toggle,
+                                  isRecording: false),
+            equals: .pass,
+            "Shift alone must pass through for app gestures such as Blender navigation"
+        )
+        try expect(
+            shiftAlone.transition(for: event(.flagsChanged,
+                                            keycode: RIGHT_SHIFT_KEYCODE,
+                                            flags: 0),
+                                  hotkey: rightCommand,
+                                  triggerMode: .toggle,
+                                  isRecording: false),
+            equals: .pass,
+            "Shift release must pass through when the history chord never completed"
+        )
+
+        var shiftFirst = HotkeyTransitionState()
+        try expect(
+            shiftFirst.transition(for: event(.flagsChanged,
+                                             keycode: RIGHT_SHIFT_KEYCODE,
+                                             flags: CGEventFlags.maskShift.rawValue),
+                                  hotkey: rightCommand,
+                                  triggerMode: .toggle,
+                                  isRecording: false),
+            equals: .pass,
+            "the first key of the history chord must remain available to other apps"
+        )
+        try expect(
+            shiftFirst.transition(for: event(.flagsChanged,
+                                             keycode: RIGHT_COMMAND_KEYCODE,
+                                             flags: commandShift),
+                                  hotkey: rightCommand,
+                                  triggerMode: .toggle,
+                                  isRecording: false),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.showHistory]),
+            "right shift then right command should show history without stealing modifiers"
+        )
+        try expect(
+            shiftFirst.transition(for: event(.flagsChanged,
+                                             keycode: RIGHT_COMMAND_KEYCODE,
+                                             flags: CGEventFlags.maskShift.rawValue),
+                                  hotkey: rightCommand,
+                                  triggerMode: .toggle,
+                                  isRecording: false),
+            equals: .pass,
+            "history chord should pass the paired right command release"
+        )
+        try expect(
+            shiftFirst.transition(for: event(.flagsChanged,
+                                             keycode: RIGHT_SHIFT_KEYCODE,
+                                             flags: 0),
+                                  hotkey: rightCommand,
+                                  triggerMode: .toggle,
+                                  isRecording: false),
+            equals: .pass,
+            "history chord should pass the paired right shift release"
+        )
+
+        var requiredModifierReleasedFirst = HotkeyTransitionState()
+        _ = requiredModifierReleasedFirst.transition(
+            for: event(.flagsChanged,
+                       keycode: RIGHT_SHIFT_KEYCODE,
+                       flags: CGEventFlags.maskShift.rawValue),
+            hotkey: rightCommand,
+            triggerMode: .toggle,
+            isRecording: false
+        )
+        _ = requiredModifierReleasedFirst.transition(
+            for: event(.flagsChanged,
+                       keycode: RIGHT_COMMAND_KEYCODE,
+                       flags: commandShift),
+            hotkey: rightCommand,
+            triggerMode: .toggle,
+            isRecording: false
+        )
+        try expect(
+            requiredModifierReleasedFirst.transition(
+                for: event(.flagsChanged,
+                           keycode: RIGHT_SHIFT_KEYCODE,
+                           flags: CGEventFlags.maskCommand.rawValue),
+                hotkey: rightCommand,
+                triggerMode: .toggle,
+                isRecording: false
+            ),
+            equals: .pass,
+            "releasing Shift first should remain visible to the frontmost app"
+        )
+        try expect(
+            requiredModifierReleasedFirst.transition(
+                for: event(.flagsChanged,
+                           keycode: RIGHT_COMMAND_KEYCODE,
+                           flags: 0),
+                hotkey: rightCommand,
+                triggerMode: .toggle,
+                isRecording: false
+            ),
+            equals: .pass,
+            "releasing right Command last should clear the history chord without interception"
+        )
+        try expect(
+            requiredModifierReleasedFirst.transition(
+                for: event(.flagsChanged,
+                           keycode: LEFT_COMMAND_KEYCODE,
+                           flags: CGEventFlags.maskCommand.rawValue),
+                hotkey: rightCommand,
+                // This assertion is about history-chord state leakage, not
+                // about the correction hotkey -- which now legitimately
+                // defaults to bare Left Command (HotkeyListener.
+                // correctionHotkey). Point it at an unrelated combination
+                // so it doesn't fire here and mask what this test actually
+                // checks.
+                correctionHotkey: hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE, modifiers: [.maskControl]),
+                rewriteHotkey: hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE, modifiers: [.maskShift]),
+                rewriteStyleHotkey: hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE, modifiers: [.maskAlternate]),
+                triggerMode: .toggle,
+                isRecording: false
+            ),
+            equals: .pass,
+            "left Command must not reuse stale right Command state"
+        )
+        try expect(
+            requiredModifierReleasedFirst.transition(
+                for: event(.flagsChanged,
+                           keycode: RIGHT_SHIFT_KEYCODE,
+                           flags: commandShift),
+                hotkey: rightCommand,
+                rewriteHotkey: hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE, modifiers: [.maskShift]),
+                rewriteStyleHotkey: hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE, modifiers: [.maskAlternate]),
+                triggerMode: .toggle,
+                isRecording: false
+            ),
+            equals: .pass,
+            "left Command plus Shift must pass through and not trigger right Command history"
+        )
+
+        var commandFirst = HotkeyTransitionState()
+        try expect(
+            commandFirst.transition(for: event(.flagsChanged,
+                                               keycode: RIGHT_COMMAND_KEYCODE,
+                                               flags: CGEventFlags.maskCommand.rawValue),
+                                    hotkey: rightCommand,
+                                    triggerMode: .toggle,
+                                    isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "right command alone should still start toggle dictation"
+        )
+        try expect(
+            commandFirst.transition(for: event(.flagsChanged,
+                                               keycode: RIGHT_SHIFT_KEYCODE,
+                                               flags: commandShift),
+                                    hotkey: rightCommand,
+                                    triggerMode: .toggle,
+                                    isRecording: true),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.showHistory]),
+            "history chord should show history without canceling dictation or stealing Shift"
+        )
+        try expect(
+            commandFirst.transition(for: event(.flagsChanged,
+                                               keycode: RIGHT_COMMAND_KEYCODE,
+                                               flags: CGEventFlags.maskShift.rawValue),
+                                    hotkey: rightCommand,
+                                    triggerMode: .toggle,
+                                    isRecording: true),
+            equals: .pass,
+            "history chord should pass the paired right command release while recording"
+        )
+        try expect(
+            commandFirst.transition(for: event(.flagsChanged,
+                                               keycode: RIGHT_SHIFT_KEYCODE,
+                                               flags: 0),
+                                    hotkey: rightCommand,
+                                    triggerMode: .toggle,
+                                    isRecording: true),
+            equals: .pass,
+            "history chord should pass the paired right shift release"
+        )
+        try expect(
+            commandFirst.transition(for: event(.flagsChanged,
+                                               keycode: RIGHT_COMMAND_KEYCODE,
+                                               flags: CGEventFlags.maskCommand.rawValue),
+                                    hotkey: rightCommand,
+                                    triggerMode: .toggle,
+                                    isRecording: true),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.release]),
+            "right command after the history chord should still stop active dictation"
+        )
+    }
+
+    private static func testConfigurableHistoryShortcut() throws {
+        var state = HotkeyTransitionState()
+        let standard = hotkeyChoice(forKeycode: 96)
+        let history = hotkeyChoice(forKeycode: 40,
+                                   modifiers: [.maskCommand, .maskShift])
+        let commandShift = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue
+
+        try expect(
+            state.transition(for: event(.keyDown,
+                                        keycode: 40,
+                                        flags: commandShift),
+                             hotkey: standard,
+                             historyHotkey: history,
+                             triggerMode: .toggle,
+                             isRecording: true),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.showHistory]),
+            "a user-configured history shortcut should open history without stopping recording"
+        )
+        try expect(
+            state.transition(for: event(.keyUp, keycode: 40),
+                             hotkey: standard,
+                             historyHotkey: history,
+                             triggerMode: .toggle,
+                             isRecording: true),
+            equals: .suppressOnly,
+            "a configurable history shortcut should suppress its paired release"
+        )
+    }
+
+    /// Covers the correction-toggle hotkey added alongside
+    /// LLMPostprocessingCoordinator's delayed-unload feature. Its default
+    /// (bare Left Command, HotkeyListener.correctionHotkey) is deliberately
+    /// built on a DIFFERENT physical key than dictation/enter/history (all
+    /// Right Command-based) -- see that default's own doc comment for why
+    /// sharing Right Command caused it to spuriously fire during an
+    /// unrelated custom enter-chord's modifier press during development.
+    private static func testConfigurableCorrectionShortcut() throws {
+        let standard = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE)
+        var state = HotkeyTransitionState()
+
+        // Deliberately unrelated to dictation -- fires even mid-recording,
+        // and must not disturb it (no reset of the recording/enter state).
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: LEFT_COMMAND_KEYCODE,
+                                        flags: CGEventFlags.maskCommand.rawValue),
+                             hotkey: standard,
+                             triggerMode: .hold,
+                             isRecording: true),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.toggleCorrection]),
+            "the default correction hotkey (bare Left Command) should fire even mid-recording"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: LEFT_COMMAND_KEYCODE,
+                                        flags: 0),
+                             hotkey: standard,
+                             triggerMode: .hold,
+                             isRecording: true),
+            equals: .suppressOnly,
+            "the correction hotkey's release should be suppressed, not passed through"
+        )
+
+        // A user-configured (non-default, non-modifier) correction
+        // shortcut also works, independent of the dictation hotkey.
+        var customState = HotkeyTransitionState()
+        let customCorrection = hotkeyChoice(forKeycode: 96)
+        try expect(
+            customState.transition(for: event(.keyDown, keycode: 96),
+                                   hotkey: standard,
+                                   correctionHotkey: customCorrection,
+                                   triggerMode: .hold,
+                                   isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.toggleCorrection]),
+            "a user-configured correction shortcut should fire"
+        )
+    }
+
+    /// Covers the rewrite toggle + rewrite style cycle hotkeys added with
+    /// the state-toast feature
+    /// (docs/specs/state-toasts-rewrite-hotkeys-spec.md). Defaults are
+    /// built on Left Command like the correction hotkey but with distinct
+    /// modifiers (Shift / Option) so the three never collide.
+    private static func testConfigurableRewriteShortcuts() throws {
+        let standard = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE)
+        // NB modifier-base chords (LCmd+X, RCmd+X) were rejected as
+        // defaults: correction claims BARE Left Command (fires on
+        // LCmd-down, so any LCmd+X chord double-fires correction) and
+        // dictation claims BARE Right Command (starts a recording on
+        // RCmd-down, and releasing the extra modifier fires a dictation
+        // press). F13/F14 are non-typed, unclaimed, and expected to be
+        // rebound by the user.
+        let defaultRewriteToggle = hotkeyChoice(forKeycode: 105) // F13
+        let defaultRewriteStyle = hotkeyChoice(forKeycode: 107)  // F14
+
+        // Default rewrite toggle (F13): keyDown fires .toggleRewrite and
+        // is fully intercepted; keyUp is suppressed too.
+        var state = HotkeyTransitionState()
+        try expect(
+            state.transition(for: event(.keyDown, keycode: 105),
+                             hotkey: standard,
+                             rewriteHotkey: defaultRewriteToggle,
+                             rewriteStyleHotkey: defaultRewriteStyle,
+                             triggerMode: .hold,
+                             isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.toggleRewrite]),
+            "the default rewrite toggle hotkey (F13) should fire .toggleRewrite, intercepted"
+        )
+        try expect(
+            state.transition(for: event(.keyUp, keycode: 105),
+                             hotkey: standard,
+                             rewriteHotkey: defaultRewriteToggle,
+                             rewriteStyleHotkey: defaultRewriteStyle,
+                             triggerMode: .hold,
+                             isRecording: false),
+            equals: .suppressOnly,
+            "the rewrite toggle hotkey's release should be suppressed"
+        )
+
+        // Default style cycle (F14): keyDown fires .cycleRewriteStyle.
+        var styleState = HotkeyTransitionState()
+        try expect(
+            styleState.transition(for: event(.keyDown, keycode: 107),
+                                  hotkey: standard,
+                                  rewriteHotkey: defaultRewriteToggle,
+                                  rewriteStyleHotkey: defaultRewriteStyle,
+                                  triggerMode: .hold,
+                                  isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.cycleRewriteStyle]),
+            "the default rewrite style hotkey (F14) should fire .cycleRewriteStyle"
+        )
+
+        // User-configured (non-modifier) shortcuts fire too, independent of
+        // the dictation hotkey.
+        var customState = HotkeyTransitionState()
+        let customToggle = hotkeyChoice(forKeycode: 97)
+        let customStyle = hotkeyChoice(forKeycode: 98)
+        try expect(
+            customState.transition(for: event(.keyDown, keycode: 97),
+                                   hotkey: standard,
+                                   rewriteHotkey: customToggle,
+                                   rewriteStyleHotkey: customStyle,
+                                   triggerMode: .hold,
+                                   isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.toggleRewrite]),
+            "a user-configured rewrite toggle shortcut should fire"
+        )
+        try expect(
+            customState.transition(for: event(.keyDown, keycode: 98),
+                                   hotkey: standard,
+                                   rewriteHotkey: customToggle,
+                                   rewriteStyleHotkey: customStyle,
+                                   triggerMode: .hold,
+                                   isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.cycleRewriteStyle]),
+            "a user-configured rewrite style shortcut should fire"
+        )
+
+        // Settings roundtrip for both new hotkey configs.
+        let defaults = UserDefaults(suiteName: "com.local.lexomorph.selftest.rewrite-hotkeys-\(UUID().uuidString)")!
+        let settings = Settings(defaults: defaults, vocabularyStore: .inMemoryFallback())
+        let toggleChoice = hotkeyChoice(forKeycode: 110, modifiers: [.maskControl]) // K
+        let styleChoice = hotkeyChoice(forKeycode: 111, modifiers: [.maskShift])
+        settings.setConfiguredRewriteToggleHotkey(toggleChoice)
+        settings.setConfiguredRewriteStyleHotkey(styleChoice)
+        try expect(settings.configuredRewriteToggleHotkey, equals: toggleChoice,
+                   "rewrite toggle hotkey must round-trip through settings")
+        try expect(settings.configuredRewriteStyleHotkey, equals: styleChoice,
+                   "rewrite style hotkey must round-trip through settings")
+    }
+
+    /// User-created rewrite modes: storage roundtrip, unified selection
+    /// resolution (built-in / custom / unknown→polish), the custom system
+    /// prompt (base + instruction block), the «Режим: <ИМЯ>» suffix token,
+    /// and the per-custom-mode hotkey action dispatch
+    /// (docs/specs/custom-rewrite-styles-spec.md).
+    private static func testCustomRewriteStyles() throws {
+        let defaults = UserDefaults(suiteName: "com.local.lexomorph.selftest.custom-styles-\(UUID().uuidString)")!
+        let settings = Settings(defaults: defaults, vocabularyStore: .inMemoryFallback())
+
+        // Empty by default; unknown active id falls back to polish.
+        try expect(settings.customRewriteStyles.isEmpty, equals: true,
+                   "no custom rewrite styles by default")
+        try expect(settings.rewriteStyleSelection(), equals: RewriteStyleSelection.builtin(.polish),
+                   "unknown active style id must fall back to polish")
+
+        // Create + activate a custom mode.
+        let custom = CustomRewriteStyle(
+            id: "c-test-1",
+            name: "Ассистент",
+            colorHex: "#FF8800",
+            instruction: "- перепиши текст как задачу для ассистента;",
+            hotkeyKeycode: 111,
+            hotkeyModifiers: CGEventFlags.maskShift.rawValue
+        )
+        settings.customRewriteStyles = [custom]
+        settings.setRewriteStyleSelection(.custom(custom))
+        try expect(settings.customRewriteStyles, equals: [custom],
+                   "custom rewrite styles must round-trip through storage")
+        try expect(settings.rewriteStyleSelection(),
+                   equals: RewriteStyleSelection.custom(custom),
+                   "the active custom style must resolve back")
+
+        // Custom system prompt: shared base + the mode's instruction block.
+        let customPrompt = LLMRewritePrompt.systemPrompt(custom: custom)
+        try expect(customPrompt.contains("Не добавляй новых фактов"), equals: true,
+                   "the custom prompt must keep the fact-preservation base")
+        try expect(customPrompt.contains("Режим Ассистент:"), equals: true,
+                   "the custom prompt must carry the mode's instruction block")
+        try expect(customPrompt.contains("перепиши текст как задачу"), equals: true,
+                   "the custom prompt must carry the mode's own instruction")
+
+        // Suffix token: the custom mode's uppercased name.
+        let userText = LLMRewritePrompt.userText(for: "текст", token: custom.name.uppercased())
+        try expect(userText.hasSuffix("\n\nРежим: АССИСТЕНТ"), equals: true,
+                   "custom modes must use their uppercased name as the mode token")
+
+        // Switching back to a built-in keeps the custom stored.
+        settings.setRewriteStyleSelection(.builtin(.official))
+        try expect(settings.rewriteStyleSelection(), equals: RewriteStyleSelection.builtin(.official),
+                   "built-in selection must work alongside stored customs")
+        try expect(settings.customRewriteStyles.count, equals: 1,
+                   "switching to a built-in must not delete custom modes")
+
+        // Per-custom-mode hotkey action dispatch.
+        var dispatched: [HotkeyTransitionAction] = []
+        dispatched = [HotkeyTransitionAction.activateRewriteStyle(custom.id)]
+        guard case .activateRewriteStyle(let dispatchedID) = dispatched[0] else {
+            throw VocabularyLearningTestFailure("activateRewriteStyle action must carry the style id")
+        }
+        try expect(dispatchedID, equals: custom.id,
+                   "the activation action must carry the custom style's id")
+    }
+
+    private static func testOptionCommandEnterChordStopsWithEnter() throws {
+        let rightCommand = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE)
+        let alternate = CGEventFlags.maskAlternate.rawValue
+        let commandAlternate = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskAlternate.rawValue
+
+        var state = HotkeyTransitionState()
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_OPTION_KEYCODE,
+                                        flags: alternate),
+                             hotkey: rightCommand,
+                             triggerMode: .toggle,
+                             isRecording: true),
+            equals: .pass,
+            "right Option alone must remain available while recording"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_COMMAND_KEYCODE,
+                                        flags: commandAlternate),
+                             hotkey: rightCommand,
+                             triggerMode: .toggle,
+                             isRecording: true),
+            equals: HotkeyTransitionResult(suppress: false, actions: [.releaseAlternate]),
+            "right Option + right Command should stop dictation without stealing modifiers"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_COMMAND_KEYCODE,
+                                        flags: alternate),
+                             hotkey: rightCommand,
+                             triggerMode: .toggle,
+                             isRecording: false),
+            equals: .pass,
+            "enter chord should pass the paired right command release"
+        )
+        try expect(
+            state.transition(for: event(.flagsChanged,
+                                        keycode: RIGHT_OPTION_KEYCODE,
+                                        flags: 0),
+                             hotkey: rightCommand,
+                             triggerMode: .toggle,
+                             isRecording: false),
+            equals: .pass,
+            "enter chord should pass the paired right Option release"
+        )
+
+    }
+
+    private static func testEnterShortcutModeSelection() throws {
+        try expect(
+            shouldPressEnterAfterDictation(shortcut: .standard,
+                                           primaryBehavior: .insert),
+            equals: false,
+            "insert mode should make the primary shortcut finish without Enter"
+        )
+        try expect(
+            shouldPressEnterAfterDictation(shortcut: .alternate,
+                                           primaryBehavior: .insert),
+            equals: true,
+            "the alternate shortcut should invert insert mode"
+        )
+        try expect(
+            shouldPressEnterAfterDictation(shortcut: .standard,
+                                           primaryBehavior: .insertAndEnter),
+            equals: true,
+            "insert-and-Enter mode should make the primary shortcut press Enter"
+        )
+        try expect(
+            shouldPressEnterAfterDictation(shortcut: .alternate,
+                                           primaryBehavior: .insertAndEnter),
+            equals: false,
+            "the alternate shortcut should invert insert-and-Enter mode"
+        )
+
+        var state = HotkeyTransitionState()
+        let primary = hotkeyChoice(forKeycode: RIGHT_COMMAND_KEYCODE)
+        let alternate = hotkeyChoice(forKeycode: 96)
+        try expect(
+            state.transition(for: event(.keyDown, keycode: alternate.keycode),
+                             hotkey: primary,
+                             enterHotkey: alternate,
+                             alternateCompletionEnabled: false,
+                             triggerMode: .toggle,
+                             isRecording: true),
+            equals: .pass,
+            "a disabled alternate shortcut should not be intercepted"
+        )
+    }
+
+    private static func testTogglePressFlipsOnceAndReleaseIsNoOp() throws {
+        var state = HotkeyTransitionState()
+        let f5 = hotkeyChoice(forKeycode: 96)
+
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode), hotkey: f5, triggerMode: .toggle, isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "first toggle press should start"
+        )
+        try expect(
+            state.transition(for: event(.keyUp, keycode: f5.keycode), hotkey: f5, triggerMode: .toggle, isRecording: false),
+            equals: .suppressOnly,
+            "toggle release should be a no-op"
+        )
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode), hotkey: f5, triggerMode: .toggle, isRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.release]),
+            "second toggle press should stop"
+        )
+    }
+
+    private static func testToggleGatedPressDoesNotFlipToggleState() throws {
+        var state = HotkeyTransitionState()
+        let f5 = hotkeyChoice(forKeycode: 96)
+
+        // A press the app would reject (e.g. a transcription in
+        // flight) must suppress the key but not flip the toggle —
+        // otherwise the next press emits a swallowed .release and
+        // only the third press records.
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode), hotkey: f5, triggerMode: .toggle, isRecording: false, canStartRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.rejectedBusyPress]),
+            "gated toggle press should suppress without flipping state but emit rejectedBusyPress for feedback"
+        )
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode), hotkey: f5, triggerMode: .toggle, isRecording: false, canStartRecording: true),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "press after a gated press should start immediately"
+        )
+        // The stop-side press must NOT be gated: once a recording is
+        // active (canStartRecording is false by definition), the
+        // press still has to stop it.
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode), hotkey: f5, triggerMode: .toggle, isRecording: true, canStartRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.release]),
+            "gate must not block the toggle press that stops a recording"
+        )
+        // Hold mode ignores the gate entirely — handlePress discarding
+        // the press leaves no state behind in hold mode.
+        try expect(
+            state.transition(for: event(.keyDown, keycode: f5.keycode), hotkey: f5, triggerMode: .hold, isRecording: false, canStartRecording: false),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.press]),
+            "hold-mode press should be unaffected by the gate"
+        )
+    }
+
+    private static func testEscapePassesThroughWhenNotRecording() throws {
+        var state = HotkeyTransitionState()
+        let f5 = hotkeyChoice(forKeycode: 96)
+
+        try expect(
+            state.transition(for: event(.keyDown, keycode: ESCAPE_KEYCODE), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: .pass,
+            "Escape keyDown should pass through when not recording"
+        )
+        try expect(
+            state.transition(for: event(.keyDown, keycode: ESCAPE_KEYCODE, isAutoRepeat: true), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: .pass,
+            "Escape autorepeat should pass through when not recording"
+        )
+        try expect(
+            state.transition(for: event(.keyUp, keycode: ESCAPE_KEYCODE), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: .pass,
+            "Escape keyUp should pass through when not recording"
+        )
+    }
+
+    private static func testEscapeSuppressesCancelRepeatAndKeyUpWhileRecording() throws {
+        var state = HotkeyTransitionState()
+        let f5 = hotkeyChoice(forKeycode: 96)
+
+        try expect(
+            state.transition(for: event(.keyDown, keycode: ESCAPE_KEYCODE), hotkey: f5, triggerMode: .hold, isRecording: true),
+            equals: HotkeyTransitionResult(suppress: true, actions: [.cancel]),
+            "Escape keyDown should suppress and cancel while recording"
+        )
+        try expect(
+            state.transition(for: event(.keyDown, keycode: ESCAPE_KEYCODE, isAutoRepeat: true), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: .suppressOnly,
+            "Escape autorepeat from a canceled press should stay suppressed"
+        )
+        try expect(
+            state.transition(for: event(.keyUp, keycode: ESCAPE_KEYCODE), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: .suppressOnly,
+            "paired Escape keyUp should stay suppressed after cancel"
+        )
+        try expect(
+            state.transition(for: event(.keyUp, keycode: ESCAPE_KEYCODE), hotkey: f5, triggerMode: .hold, isRecording: false),
+            equals: .pass,
+            "later Escape keyUp should pass through once the canceled press is complete"
+        )
+    }
+
+    // MARK: - Overlap assembly (Task 9)
+    //
+    // `assembleOverlapTranscript` is the whole genuinely-new integration
+    // step, and it is a pure synchronous function over synthetic data —
+    // no `TranscriptionWorker`, no models, no protocol seam needed on the
+    // concrete actor. Everything below runs with zero model files staged.
+
+    /// Builds a window whose owned span is [ownedStart, ownedEnd) with
+    /// `overlapBefore`/`overlapAfter` samples borrowed from its neighbors.
+    /// `samples` content is irrelevant to assembly (only the oracle reads
+    /// audio, and these tests pin the oracle), so it's zero-filled.
+    private static func assemblyWindow(ownedStart: Int, ownedEnd: Int,
+                                       overlapBefore: Int = 0, overlapAfter: Int = 0,
+                                       hasSignal: Bool = true) -> AudioWindow {
+        AudioWindow(samples: [Float](repeating: 0, count: (ownedEnd - ownedStart) + overlapBefore + overlapAfter),
+                    startSample: ownedStart - overlapBefore,
+                    ownedStartSample: ownedStart,
+                    ownedEndSample: ownedEnd,
+                    hasSignal: hasSignal)
+    }
+
+    private static func word(_ text: String, _ start: Double) -> TranscribedWord {
+        TranscribedWord(w: text, start: start, end: start + 0.1, conf: 0.9)
+    }
+
+    /// A `BoundaryOracle` that always answers a fixed absolute offset —
+    /// lets these tests pin seam placement deterministically instead of
+    /// depending on synthetic-audio energy.
+    private struct FixedBoundaryOracle: BoundaryOracle {
+        let split: Int
+        func chooseSplit(samples: [Float], zoneStartSample: Int, zoneEndSample: Int, sampleRate: Double) -> Int? {
+            split
+        }
+    }
+
+    private static func testOverlapAssembly() throws {
+        let rate = SAMPLE_RATE  // 16000
+
+        // --- 1) THE ANTI-CATASTROPHE REGRESSION -----------------------
+        // A single window of fast, evenly-spaced speech (150ms between word
+        // starts — well inside `dedupSeam`'s 240ms tolerance) must come
+        // back with EVERY word intact. Running Task 8's whole-list
+        // `dedupSeam` over an assembled transcript would delete most of
+        // these; the seam-scoped `dedupAcrossSeam` the assembly actually
+        // uses must not touch them at all.
+        let fastWords = (0..<40).map { word("w\($0)", Double($0) * 0.15) }
+        let singleWindow = assemblyWindow(ownedStart: 0, ownedEnd: Int(6.0 * rate))
+        let fastResult = try assembleOverlapTranscript(
+            windows: [singleWindow], perWindowWords: [fastWords],
+            fullSamples: [Float](repeating: 0, count: Int(6.0 * rate)),
+            sampleRate: rate, boundaryOracles: [])
+        try expect(fastResult.text.split(separator: " ").count, equals: 40,
+                   "every word of a 150ms-spaced stream must survive assembly (whole-list dedup would delete most of them)")
+        try expect(fastResult.droppedAtSeams, equals: 0, "a single-window dictation has no seams to dedup at")
+        // Sanity: this fixture really would be destroyed by the whole-list form.
+        let wholeListSurvivors = dedupSeam(fastWords.map { AbsoluteToken(text: $0.w, absoluteSeconds: $0.start) }).count
+        try expect(wholeListSurvivors < 40, equals: true,
+                   "fixture check: whole-list dedupSeam really does drop words from a 150ms-spaced stream (got \(wholeListSurvivors)/40)")
+
+        // --- 2) A duplicated word at a seam is deduped exactly once ----
+        // Two windows meeting at sample 32000 (2.0s), each with 0.5s of
+        // overlap. "beta" is emitted by BOTH decoders around the seam.
+        let seamSample = Int(2.0 * rate)
+        let overlap = Int(0.5 * rate)
+        let leftWindow = assemblyWindow(ownedStart: 0, ownedEnd: seamSample, overlapAfter: overlap)
+        let rightWindow = assemblyWindow(ownedStart: seamSample, ownedEnd: Int(4.0 * rate), overlapBefore: overlap)
+        let full = [Float](repeating: 0, count: Int(4.0 * rate))
+        // Left window's words are relative to its own start (sample 0).
+        let leftWords = [word("alpha", 1.50), word("beta", 1.95)]
+        // Right window starts at 2.0s - 0.5s = 1.5s absolute, so its
+        // relative 0.55 is absolute 2.05 — the same "beta", 100ms later.
+        let rightWords = [word("beta", 0.55), word("gamma", 1.00)]
+        let dedupResult = try assembleOverlapTranscript(
+            windows: [leftWindow, rightWindow], perWindowWords: [leftWords, rightWords],
+            fullSamples: full, sampleRate: rate,
+            boundaryOracles: [FixedBoundaryOracle(split: seamSample)])
+        try expect(dedupResult.text, equals: "alpha beta gamma",
+                   "the duplicated seam word must appear exactly once, from the EARLIER window")
+        try expect(dedupResult.droppedAtSeams, equals: 1, "exactly one word should have been deduped")
+
+        // --- 3) A word past the tolerance band is never dropped -------
+        // Same geometry, but the right window's first word lands 0.5s after
+        // the split — outside the 240ms band, so it can't be a duplicate.
+        let farResult = try assembleOverlapTranscript(
+            windows: [leftWindow, rightWindow],
+            perWindowWords: [leftWords, [word("delta", 1.00), word("gamma", 1.50)]],
+            fullSamples: full, sampleRate: rate,
+            boundaryOracles: [FixedBoundaryOracle(split: seamSample)])
+        try expect(farResult.text, equals: "alpha beta delta gamma",
+                   "a word comfortably past the seam tolerance band must always be kept")
+        try expect(farResult.droppedAtSeams, equals: 0, "nothing should be deduped when nothing is inside the band")
+
+        // --- 4) An oracle-refined split really moves ownership --------
+        // Push the split 0.4s EARLIER (to 1.6s). "beta" (absolute 1.95, in
+        // the left window) now belongs to the right window, so the left
+        // window's copy is discarded by the ownership filter and the right
+        // window's copy is what survives.
+        let movedResult = try assembleOverlapTranscript(
+            windows: [leftWindow, rightWindow], perWindowWords: [leftWords, rightWords],
+            fullSamples: full, sampleRate: rate,
+            boundaryOracles: [FixedBoundaryOracle(split: Int(1.6 * rate))])
+        try expect(movedResult.text, equals: "alpha beta gamma",
+                   "moving the split earlier reassigns the seam word to the later window without duplicating or losing it")
+        try expect(movedResult.seamSplitSamples, equals: [Int(1.6 * rate)],
+                   "the oracle's refined split should be the one actually used")
+
+        // --- 5) Zero-width overlap zone must not crash ----------------
+        // Two back-to-back windows with no overlap budget at all.
+        let tightLeft = assemblyWindow(ownedStart: 0, ownedEnd: seamSample)
+        let tightRight = assemblyWindow(ownedStart: seamSample, ownedEnd: Int(4.0 * rate))
+        let tightResult = try assembleOverlapTranscript(
+            windows: [tightLeft, tightRight],
+            perWindowWords: [[word("alpha", 1.0)], [word("gamma", 1.0)]],
+            fullSamples: full, sampleRate: rate,
+            boundaryOracles: [MelEnergyBoundaryOracle()])
+        try expect(tightResult.text, equals: "alpha gamma", "a zero-width overlap zone falls back to the nominal seam")
+        try expect(tightResult.seamSplitSamples, equals: [seamSample], "zero-width zone keeps the nominal seam")
+
+        // --- 6) A signal-bearing window with no words aborts the path -
+        // This is the guarantee that the overlap path can never lose audio
+        // more quietly than v0.4.6 does: it refuses to return at all, so
+        // `transcribeSegmented` re-runs the dictation on the plain path
+        // (which retries per segment and sets `hadSegmentFailure`).
+        var threwOnLoss = false
+        do {
+            _ = try assembleOverlapTranscript(
+                windows: [leftWindow, rightWindow], perWindowWords: [leftWords, []],
+                fullSamples: full, sampleRate: rate,
+                boundaryOracles: [FixedBoundaryOracle(split: seamSample)])
+        } catch OverlapAssemblyError.signalBearingWindowProducedNoWords {
+            threwOnLoss = true
+        }
+        try expect(threwOnLoss, equals: true,
+                   "a signal-bearing window that produced nothing must abort the overlap path, not silently drop audio")
+
+        // A window with NO signal producing nothing is legitimate silence.
+        let silentRight = assemblyWindow(ownedStart: seamSample, ownedEnd: Int(4.0 * rate),
+                                         overlapBefore: overlap, hasSignal: false)
+        let silentResult = try assembleOverlapTranscript(
+            windows: [leftWindow, silentRight], perWindowWords: [leftWords, []],
+            fullSamples: full, sampleRate: rate,
+            boundaryOracles: [FixedBoundaryOracle(split: seamSample)])
+        try expect(silentResult.text, equals: "alpha beta", "a genuinely silent window contributing nothing is not a failure")
+
+        // --- 7) Shape/emptiness guards --------------------------------
+        var threwShape = false
+        do {
+            _ = try assembleOverlapTranscript(windows: [leftWindow, rightWindow], perWindowWords: [leftWords],
+                                              fullSamples: full, sampleRate: rate, boundaryOracles: [])
+        } catch OverlapAssemblyError.shapeMismatch { threwShape = true }
+        try expect(threwShape, equals: true, "mismatched window/word-list counts must throw, not index out of range")
+
+        var threwEmpty = false
+        do {
+            _ = try assembleOverlapTranscript(windows: [assemblyWindow(ownedStart: 0, ownedEnd: 100, hasSignal: false)],
+                                              perWindowWords: [[]], fullSamples: full, sampleRate: rate,
+                                              boundaryOracles: [])
+        } catch OverlapAssemblyError.emptyTranscript { threwEmpty = true }
+        try expect(threwEmpty, equals: true, "an entirely empty transcript must throw so the plain path takes over")
+
+        // --- 8) `words` decodes from the REAL bridge JSON shape --------
+        // The exact document `parakeet_capi_transcribe_pcm_batch_json`
+        // documents (a one-element ARRAY carrying both "words" and
+        // "tokens"), so the words-over-tokens decision stays verified.
+        let realShapeJSON = """
+        [{"text":"hello world","frame_sec":0.080000,\
+        "words":[{"w":"hello","start":0.480,"end":0.640,"conf":0.9100},{"w":"world","start":0.720,"end":0.960,"conf":0.8800}],\
+        "tokens":[{"id":123,"t":0.480,"conf":0.9100}]}]
+        """
+        let realDecoded = try decodeTokenTranscription(json: realShapeJSON)
+        try expect(realDecoded.words.count, equals: 2, "the real bridge JSON shape's words array should decode")
+        try expect(realDecoded.words[0].w, equals: "hello", "first decoded word text")
+        try expect(realDecoded.words[1].start, equals: 0.720, "second decoded word start time")
+        try expect(realDecoded.tokens.count, equals: 1, "tokens must still decode alongside words")
+
+        // --- 9) A malformed word timestamp must never crash the process -
+        // A corrupted/malformed bridge response could in principle hand us
+        // a non-finite or absurdly large `word.start` that survived JSON
+        // decoding (e.g. via a future bridge change). The `Int(...)`
+        // sample-offset conversion traps on overflow/NaN, so this word
+        // must be skipped BEFORE that conversion rather than reaching it —
+        // and every other, well-formed word in the same window must still
+        // come through untouched.
+        let malformedWords = [
+            word("alpha", 1.0),
+            word("nan", .nan),
+            word("inf", .infinity),
+            word("neginf", -.infinity),
+            word("huge", 1e12),
+            word("beta", 1.4),
+        ]
+        let malformedResult = try assembleOverlapTranscript(
+            windows: [singleWindow], perWindowWords: [malformedWords],
+            fullSamples: [Float](repeating: 0, count: Int(6.0 * rate)),
+            sampleRate: rate, boundaryOracles: [])
+        try expect(malformedResult.text, equals: "alpha beta",
+                   "non-finite and absurdly large word timestamps must be skipped, not crash assembly, while sane words survive")
+    }
+
+    /// Gated real-hardware end-to-end check for the overlap path. Skipped
+    /// (not failed) unless `LEXOMORPH_ONNX_MODEL_DIR` points at an
+    /// installed ONNX model and `LEXOMORPH_OVERLAP_TEST_WAV` at a genuinely long
+    /// (multi-segment) 16-bit PCM WAV. `LEXOMORPH_SILERO_VAD_MODEL` is
+    /// optional — without it the chain runs mel-energy/midpoint, which is
+    /// itself a supported production configuration.
+    ///
+    /// Never touches `TranscriptionWorker` or any app state: it drives
+    /// `OnnxAsrEngine` directly and calls the SAME pure
+    /// `assembleOverlapTranscript` production uses.
+    private static func testOverlapTranscriptionRealModel() throws {
+        guard let modelPath = ProcessInfo.processInfo.environment["LEXOMORPH_ONNX_MODEL_DIR"],
+              FileManager.default.fileExists(atPath: modelPath),
+              let wavPath = ProcessInfo.processInfo.environment["LEXOMORPH_OVERLAP_TEST_WAV"],
+              FileManager.default.fileExists(atPath: wavPath) else {
+            print("SKIP overlap-transcription-real: needs LEXOMORPH_ONNX_MODEL_DIR + LEXOMORPH_OVERLAP_TEST_WAV")
+            return
+        }
+
+        let (wavSamples, wavRate) = try loadWavMonoFloat32(path: wavPath)
+        guard wavRate == UInt32(SAMPLE_RATE) else {
+            throw SelfTestFailure.failed("overlap-transcription-real needs a 16 kHz WAV, got \(wavRate) Hz")
+        }
+        let audioSeconds = Double(wavSamples.count) / SAMPLE_RATE
+        let segments = PauseSegmenter.segment(samples: wavSamples, sampleRate: SAMPLE_RATE)
+        print("OVERLAP REAL: \(String(format: "%.1f", audioSeconds))s audio -> \(segments.count) segment(s)")
+        guard segments.count > 1 else {
+            throw SelfTestFailure.failed("overlap-transcription-real needs a multi-segment fixture; \(wavPath) produced \(segments.count)")
+        }
+
+        let engine = try runParakeetEngineSynchronously {
+            try await OnnxAsrEngine.launch(modelDirectory: URL(fileURLWithPath: modelPath, isDirectory: true),
+                                           threadCount: TranscriptionWorker.resolvedASRThreadCount())
+        }
+        defer { _ = try? runParakeetEngineSynchronously { await engine.shutdown() } }
+
+        // --- The overlap path ---
+        let windows = OverlapWindower.addOverlap(to: segments, sampleRate: SAMPLE_RATE)
+        var perWindowWords: [[TranscribedWord]] = []
+        let overlapStarted = ProcessInfo.processInfo.systemUptime
+        for window in windows {
+            let transcription = try runParakeetEngineSynchronously {
+                try await engine.transcribeWithTokens(samples: window.samples)
+            }
+            perWindowWords.append(transcription.words)
+        }
+        let overlapSeconds = ProcessInfo.processInfo.systemUptime - overlapStarted
+
+        // Measure how tightly real words are actually spaced — this is the
+        // evidence behind `dedupAcrossSeam`'s doc comment (i.e. why Task
+        // 8's whole-list `dedupSeam` is NOT applied to the whole stream).
+        var gapsWithinTolerance = 0
+        var totalGaps = 0
+        for words in perWindowWords where words.count > 1 {
+            for i in 1..<words.count {
+                totalGaps += 1
+                if words[i].start - words[i - 1].start <= 0.24 { gapsWithinTolerance += 1 }
+            }
+        }
+        print("OVERLAP REAL: inter-word start gaps <= 0.24s: \(gapsWithinTolerance)/\(totalGaps)")
+
+        var oracles: [BoundaryOracle] = []
+        var vad: SileroVadEngine?
+        defer { vad?.shutdown() }
+        if let vadPath = ProcessInfo.processInfo.environment["LEXOMORPH_SILERO_VAD_MODEL"],
+           FileManager.default.fileExists(atPath: vadPath),
+           let loaded = try? SileroVadEngine(modelPath: vadPath) {
+            vad = loaded
+            oracles.append(VadBoundaryOracle(engine: loaded))
+            print("OVERLAP REAL: Silero VAD loaded — VAD seam placement active")
+        } else {
+            print("OVERLAP REAL: no Silero VAD model — mel-energy/midpoint seam placement (a supported production config)")
+        }
+        oracles.append(MelEnergyBoundaryOracle())
+
+        let assembled = try assembleOverlapTranscript(windows: windows, perWindowWords: perWindowWords,
+                                                      fullSamples: wavSamples, sampleRate: SAMPLE_RATE,
+                                                      boundaryOracles: oracles)
+        print("OVERLAP REAL: \(windows.count) windows, splits \(assembled.seamSplitSamples), \(assembled.droppedAtSeams) deduped, \(String(format: "%.1f", overlapSeconds))s wall clock")
+        print("OVERLAP REAL text: \(assembled.text)")
+
+        guard !assembled.text.isEmpty else {
+            throw SelfTestFailure.failed("overlap path produced an empty transcript on a real multi-segment recording")
+        }
+        // No runaway blowup: this whole feature exists to keep long
+        // dictations off the encoder's superlinear cost curve, so the
+        // overlap path must stay comfortably real-time-ish on CPU.
+        guard overlapSeconds < audioSeconds * 4 else {
+            throw SelfTestFailure.failed("overlap path took \(overlapSeconds)s for \(audioSeconds)s of audio — runaway cost")
+        }
+        // No obviously duplicated word run anywhere (the failure mode
+        // overlap+dedup exists to prevent): no 3-word sequence repeated
+        // back-to-back.
+        let allWords = assembled.text.split(separator: " ").map(String.init)
+        if allWords.count >= 6 {
+            for i in 0...(allWords.count - 6) {
+                let a = allWords[i..<(i + 3)]
+                let b = allWords[(i + 3)..<(i + 6)]
+                if a.elementsEqual(b) {
+                    throw SelfTestFailure.failed("duplicated 3-word run at index \(i): \(Array(a))")
+                }
+            }
+        }
+
+        // --- Side-by-side against the plain (v0.4.6) path -------------
+        let plainStarted = ProcessInfo.processInfo.systemUptime
+        var plainPieces: [String] = []
+        for segment in segments {
+            let result = try runParakeetEngineSynchronously { try await engine.transcribe(samples: segment.samples) }
+            if !result.text.isEmpty { plainPieces.append(result.text) }
+        }
+        let plainSeconds = ProcessInfo.processInfo.systemUptime - plainStarted
+        print("PLAIN  REAL: \(String(format: "%.1f", plainSeconds))s wall clock")
+        print("PLAIN  REAL text: \(plainPieces.joined(separator: " "))")
+    }
+
+    private static func testTokenTranscriptionDecode() throws {
+        // Test: well-formed single-clip array JSON decodes correctly
+        let wellFormedJSON = """
+        [{"text":"hello world","frame_sec":0.080000,"tokens":[{"id":123,"t":0.480,"conf":0.9100},{"id":456,"t":0.640,"conf":0.8900}]}]
+        """
+        let decoded = try decodeTokenTranscription(json: wellFormedJSON)
+        try expect(decoded.text, equals: "hello world", "decoded text should match input")
+        try expect(decoded.frameSec, equals: 0.080000, "decoded frameSec should match input")
+        try expect(decoded.tokens.count, equals: 2, "decoded tokens array should have 2 elements")
+        try expect(decoded.tokens[0].id, equals: 123, "first token id should be 123")
+        try expect(decoded.tokens[0].t, equals: 0.480, "first token timestamp should be 0.480")
+        try expect(decoded.tokens[0].conf, equals: 0.9100, "first token confidence should be 0.9100")
+        try expect(decoded.tokens[1].id, equals: 456, "second token id should be 456")
+        try expect(decoded.tokens[1].t, equals: 0.640, "second token timestamp should be 0.640")
+        try expect(decoded.tokens[1].conf, equals: 0.8900, "second token confidence should be 0.8900")
+
+        // Test: empty array throws .emptyArray
+        let emptyJSON = "[]"
+        var threwEmptyArray = false
+        do {
+            _ = try decodeTokenTranscription(json: emptyJSON)
+        } catch TokenTranscriptionDecodeError.emptyArray {
+            threwEmptyArray = true
+        }
+        try expect(threwEmptyArray, equals: true, "empty JSON array should throw .emptyArray")
+
+        // Test: malformed JSON throws .malformedJSON
+        let malformedJSON = "\"not json\""
+        var threwMalformedJSON = false
+        do {
+            _ = try decodeTokenTranscription(json: malformedJSON)
+        } catch TokenTranscriptionDecodeError.malformedJSON {
+            threwMalformedJSON = true
+        }
+        try expect(threwMalformedJSON, equals: true, "malformed JSON should throw .malformedJSON")
+
+        // Test: array with multiple elements takes the first
+        let multiElementJSON = """
+        [{"text":"first","frame_sec":0.080000,"tokens":[]},{"text":"second","frame_sec":0.080000,"tokens":[]}]
+        """
+        let decodedMulti = try decodeTokenTranscription(json: multiElementJSON)
+        try expect(decodedMulti.text, equals: "first", "when given multiple array elements, should take the first")
+    }
+
+    private static func event(
+        _ type: CGEventType,
+        keycode: CGKeyCode,
+        flags: UInt64 = 0,
+        isAutoRepeat: Bool = false
+    ) -> HotkeyEventSnapshot {
+        HotkeyEventSnapshot(
+            typeRawValue: type.rawValue,
+            keycode: keycode,
+            flagsRawValue: flags,
+            isAutoRepeat: isAutoRepeat
+        )
+    }
+
+    /// ONNX ASR wiring without a model: bundled catalog, derived manifest,
+    /// file-name safety, the experimental profile and its cache location.
+    private static func testOnnxAsr() throws {
+        guard let resources = resolvedOnnxAsrResources() else {
+            throw SelfTestFailure.failed("ONNX ASR resources not found (bundle or source tree)")
+        }
+        let entry = try loadOnnxCatalogEntry(modelID: PARAKEET_ULTRA_ONNX_MODEL_ID, catalogURL: resources.catalogURL)
+        try expect(entry.modelID, equals: PARAKEET_ULTRA_ONNX_MODEL_ID, "catalog model id")
+        try expect(entry.files.map(\.role), equals: ["decoder", "encoder", "joiner", "tokens"],
+                   "downloadable roles (bundled preprocessor excluded)")
+        try expect(entry.totalBytes, equals: PARAKEET_ULTRA_ONNX_SIZE_BYTES, "catalog byte total matches the UI constant")
+        try expect(entry.files.allSatisfy { $0.url.host == "huggingface.co" && $0.url.absoluteString.contains(entry.revision) },
+                   equals: true, "every URL is pinned to the catalog revision")
+
+        let manifestData = try onnxManifestData(for: entry)
+        guard let manifest = try JSONSerialization.jsonObject(with: manifestData) as? [String: Any],
+              let files = manifest["files"] as? [String: [String: Any]] else {
+            throw SelfTestFailure.failed("manifest is not a JSON object with files")
+        }
+        try expect(manifest["schema"] as? Int, equals: 1, "manifest schema")
+        try expect(manifest["family"] as? String, equals: "nemo_tdt", "manifest family")
+        try expect(manifest["display_name"] == nil && manifest["attribution"] == nil, equals: true,
+                   "catalog-only keys stripped")
+        try expect(files.values.contains { $0["url"] != nil }, equals: false, "download URLs stripped")
+        try expect(files["preprocessor"]?["bundled"] as? String, equals: "nemo128.onnx", "bundled preprocessor kept")
+
+        for bad in ["", ".", "..", "../x.onnx", "a/b.onnx", "/abs.onnx", ".hidden", "manifest.json", "a\\b"] {
+            try expect(isSafeOnnxModelFileName(bad), equals: false, "unsafe file name \(bad)")
+        }
+        try expect(isSafeOnnxModelFileName("encoder.int8.onnx"), equals: true, "plain file name")
+
+        let giga = try loadOnnxCatalogEntry(modelID: GIGAAM_V3_ONNX_MODEL_ID, catalogURL: resources.catalogURL)
+        try expect(giga.files.map(\.role), equals: ["decoder", "encoder", "joiner", "tokens"],
+                   "GigaAM downloadable roles (bundled preprocessor excluded)")
+        try expect(giga.totalBytes, equals: GIGAAM_V3_ONNX_SIZE_BYTES, "GigaAM catalog byte total matches the UI constant")
+        try expect(giga.files.allSatisfy { $0.url.host == "huggingface.co" && $0.url.absoluteString.contains(giga.revision) },
+                   equals: true, "every GigaAM URL is pinned to the catalog revision")
+        let gigaManifestData = try onnxManifestData(for: giga)
+        guard let gigaManifest = try JSONSerialization.jsonObject(with: gigaManifestData) as? [String: Any],
+              let gigaFiles = gigaManifest["files"] as? [String: [String: Any]] else {
+            throw SelfTestFailure.failed("GigaAM manifest is not a JSON object with files")
+        }
+        try expect(gigaManifest["family"] as? String, equals: "gigaam_rnnt", "GigaAM manifest family")
+        try expect(gigaFiles["preprocessor"]?["bundled"] as? String, equals: "gigaam_v3.onnx", "GigaAM bundled preprocessor")
+        try expect(FileManager.default.fileExists(
+                       atPath: resources.assetsDirectory.appendingPathComponent("gigaam_v3.onnx").path),
+                   equals: true, "gigaam_v3.onnx is shipped next to nemo128.onnx")
+
+        try expect(productionSpeechModelProfile(rawValue: "parakeet_ultra_onnx"), equals: .parakeetUltraOnnx,
+                   "ONNX profile persists")
+        try expect(productionSpeechModelProfile(rawValue: "gigaam_v3_onnx"), equals: .gigaamV3Onnx,
+                   "GigaAM profile persists")
+        try expect(SpeechModelProfile.productionDefault, equals: .parakeetUltraOnnx, "Parakeet Ultra stays the default")
+        try expect(SpeechModelProfile.allCases, equals: [.parakeetUltraOnnx, .gigaamV3Onnx],
+                   "only ONNX profiles (no GGUF or Whisper profile remains)")
+        try expect(SpeechModelProfile.parakeetUltraOnnx.onnxModelID, equals: PARAKEET_ULTRA_ONNX_MODEL_ID, "Parakeet model id")
+        try expect(SpeechModelProfile.gigaamV3Onnx.onnxModelID, equals: GIGAAM_V3_ONNX_MODEL_ID, "GigaAM model id")
+        try expect(SpeechModelProfile.gigaamV3Onnx.estimatedDownloadBytes, equals: GIGAAM_V3_ONNX_SIZE_BYTES,
+                   "GigaAM disk-space estimate")
+        let cacheDir = speechModelCacheDirectory(for: .parakeetUltraOnnx)
+        try expect(cacheDir.path.hasSuffix("/Lexomorph/onnx/parakeet-ultra-int8"), equals: true, "ONNX cache location")
+        try expect(isSafeSpeechModelCacheDirectory(cacheDir), equals: true, "ONNX cache is removable by cache reset")
+        let gigaCacheDir = speechModelCacheDirectory(for: .gigaamV3Onnx)
+        try expect(gigaCacheDir.path.hasSuffix("/Lexomorph/onnx/gigaam-v3-e2e-rnnt-int8"), equals: true,
+                   "GigaAM cache location")
+        try expect(isSafeSpeechModelCacheDirectory(gigaCacheDir), equals: true, "GigaAM cache is removable by cache reset")
+
+        let empty = FileManager.default.temporaryDirectory.appendingPathComponent("onnx-selftest-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: empty) }
+        try expect(onnxInstalledModelMatchesCatalog(entry, directory: empty), equals: false, "empty dir is not installed")
+        try onnxManifestData(for: entry).write(to: empty.appendingPathComponent("manifest.json"))
+        try expect(onnxInstalledModelMatchesCatalog(entry, directory: empty), equals: false,
+                   "a manifest without the files is not installed")
+    }
+
+    /// Real model through the production path: TranscriptionWorker.load
+    /// (installed-cache check + LexomorphOnnxHost), plain and token
+    /// transcription, and the multi-segment overlap path.
+    /// Needs LEXOMORPH_ONNX_TEST_WAV and the model: the profile from
+    /// LEXOMORPH_ONNX_TEST_PROFILE (default parakeet_ultra_onnx; or
+    /// gigaam_v3_onnx), installed in the app cache — or any installed model
+    /// directory given by LEXOMORPH_ONNX_TEST_MODEL_DIR (its
+    /// manifest.json must name that profile's model id).
+    private static func testOnnxAsrRealModel() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let profile = productionSpeechModelProfile(rawValue: environment["LEXOMORPH_ONNX_TEST_PROFILE"])
+        let modelDirectory = environment["LEXOMORPH_ONNX_TEST_MODEL_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        let modelPresent = modelDirectory.map { isPlainRegularFile($0.appendingPathComponent("manifest.json").path) }
+            ?? speechModelCacheExists(for: profile)
+        guard modelPresent,
+              let wavPath = environment["LEXOMORPH_ONNX_TEST_WAV"],
+              FileManager.default.fileExists(atPath: wavPath) else {
+            print("SKIP onnx-asr-real: needs the installed \(profile.shortName) model (app cache or LEXOMORPH_ONNX_TEST_MODEL_DIR) + LEXOMORPH_ONNX_TEST_WAV")
+            return
+        }
+        let (samples, rate) = try loadWavMonoFloat32(path: wavPath)
+        try expect(rate, equals: UInt32(SAMPLE_RATE), "fixture sample rate")
+        let worker = TranscriptionWorker(modelDirectoryOverride: modelDirectory)
+        defer { _ = try? runParakeetEngineSynchronously { await worker.unload() } }
+        try runParakeetEngineSynchronously { try await worker.load(profile: profile) }
+        try expect(try runParakeetEngineSynchronously { await worker.loadedProfile }, equals: Optional(profile), "ONNX profile loaded")
+        try expect(try runParakeetEngineSynchronously { await worker.loadedModelID }, equals: Optional(profile.onnxModelID),
+                   "the host loaded the profile's model")
+
+        let short = Array(samples.prefix(Int(SAMPLE_RATE * 8)))
+        let now = ProcessInfo.processInfo.systemUptime
+        let plain = try runParakeetEngineSynchronously {
+            try await worker.transcribe(samples: short, resolveViaKeyboard: false, requestedAt: now)
+        }
+        let tokens = try runParakeetEngineSynchronously {
+            try await worker.transcribeWithTokens(samples: short, requestedAt: now)
+        }
+        print("ONNX REAL plain: \(plain.text)")
+        try expect(plain.text.isEmpty, equals: false, "plain transcript")
+        try expect(tokens.transcription.text, equals: plain.text, "token path text equals plain path text")
+        try expect(tokens.transcription.frameSec, equals: profile == .gigaamV3Onnx ? 0.04 : 0.08,
+                   "encoder frame stride (TDT 0.08 s, GigaAM 0.04 s)")
+        try expect(tokens.transcription.words.isEmpty, equals: false, "word timestamps present")
+        try expect(zip(tokens.transcription.words, tokens.transcription.words.dropFirst()).allSatisfy { $0.start <= $1.start },
+                   equals: true, "word timestamps are monotonic")
+
+        let segmented = try runParakeetEngineSynchronously {
+            try await transcribeSegmented(samples: samples, worker: worker, language: nil,
+                                          resolveViaKeyboard: false, requestedAt: now)
+        }
+        let segments = PauseSegmenter.segment(samples: samples, sampleRate: SAMPLE_RATE)
+        print("ONNX REAL segmented (\(segments.count) segment(s)): \(segmented.text)")
+        try expect(segmented.text.isEmpty, equals: false, "segmented transcript")
+        try expect(segmented.hadSegmentFailure, equals: false, "no lost segment")
+    }
+
+    // MARK: Legacy (SuperDictate) -> Lexomorph migration
+
+    private final class FailingWriteTokenStore: VocabularySyncTokenStore, @unchecked Sendable {
+        func token(for account: String) -> String? { nil }
+        func setToken(_ token: String, for account: String) throws { throw VocabularySyncFailure.keychain }
+        func removeToken(for account: String) {}
+    }
+
+    private final class CountingTokenStore: VocabularySyncTokenStore, @unchecked Sendable {
+        private let inner = InMemoryVocabularySyncTokenStore()
+        private let lock = NSLock()
+        private var reads = 0
+        var readCount: Int { lock.withLock { reads } }
+        func token(for account: String) -> String? { lock.withLock { reads += 1 }; return inner.token(for: account) }
+        func setToken(_ token: String, for account: String) throws { try inner.setToken(token, for: account) }
+        func removeToken(for account: String) { inner.removeToken(for: account) }
+    }
+
+    private static func testLegacyMigration() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("lexomorph-migration-test-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        var suites: [String] = []
+        defer {
+            try? fm.removeItem(at: root)
+            for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        }
+
+        func write(_ text: String, to url: URL) throws {
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        func read(_ url: URL) -> String? { (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) } }
+        func makeConfig(_ name: String, legacyDefaults: [String: Any]?) -> (LegacyMigrationConfig, UserDefaults) {
+            let suite = "com.local.lexomorph.selftest.migration-\(UUID().uuidString)"
+            suites.append(suite)
+            let base = root.appendingPathComponent(name, isDirectory: true)
+            let defaults = UserDefaults(suiteName: suite)!
+            var config = LegacyMigrationConfig(
+                legacyDefaultsDomain: "com.local.superdictate.selftest-legacy",
+                newDefaultsDomain: suite,
+                target: defaults,
+                legacySupportDir: base.appendingPathComponent("SuperDictate", isDirectory: true),
+                newSupportDir: base.appendingPathComponent("Lexomorph", isDirectory: true),
+                lockFileURL: base.appendingPathComponent(".lexomorph-migration.lock"),
+                appVersion: "0.10.0-test"
+            )
+            config.readLegacyDefaults = { _ in legacyDefaults }
+            config.lockTimeoutSeconds = 2
+            return (config, defaults)
+        }
+
+        // 1. Full migration into an empty destination.
+        let legacyPrefix = root.appendingPathComponent("full/SuperDictate").path
+        let legacyDefaults: [String: Any] = [
+            "interface_language": "en",
+            "hotkey_keycode": 54,
+            "vocabulary_sync_email_v1": "user@example.com",
+            "active_run_marker": true,
+            "model_dir": legacyPrefix + "/Models/LLM",
+            "path_list": [legacyPrefix + "/onnx", "/somewhere/else"],
+        ]
+        let (full, fullDefaults) = makeConfig("full", legacyDefaults: legacyDefaults)
+        fullDefaults.set(99, forKey: "hotkey_keycode")   // already set in the new domain: must survive
+        try write("db", to: full.legacySupportDir.appendingPathComponent("corrections.sqlite"))
+        try write("wal", to: full.legacySupportDir.appendingPathComponent("corrections.sqlite-wal"))
+        try write("model-bytes", to: full.legacySupportDir.appendingPathComponent("Models/LLM/m.gguf"))
+        try write("{}", to: full.legacySupportDir.appendingPathComponent("onnx/parakeet/manifest.json"))
+        try write("trace", to: full.legacySupportDir.appendingPathComponent("DictationTrace.jsonl"))
+        try write("{}", to: full.legacySupportDir.appendingPathComponent("AgentStatus.json"))
+        try write("123", to: full.legacySupportDir.appendingPathComponent("ControlPanel.pid"))
+        try write("", to: full.legacySupportDir.appendingPathComponent("vocab-sync.lock"))
+        let first = LegacyMigration.run(full)
+        try expect(first.legacyFound, equals: true, "legacy data is detected")
+        try expect(first.alreadyMigrated, equals: false, "first run migrates")
+        try expect(first.defaultsCopied, equals: 4, "interface_language, email, model_dir, path_list are copied")
+        try expect(first.defaultsKept, equals: 1, "an existing new key is kept")
+        try expect(first.pathsRewritten, equals: 2, "paths into the legacy folder are rewritten")
+        try expect(fullDefaults.integer(forKey: "hotkey_keycode"), equals: 99, "existing value is not overwritten")
+        try expect(fullDefaults.string(forKey: "interface_language"), equals: "en", "language choice is carried over")
+        try expect(fullDefaults.object(forKey: "active_run_marker") == nil, equals: true, "run-state marker does not travel")
+        try expect(fullDefaults.string(forKey: "model_dir"), equals: full.newSupportDir.path + "/Models/LLM", "model_dir rewritten to the new folder")
+        try expect(fullDefaults.stringArray(forKey: "path_list") ?? [], equals: [full.newSupportDir.path + "/onnx", "/somewhere/else"], "paths inside arrays are rewritten")
+        try expect(read(full.newSupportDir.appendingPathComponent("corrections.sqlite")), equals: "db", "database cloned")
+        try expect(read(full.newSupportDir.appendingPathComponent("corrections.sqlite-wal")), equals: "wal", "wal cloned with its database")
+        try expect(read(full.newSupportDir.appendingPathComponent("Models/LLM/m.gguf")), equals: "model-bytes", "model directory cloned recursively")
+        try expect(read(full.newSupportDir.appendingPathComponent("DictationTrace.jsonl")), equals: "trace", "trace cloned")
+        for transient in ["AgentStatus.json", "ControlPanel.pid", "vocab-sync.lock"] {
+            try expect(fm.fileExists(atPath: full.newSupportDir.appendingPathComponent(transient).path), equals: false,
+                       "\(transient) is process state and is not migrated")
+        }
+        try expect(read(full.legacySupportDir.appendingPathComponent("Models/LLM/m.gguf")), equals: "model-bytes", "original model is untouched")
+        try expect(read(full.legacySupportDir.appendingPathComponent("corrections.sqlite")), equals: "db", "original database is untouched")
+        try expect(fm.fileExists(atPath: full.legacySupportDir.appendingPathComponent("AgentStatus.json").path), equals: true, "original is never deleted")
+        guard let marker = LegacyMigration.readMarker(full) else { throw SelfTestFailure.failed("migration marker is written") }
+        try expect(marker.appVersion, equals: "0.10.0-test", "marker records the version")
+        try expect(marker.migratedAt.isEmpty, equals: false, "marker records the date")
+        try expect(marker.keychain, equals: "pending", "keychain step waits for the agent")
+
+        // 2. A second run does nothing, even when the user changed things since.
+        fullDefaults.set("ru", forKey: "interface_language")
+        try fm.removeItem(at: full.newSupportDir.appendingPathComponent("DictationTrace.jsonl"))
+        let second = LegacyMigration.run(full)
+        try expect(second.alreadyMigrated, equals: true, "marker makes the second run a no-op")
+        try expect(second.defaultsCopied + second.filesCloned.count, equals: 0, "nothing is copied again")
+        try expect(fullDefaults.string(forKey: "interface_language"), equals: "ru", "later user changes are not overwritten")
+        try expect(fm.fileExists(atPath: full.newSupportDir.appendingPathComponent("DictationTrace.jsonl").path), equals: false, "removed file is not restored")
+
+        // 3. An existing destination file is never overwritten; SQLite side files follow their database.
+        let (merge, _) = makeConfig("merge", legacyDefaults: [:])
+        try write("legacy-db", to: merge.legacySupportDir.appendingPathComponent("corrections.sqlite"))
+        try write("legacy-wal", to: merge.legacySupportDir.appendingPathComponent("corrections.sqlite-wal"))
+        try write("legacy-other", to: merge.legacySupportDir.appendingPathComponent("other.txt"))
+        try write("new-db", to: merge.newSupportDir.appendingPathComponent("corrections.sqlite"))
+        let merged = LegacyMigration.run(merge)
+        try expect(read(merge.newSupportDir.appendingPathComponent("corrections.sqlite")), equals: "new-db", "existing database is kept")
+        try expect(fm.fileExists(atPath: merge.newSupportDir.appendingPathComponent("corrections.sqlite-wal").path), equals: false, "a legacy wal is not attached to a different database")
+        try expect(read(merge.newSupportDir.appendingPathComponent("other.txt")), equals: "legacy-other", "other files are merged in")
+        try expect(merged.filesSkipped.contains("corrections.sqlite"), equals: true, "skipped files are reported")
+
+        // 4. Nothing to migrate: marker still written, no notice, keychain skipped.
+        let (empty, _) = makeConfig("empty", legacyDefaults: nil)
+        let none = LegacyMigration.run(empty)
+        try expect(none.legacyFound, equals: false, "no legacy data")
+        try expect(LegacyMigration.readMarker(empty)?.keychain, equals: "skipped", "keychain skipped without legacy data")
+        try expect(LegacyMigration.consumeFirstRunNotice(empty), equals: false, "no notice for a fresh install")
+        try expect(LegacyMigration.run(empty).alreadyMigrated, equals: true, "fresh install is idempotent too")
+
+        // 5. First-run notice is consumed exactly once.
+        try expect(LegacyMigration.consumeFirstRunNotice(full), equals: true, "notice shown once")
+        try expect(LegacyMigration.consumeFirstRunNotice(full), equals: false, "notice never repeats")
+        for language in InterfaceLanguage.allCases {
+            let text = legacyMigrationNoticeText(language: language)
+            try expect(text.title.contains("Lexomorph") && text.title.contains("SuperDictate"), equals: true, "notice title names both products (\(language))")
+            try expect(text.body.contains("com.local.lexomorph"), equals: true, "notice names the new package (\(language))")
+        }
+
+        // 6. Keychain: copied once, never removed, failures are final.
+        let account = "user@example.com"
+        let legacyTokens = CountingTokenStore()
+        try legacyTokens.setToken("secret-token", for: account)
+        let newTokens = InMemoryVocabularySyncTokenStore()
+        try expect(LegacyMigration.migrateKeychain(full, legacyStore: legacyTokens, newStore: newTokens), equals: "done", "token copied")
+        try expect(newTokens.token(for: account), equals: "secret-token", "new service holds the token")
+        try expect(legacyTokens.token(for: account), equals: "secret-token", "legacy Keychain item is left in place")
+        let readsAfterFirst = legacyTokens.readCount
+        try expect(LegacyMigration.migrateKeychain(full, legacyStore: legacyTokens, newStore: newTokens), equals: "done", "second call reports the final state")
+        try expect(legacyTokens.readCount, equals: readsAfterFirst, "the legacy Keychain is not read again")
+
+        let (keep, _) = makeConfig("keychain-exists", legacyDefaults: ["vocabulary_sync_email_v1": account])
+        try write("x", to: keep.legacySupportDir.appendingPathComponent("x"))
+        LegacyMigration.run(keep)
+        let existing = InMemoryVocabularySyncTokenStore()
+        try existing.setToken("already-new", for: account)
+        try expect(LegacyMigration.migrateKeychain(keep, legacyStore: legacyTokens, newStore: existing), equals: "exists", "an existing new token is not overwritten")
+        try expect(existing.token(for: account), equals: "already-new", "existing token survives")
+
+        let (failing, _) = makeConfig("keychain-failing", legacyDefaults: ["vocabulary_sync_email_v1": account])
+        try write("x", to: failing.legacySupportDir.appendingPathComponent("x"))
+        LegacyMigration.run(failing)
+        try expect(LegacyMigration.migrateKeychain(failing, legacyStore: legacyTokens, newStore: FailingWriteTokenStore()), equals: "failed", "a Keychain error is reported, not thrown")
+        let before = legacyTokens.readCount
+        try expect(LegacyMigration.migrateKeychain(failing, legacyStore: legacyTokens, newStore: FailingWriteTokenStore()), equals: "failed", "a failure is final")
+        try expect(legacyTokens.readCount, equals: before, "no retry loop after a failure")
+
+        let (noAccount, _) = makeConfig("keychain-absent", legacyDefaults: ["hotkey_keycode": 54])
+        try write("x", to: noAccount.legacySupportDir.appendingPathComponent("x"))
+        LegacyMigration.run(noAccount)
+        try expect(LegacyMigration.migrateKeychain(noAccount, legacyStore: legacyTokens, newStore: InMemoryVocabularySyncTokenStore()), equals: "absent", "no sync account, nothing to copy")
+
+        // 7. A held migration lock never blocks startup, and nothing is written.
+        let (locked, _) = makeConfig("locked", legacyDefaults: ["interface_language": "en"])
+        try write("x", to: locked.legacySupportDir.appendingPathComponent("x"))
+        var short = locked
+        short.lockTimeoutSeconds = 0.3
+        guard let held = LegacyMigration.acquireLock(locked.lockFileURL, timeout: 1) else {
+            throw SelfTestFailure.failed("test lock acquired")
+        }
+        let timedOut = LegacyMigration.run(short)
+        LegacyMigration.releaseLock(held)
+        try expect(timedOut.lockTimedOut, equals: true, "lock timeout is reported")
+        try expect(LegacyMigration.readMarker(locked) == nil, equals: true, "no marker without the lock, so the next launch retries")
+        try expect(LegacyMigration.run(locked).defaultsCopied, equals: 1, "the retry migrates")
+
+        // 8. Path rewriting is exact about directory boundaries.
+        var count = 0
+        let rewritten = LegacyMigration.rewritePaths("/a/SuperDictate2/x", from: "/a/SuperDictate", to: "/a/Lexomorph", count: &count)
+        try expect(rewritten as? String, equals: "/a/SuperDictate2/x", "a sibling folder with the same prefix is not rewritten")
+        try expect(count, equals: 0, "no false path rewrite")
+
+        // 9. Identifiers: the legacy values live in exactly one place.
+        try expect(PRODUCTION_BUNDLE_IDENTIFIER, equals: "com.local.lexomorph", "bundle identifier")
+        try expect(APP_SUPPORT_DIR_NAME, equals: "Lexomorph", "data folder")
+        try expect(VOCABULARY_SYNC_KEYCHAIN_SERVICE, equals: "com.local.lexomorph.vocab-sync", "Keychain service")
+        try expect(INSTALLED_APP_BUNDLE_PATH, equals: "/Applications/Lexomorph.app", "installed bundle path")
+        try expect(LegacyIdentifiers.bundleIdentifier != PRODUCTION_BUNDLE_IDENTIFIER, equals: true, "legacy and new ids differ")
+    }
+
+    private static func testInterfaceLanguageDefault() throws {
+        try expect(InterfaceLanguage.systemDefault(preferredLanguages: ["ru-RU", "en-US"]), equals: .russian, "Russian system language")
+        try expect(InterfaceLanguage.systemDefault(preferredLanguages: ["ru"]), equals: .russian, "bare ru")
+        try expect(InterfaceLanguage.systemDefault(preferredLanguages: ["en-US", "ru-RU"]), equals: .english, "English first wins")
+        try expect(InterfaceLanguage.systemDefault(preferredLanguages: ["de-DE"]), equals: .english, "other languages fall back to English")
+        try expect(InterfaceLanguage.systemDefault(preferredLanguages: ["rue"]), equals: .english, "lookalike code is not Russian")
+        try expect(InterfaceLanguage.systemDefault(preferredLanguages: []), equals: .english, "English is the base language")
+
+        let suite = "com.local.lexomorph.selftest.language-default-\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let defaults = UserDefaults(suiteName: suite)!
+        let settings = Settings(defaults: defaults, vocabularyStore: VocabularyStore.inMemoryFallback())
+        try expect(settings.interfaceLanguage, equals: InterfaceLanguage.resolvedSystemDefault, "unset language follows the system")
+        settings.interfaceLanguage = .russian
+        try expect(settings.interfaceLanguage, equals: .russian, "a saved Russian choice is respected")
+        settings.interfaceLanguage = .english
+        try expect(settings.interfaceLanguage, equals: .english, "a saved English choice is respected")
+        defaults.set("xx", forKey: "interface_language")
+        try expect(settings.interfaceLanguage, equals: InterfaceLanguage.resolvedSystemDefault, "garbage falls back to the system default")
+
+        // Statistics strings have an English form.
+        try expect(formattedUsageDuration(3_725, language: .english), equals: "1 h 2 min", "English duration")
+        try expect(formattedUsageDuration(3_725, language: .russian), equals: "1 ч 2 мин", "Russian duration")
+        try expect(formattedUsageSeconds(1.5, language: .english), equals: "1.50 s", "English seconds")
+        try expect(compactUsageInteger(2_500, language: .english), equals: "2.5k", "English compact number")
+        try expect(compactUsageInteger(2_500), equals: "2,5к", "Russian compact number")
+    }
+
+    private static func expect<T: Equatable>(
+        _ actual: T,
+        equals expected: T,
+        _ message: String
+    ) throws {
+        guard actual == expected else {
+            throw SelfTestFailure.failed("\(message): got \(actual), expected \(expected)")
+        }
+    }
+}
+
+
+/// A thread-safe counter for callbacks that may fire on any thread.
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func increment() { lock.withLock { count += 1 } }
+}
+
+#endif
