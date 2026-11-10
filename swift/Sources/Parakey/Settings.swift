@@ -130,6 +130,10 @@ final class Settings: @unchecked Sendable {
     private static let keyPunctuationModel = "punctuation_model_v1"
     private static let keyRewriteStyle = "rewrite_style_v1"
     private static let keyCustomRewriteStyles = "rewrite_custom_styles_v1"
+    private static let keyCustomRewriteStyleTombstones = "rewrite_custom_style_tombstones_v1"
+    private static let keyUsageDeviceID = "usage_sync_device_id_v1"
+    private static let keyUsageSyncLastSent = "usage_sync_last_sent_v1"
+    private static let keyRemoteDailyUsage = "remote_daily_usage_v1"
     private static let keyRewriteBundledModel = "rewrite_bundled_model_v1"
     private static let keyRewriteBundledModelV2 = "rewrite_bundled_model_v2"
     private static let keyCorrectionSystemPrompt = "correction_system_prompt_v1"
@@ -142,6 +146,8 @@ final class Settings: @unchecked Sendable {
     private static let keyRewriteCustomModelName = "rewrite_custom_model_name_v1"
 
     private let defaults: UserDefaults
+    private var styleChangeHandler: (@Sendable () -> Void)?
+    private let styleChangeLock = NSLock()
     let vocabularyStore: VocabularyStore
 
     static let shared = Settings()
@@ -1232,16 +1238,217 @@ final class Settings: @unchecked Sendable {
         setRewriteSystemPromptOverride(value, forStyleID: style.rawValue)
     }
 
-    /// User-created rewrite modes (docs/specs/custom-rewrite-styles-spec.md).
-    var customRewriteStyles: [CustomRewriteStyle] {
+    /// Called after a LOCAL edit of the custom styles (never after
+    /// `applyRemoteCustomStyles`), to start an account sync.
+    var onCustomStylesLocalChange: (@Sendable () -> Void)? {
+        get { styleChangeLock.withLock { styleChangeHandler } }
+        set { styleChangeLock.withLock { styleChangeHandler = newValue } }
+    }
+
+    static let epochStamp = "1970-01-01T00:00:00Z"
+
+    private func storedCustomRewriteStyles() -> [CustomRewriteStyle] {
+        guard let data = defaults.data(forKey: Self.keyCustomRewriteStyles) else { return [] }
+        return (try? JSONDecoder().decode([CustomRewriteStyle].self, from: data)) ?? []
+    }
+
+    private func writeCustomRewriteStyles(_ styles: [CustomRewriteStyle]) {
+        defaults.set(try? JSONEncoder().encode(styles), forKey: Self.keyCustomRewriteStyles)
+    }
+
+    /// Locally deleted custom styles, newest last (docs/specs/modes-and-usage-sync-spec.md §4).
+    var customRewriteStyleTombstones: [CustomRewriteStyleTombstone] {
         get {
-            guard let data = defaults.data(forKey: Self.keyCustomRewriteStyles) else { return [] }
-            return (try? JSONDecoder().decode([CustomRewriteStyle].self, from: data)) ?? []
+            guard let data = defaults.data(forKey: Self.keyCustomRewriteStyleTombstones) else { return [] }
+            return (try? JSONDecoder().decode([CustomRewriteStyleTombstone].self, from: data)) ?? []
         }
         set {
-            defaults.set(try? JSONEncoder().encode(newValue),
-                         forKey: Self.keyCustomRewriteStyles)
+            let capped = Array(newValue.sorted { $0.deletedAt < $1.deletedAt }.suffix(1000))
+            defaults.set(try? JSONEncoder().encode(capped), forKey: Self.keyCustomRewriteStyleTombstones)
         }
+    }
+
+    /// User-created rewrite modes (docs/specs/custom-rewrite-styles-spec.md).
+    /// The setter is the LOCAL edit path: it stamps `updatedAt` on every new
+    /// or content-changed style, writes a tombstone for every removed one
+    /// and starts a sync. A hotkey-only change stays local (no stamp).
+    var customRewriteStyles: [CustomRewriteStyle] {
+        get { storedCustomRewriteStyles() }
+        set {
+            let old = storedCustomRewriteStyles()
+            let oldByID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let now = VocabularyStore.timestamp()
+            var changed = false
+            var tombstones = customRewriteStyleTombstones
+            var next = newValue
+            for index in next.indices {
+                let id = next[index].id
+                if let previous = oldByID[id] {
+                    if previous.name != next[index].name || previous.colorHex != next[index].colorHex
+                        || previous.instruction != next[index].instruction {
+                        next[index].updatedAt = now
+                        changed = true
+                    } else {
+                        next[index].updatedAt = previous.updatedAt
+                    }
+                } else {
+                    next[index].updatedAt = now
+                    changed = true
+                }
+                tombstones.removeAll { $0.id == id }
+            }
+            let keptIDs = Set(next.map(\.id))
+            for removed in old where !keptIDs.contains(removed.id) {
+                tombstones.removeAll { $0.id == removed.id }
+                tombstones.append(CustomRewriteStyleTombstone(id: removed.id, deletedAt: now))
+                changed = true
+            }
+            writeCustomRewriteStyles(next)
+            customRewriteStyleTombstones = tombstones
+            if changed { onCustomStylesLocalChange?() }
+        }
+    }
+
+    /// Styles and tombstones edited at or after `stamp` (empty = all); styles
+    /// that predate sync carry the epoch stamp, so they go out on a full push.
+    func customStyleSyncChanges(since stamp: String) -> (styles: [CustomRewriteStyle], tombstones: [CustomRewriteStyleTombstone]) {
+        let styles = storedCustomRewriteStyles().filter { ($0.updatedAt ?? Self.epochStamp) >= stamp }
+        let tombstones = customRewriteStyleTombstones.filter { $0.deletedAt >= stamp }
+        return (styles, tombstones)
+    }
+
+    /// Applies server styles by last-writer-wins on `updated_at` (a tie keeps
+    /// the local copy). Hotkeys and the active mode stay local; a style
+    /// deleted elsewhere while active drops the selection to polish. Does
+    /// not call `onCustomStylesLocalChange`. Returns how many styles changed.
+    @discardableResult
+    func applyRemoteCustomStyles(_ entries: [CustomStyleRemoteEntry]) -> Int {
+        guard !entries.isEmpty else { return 0 }
+        var styles = storedCustomRewriteStyles()
+        var tombstones = customRewriteStyleTombstones
+        var changed = 0
+        for entry in entries where !entry.id.isEmpty && entry.id.count <= 64 && !entry.updatedAt.isEmpty {
+            let index = styles.firstIndex { $0.id == entry.id }
+            let tombstoneAt = tombstones.first { $0.id == entry.id }?.deletedAt
+            if entry.deleted {
+                if let index {
+                    guard entry.updatedAt > (styles[index].updatedAt ?? Self.epochStamp) else { continue }
+                    styles.remove(at: index)
+                    changed += 1
+                    if rewriteStyleID == entry.id { rewriteStyleID = RewriteStyle.polish.rawValue }
+                }
+                // An older stamp never replaces a newer tombstone.
+                if (tombstoneAt ?? "") < entry.updatedAt {
+                    tombstones.removeAll { $0.id == entry.id }
+                    tombstones.append(CustomRewriteStyleTombstone(id: entry.id, deletedAt: entry.updatedAt))
+                }
+                continue
+            }
+            let name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { continue }
+            let color = Self.isValidStyleColor(entry.color) ? entry.color : "#0A84FF"
+            if let index {
+                guard entry.updatedAt > (styles[index].updatedAt ?? Self.epochStamp) else { continue }
+                styles[index].name = String(name.prefix(40))
+                styles[index].colorHex = color
+                styles[index].instruction = entry.instruction
+                styles[index].updatedAt = entry.updatedAt
+            } else {
+                if let tombstoneAt, tombstoneAt >= entry.updatedAt { continue }
+                styles.append(CustomRewriteStyle(id: entry.id, name: String(name.prefix(40)), colorHex: color,
+                                                 instruction: entry.instruction, hotkeyKeycode: 0,
+                                                 hotkeyModifiers: 0, updatedAt: entry.updatedAt))
+                tombstones.removeAll { $0.id == entry.id }
+            }
+            changed += 1
+        }
+        guard changed > 0 || tombstones != customRewriteStyleTombstones else { return 0 }
+        writeCustomRewriteStyles(styles)
+        customRewriteStyleTombstones = tombstones
+        return changed
+    }
+
+    private static func isValidStyleColor(_ value: String) -> Bool {
+        guard value.count == 7, value.hasPrefix("#") else { return false }
+        return value.dropFirst().allSatisfy { $0.isHexDigit }
+    }
+
+    // MARK: Usage sync (docs/specs/modes-and-usage-sync-spec.md §3.2)
+
+    /// Random id of this device in the account's usage rows; created on first use.
+    var usageSyncDeviceID: String {
+        if let existing = defaults.string(forKey: Self.keyUsageDeviceID), !existing.isEmpty { return existing }
+        let created = UUID().uuidString.lowercased()
+        defaults.set(created, forKey: Self.keyUsageDeviceID)
+        return created
+    }
+
+    /// What the server confirmed from this device's own counter.
+    var usageSyncLastSent: [DailyDictationUsage] {
+        get {
+            guard let data = defaults.data(forKey: Self.keyUsageSyncLastSent) else { return [] }
+            return (try? JSONDecoder().decode([DailyDictationUsage].self, from: data)) ?? []
+        }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: Self.keyUsageSyncLastSent)
+            } else {
+                defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.keyUsageSyncLastSent)
+            }
+        }
+    }
+
+    /// Rows of OTHER devices of the account, kept apart from the local
+    /// counter so the sum never counts a day twice.
+    var remoteDailyUsage: [DeviceDictationUsage] {
+        get {
+            guard let data = defaults.data(forKey: Self.keyRemoteDailyUsage) else { return [] }
+            return (try? JSONDecoder().decode([DeviceDictationUsage].self, from: data)) ?? []
+        }
+        set {
+            if newValue.isEmpty {
+                defaults.removeObject(forKey: Self.keyRemoteDailyUsage)
+            } else {
+                defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.keyRemoteDailyUsage)
+            }
+        }
+    }
+
+    /// Stores other devices' rows by last-writer-wins on `updated_at` (a tie
+    /// takes the server's row); this device's own rows are ignored — the
+    /// local counter is authoritative for them. Returns how many changed.
+    @discardableResult
+    func applyRemoteUsage(_ rows: [DeviceDictationUsage]) -> Int {
+        guard !rows.isEmpty else { return 0 }
+        let own = usageSyncDeviceID
+        var byKey: [String: DeviceDictationUsage] = [:]
+        for row in remoteDailyUsage { byKey["\(row.device)|\(row.day)"] = row }
+        var changed = 0
+        for row in rows where row.device != own && !row.device.isEmpty && !row.day.isEmpty {
+            let key = "\(row.device)|\(row.day)"
+            if let existing = byKey[key] {
+                guard row.updatedAt >= existing.updatedAt, row != existing else { continue }
+            }
+            byKey[key] = row
+            changed += 1
+        }
+        guard changed > 0 else { return 0 }
+        remoteDailyUsage = Array(byKey.values.sorted { ($0.day, $0.device) < ($1.day, $1.device) })
+        return changed
+    }
+
+    /// The statistics shown in the UI: this device's counter plus the other
+    /// devices' rows while account sync is on.
+    var combinedDailyDictationUsage: [DailyDictationUsage] {
+        let local = dailyDictationUsage
+        guard vocabularySyncEnabled else { return local }
+        return combinedDictationUsage(local: local, remote: remoteDailyUsage)
+    }
+
+    /// Forgets everything that belongs to the previous account.
+    func resetUsageSyncState() {
+        usageSyncLastSent = []
+        remoteDailyUsage = []
     }
 
     /// Active rewrite style as a unified string id: built-in raw values

@@ -133,20 +133,66 @@ struct VocabularySyncHotwordEntry: Codable, Equatable, Sendable {
     }
 }
 
+/// A custom rewrite style on the wire (`styles` collection; modes-and-usage-sync
+/// spec §3.1). Hotkeys and the active mode never travel.
+struct VocabularySyncStyleEntry: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let color: String
+    let instruction: String
+    let deleted: Bool
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, color, instruction, deleted
+        case updatedAt = "updated_at"
+    }
+}
+
+/// One (day, device) usage row on the wire (`usage` collection; spec §3.2).
+/// `words` and `asr_seconds` are optional: the other platform may not count them.
+struct VocabularySyncUsageEntry: Codable, Equatable, Sendable {
+    let day: String
+    let device: String
+    let dictations: Int
+    let characters: Int
+    let words: Int?
+    let audioSeconds: Double
+    let asrSeconds: Double?
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case day, device, dictations, characters, words
+        case audioSeconds = "audio_seconds"
+        case asrSeconds = "asr_seconds"
+        case updatedAt = "updated_at"
+    }
+}
+
 struct VocabularySyncResponse: Codable, Sendable {
     let revision: Int
     let entries: [VocabularySyncWireEntry]
     /// Absent in answers from a server that predates custom hotwords.
     let hotwords: [VocabularySyncHotwordEntry]
+    let styles: [VocabularySyncStyleEntry]
+    let usage: [VocabularySyncUsageEntry]
     /// False when the answer has no `hotwords` field: that server dropped
     /// the hotwords it was sent, so they must be pushed again later.
     let serverStoresHotwords: Bool
+    /// Same for `styles` and `usage` (servers before the modes/usage sync).
+    let serverStoresStyles: Bool
+    let serverStoresUsage: Bool
 
-    init(revision: Int, entries: [VocabularySyncWireEntry], hotwords: [VocabularySyncHotwordEntry] = []) {
+    init(revision: Int, entries: [VocabularySyncWireEntry], hotwords: [VocabularySyncHotwordEntry] = [],
+         styles: [VocabularySyncStyleEntry] = [], usage: [VocabularySyncUsageEntry] = []) {
         self.revision = revision
         self.entries = entries
         self.hotwords = hotwords
+        self.styles = styles
+        self.usage = usage
         serverStoresHotwords = true
+        serverStoresStyles = true
+        serverStoresUsage = true
     }
 
     init(from decoder: Decoder) throws {
@@ -156,9 +202,15 @@ struct VocabularySyncResponse: Codable, Sendable {
         let decoded = try container.decodeIfPresent([VocabularySyncHotwordEntry].self, forKey: .hotwords)
         hotwords = decoded ?? []
         serverStoresHotwords = decoded != nil
+        let decodedStyles = try container.decodeIfPresent([VocabularySyncStyleEntry].self, forKey: .styles)
+        styles = decodedStyles ?? []
+        serverStoresStyles = decodedStyles != nil
+        let decodedUsage = try container.decodeIfPresent([VocabularySyncUsageEntry].self, forKey: .usage)
+        usage = decodedUsage ?? []
+        serverStoresUsage = decodedUsage != nil
     }
 
-    enum CodingKeys: String, CodingKey { case revision, entries, hotwords }
+    enum CodingKeys: String, CodingKey { case revision, entries, hotwords, styles, usage }
 }
 
 struct VocabularySyncAuthResult: Codable, Sendable {
@@ -177,6 +229,8 @@ struct VocabularySyncClient: Sendable {
         let since: Int
         let changes: [VocabularySyncWireEntry]
         let hotwords: [VocabularySyncHotwordEntry]
+        let styles: [VocabularySyncStyleEntry]
+        let usage: [VocabularySyncUsageEntry]
         let client: ClientInfo
     }
 
@@ -260,9 +314,11 @@ struct VocabularySyncClient: Sendable {
     }
 
     func push(token: String, since: Int, changes: [VocabularySyncWireEntry],
-              hotwords: [VocabularySyncHotwordEntry] = []) async throws -> VocabularySyncResponse {
+              hotwords: [VocabularySyncHotwordEntry] = [],
+              styles: [VocabularySyncStyleEntry] = [],
+              usage: [VocabularySyncUsageEntry] = []) async throws -> VocabularySyncResponse {
         let body = try JSONEncoder().encode(PushRequest(since: since, changes: changes, hotwords: hotwords,
-                                                        client: Self.clientInfo))
+                                                        styles: styles, usage: usage, client: Self.clientInfo))
         return try decodeSync(try await send(jsonRequest("v1/vocabulary", method: "POST", token: token, body: body)))
     }
 
@@ -377,6 +433,9 @@ actor VocabularySyncEngine {
         settings.vocabularySyncLastPushedLocalStamp = ""
         settings.vocabularySyncLastSyncAt = nil
         settings.vocabularySyncLastError = nil
+        // A new sign-in re-pulls everything from revision 0 and re-sends this
+        // device's usage rows (the account may be a different one).
+        settings.resetUsageSyncState()
         log("vocabulary sync: signed in as \(auth.email)\(auth.created ? " (new account)" : "")")
         return auth.created
     }
@@ -394,6 +453,7 @@ actor VocabularySyncEngine {
         settings.vocabularySyncLastPushedLocalStamp = ""
         settings.vocabularySyncLastSyncAt = nil
         settings.vocabularySyncLastError = nil
+        settings.resetUsageSyncState()
         log("vocabulary sync: signed out")
     }
 
@@ -482,9 +542,38 @@ actor VocabularySyncEngine {
             newestPushed = max(newestPushed, tombstone.deletedAt)
         }
 
+        // Custom rewrite styles share the cursor stamp as well.
+        let localStyles = settings.customStyleSyncChanges(since: cursorStamp)
+        var styleChanges: [VocabularySyncStyleEntry] = []
+        for style in localStyles.styles {
+            guard let name = Self.wireStyleName(style.name), Self.isWireColor(style.colorHex),
+                  style.instruction.unicodeScalars.count <= Self.maxStyleInstructionLength else {
+                log("vocabulary sync: style id=\(style.id) not pushed (invalid name, color or instruction)")
+                continue
+            }
+            let stamp = style.updatedAt ?? Settings.epochStamp
+            styleChanges.append(VocabularySyncStyleEntry(id: style.id, name: name, color: style.colorHex,
+                                                         instruction: style.instruction, deleted: false,
+                                                         updatedAt: stamp))
+            newestPushed = max(newestPushed, stamp)
+        }
+        for tombstone in localStyles.tombstones {
+            styleChanges.append(VocabularySyncStyleEntry(id: tombstone.id, name: "", color: "#000000",
+                                                         instruction: "", deleted: true, updatedAt: tombstone.deletedAt))
+            newestPushed = max(newestPushed, tombstone.deletedAt)
+        }
+
+        // Usage: this device's rows as absolute per-day values. Only days that
+        // differ from what the server last confirmed are sent; the cursor is
+        // not involved (idempotent, no conflicts between devices).
+        let localUsage = settings.dailyDictationUsage
+        let usageChanges = Self.usageChanges(local: localUsage,
+                                             lastSent: settings.usageSyncLastSent,
+                                             device: settings.usageSyncDeviceID, stamp: passStart)
+
         var summary = VocabularySyncPassSummary()
         var since = settings.vocabularySyncLastServerRevision
-        if changes.isEmpty && hotwordChanges.isEmpty {
+        if changes.isEmpty && hotwordChanges.isEmpty && styleChanges.isEmpty && usageChanges.isEmpty {
             let response = try await client.pull(token: token, since: since)
             summary.applied += try apply(response)
             since = response.revision
@@ -492,30 +581,48 @@ actor VocabularySyncEngine {
         } else {
             var start = 0
             var hotwordStart = 0
+            var styleStart = 0
+            var usageStart = 0
             var hotwordsDropped = false
-            while start < changes.count || hotwordStart < hotwordChanges.count {
+            var stylesDropped = false
+            var usageDropped = false
+            while start < changes.count || hotwordStart < hotwordChanges.count
+                    || styleStart < styleChanges.count || usageStart < usageChanges.count {
                 let batch = Array(changes[start..<min(start + Self.maxChangesPerPush, changes.count)])
                 let hotwordBatch = Array(hotwordChanges[hotwordStart..<min(hotwordStart + Self.maxChangesPerPush,
                                                                            hotwordChanges.count)])
+                let styleBatch = Array(styleChanges[styleStart..<min(styleStart + Self.maxChangesPerPush,
+                                                                     styleChanges.count)])
+                let usageBatch = Array(usageChanges[usageStart..<min(usageStart + Self.maxChangesPerPush,
+                                                                     usageChanges.count)])
                 let response = try await client.push(token: token, since: since, changes: batch,
-                                                     hotwords: hotwordBatch)
+                                                     hotwords: hotwordBatch, styles: styleBatch, usage: usageBatch)
                 summary.applied += try apply(response)
-                summary.pushed += batch.count + hotwordBatch.count
+                summary.pushed += batch.count + hotwordBatch.count + styleBatch.count + usageBatch.count
                 if !hotwordBatch.isEmpty && !response.serverStoresHotwords { hotwordsDropped = true }
+                if !styleBatch.isEmpty && !response.serverStoresStyles { stylesDropped = true }
+                if !usageBatch.isEmpty && !response.serverStoresUsage { usageDropped = true }
                 since = response.revision
                 settings.vocabularySyncLastServerRevision = since
                 start += batch.count
                 hotwordStart += hotwordBatch.count
+                styleStart += styleBatch.count
+                usageStart += usageBatch.count
             }
             // Never ahead of this device's own clock: a remote stamp from a
             // device whose clock runs fast must not hide later local edits.
-            // An old server ignored the hotwords: keep the cursor so they go
-            // out again once it is upgraded (re-pushed corrections tie and
-            // change nothing there).
-            if hotwordsDropped {
-                log("vocabulary sync: the server does not store hotwords yet; will push them again")
+            // An old server ignored the hotwords or styles: keep the cursor so
+            // they go out again once it is upgraded (re-pushed corrections
+            // tie and change nothing there).
+            if hotwordsDropped || stylesDropped {
+                log("vocabulary sync: the server does not store hotwords or styles yet; will push them again")
             } else {
                 settings.vocabularySyncLastPushedLocalStamp = min(newestPushed, passStart)
+            }
+            if usageDropped {
+                log("vocabulary sync: the server does not store usage yet; will push it again")
+            } else if !usageChanges.isEmpty {
+                settings.usageSyncLastSent = localUsage
             }
         }
         log("vocabulary sync: pass done — pushed \(summary.pushed), applied \(summary.applied), revision \(since)")
@@ -532,11 +639,52 @@ actor VocabularySyncEngine {
             HotwordRemoteEntry(phrase: entry.phrase, enabled: entry.enabled, deleted: entry.deleted,
                                updatedAt: entry.updatedAt)
         }
+        let styles = response.styles.map { entry in
+            CustomStyleRemoteEntry(id: entry.id, name: entry.name, color: entry.color,
+                                   instruction: entry.instruction, deleted: entry.deleted, updatedAt: entry.updatedAt)
+        }
+        let usage = response.usage.map { entry in
+            DeviceDictationUsage(day: entry.day, device: entry.device, dictationCount: max(0, entry.dictations),
+                                 characterCount: max(0, entry.characters), wordCount: max(0, entry.words ?? 0),
+                                 audioSeconds: max(0, entry.audioSeconds.isFinite ? entry.audioSeconds : 0),
+                                 asrSeconds: max(0, (entry.asrSeconds ?? 0).isFinite ? (entry.asrSeconds ?? 0) : 0),
+                                 updatedAt: entry.updatedAt)
+        }
         do {
             return try store.applyRemote(entries) + store.applyRemoteHotwords(hotwords)
+                + settings.applyRemoteCustomStyles(styles) + settings.applyRemoteUsage(usage)
         } catch {
             log("vocabulary sync: applying server entries failed: \(error)")
             throw VocabularySyncFailure.busy
+        }
+    }
+
+    static let maxStyleNameLength = 40
+    static let maxStyleInstructionLength = 4000
+    static let maxUsageDays = 400
+
+    static func wireStyleName(_ text: String) -> String? {
+        let cleaned = text.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned.unicodeScalars.count <= maxStyleNameLength else { return nil }
+        return cleaned
+    }
+
+    static func isWireColor(_ value: String) -> Bool {
+        value.count == 7 && value.hasPrefix("#") && value.dropFirst().allSatisfy { $0.isHexDigit }
+    }
+
+    /// This device's usage rows (last 400 days) that differ from `lastSent`,
+    /// as absolute values; days with no activity are skipped.
+    static func usageChanges(local: [DailyDictationUsage], lastSent: [DailyDictationUsage],
+                             device: String, stamp: String) -> [VocabularySyncUsageEntry] {
+        let sent = Dictionary(lastSent.map { ($0.day, $0) }, uniquingKeysWith: { first, _ in first })
+        return local.suffix(maxUsageDays).compactMap { day in
+            guard day.dictationCount > 0 || day.characterCount > 0 || day.audioSeconds > 0 else { return nil }
+            if sent[day.day] == day { return nil }
+            return VocabularySyncUsageEntry(day: day.day, device: device, dictations: day.dictationCount,
+                                            characters: day.characterCount, words: 0,
+                                            audioSeconds: day.audioSeconds, asrSeconds: day.asrSeconds,
+                                            updatedAt: stamp)
         }
     }
 
@@ -590,6 +738,9 @@ final class VocabularySyncCoordinator {
         started = true
         let pid = Int(ProcessInfo.processInfo.processIdentifier)
         settings.vocabularyStore.onLocalChange = { [weak self] in
+            Task { @MainActor in self?.localChangeHappened() }
+        }
+        settings.onCustomStylesLocalChange = { [weak self] in
             Task { @MainActor in self?.localChangeHappened() }
         }
         DistributedNotificationCenter.default().addObserver(

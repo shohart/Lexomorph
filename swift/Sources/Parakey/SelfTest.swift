@@ -79,6 +79,8 @@ enum ParakeySelfTest {
             return runSuite("asr-hotwords", testAsrHotwords)
         case "hotword-sync":
             return runSuite("hotword-sync", testHotwordSync)
+        case "sync-modes-usage":
+            return runSuite("sync-modes-usage", testSyncModesAndUsage)
         case "vocabulary-hygiene":
             return runSuite("vocabulary-hygiene", testVocabularyHygiene)
         case "vocabulary-cleanup-dry-run":
@@ -276,6 +278,7 @@ enum ParakeySelfTest {
         try testVocabularyStore()
         try testAsrHotwords()
         try testHotwordSync()
+        try testSyncModesAndUsage()
         try testHotwordWindow()
         try testDictationTrace()
         try testVocabularyHygiene()
@@ -4484,6 +4487,169 @@ enum ParakeySelfTest {
         if let phrase = env["SD_CROSS_ADD"] { _ = try store.addHotwordPhrase(phrase) }
         _ = try runParakeetEngineSynchronously { try await engine.runPass() }
         for record in store.hotwordPhrases() { print("TERM \(record.phrase) enabled=\(record.enabled)") }
+    }
+
+    /// Rewrite styles and usage statistics in the account sync
+    /// (docs/specs/modes-and-usage-sync-spec.md): store level and wire level,
+    /// no server needed.
+    private static func testSyncModesAndUsage() throws {
+        func makeSettings() -> (Settings, () -> Void) {
+            let suite = "com.local.superdictate.selftest.sync-modes-\(UUID().uuidString)"
+            let settings = Settings(defaults: UserDefaults(suiteName: suite)!, vocabularyStore: .inMemoryFallback())
+            return (settings, { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) })
+        }
+        func style(_ id: String, _ name: String, hotkey: Int = 0) -> CustomRewriteStyle {
+            CustomRewriteStyle(id: id, name: name, colorHex: "#FF8800", instruction: "Пиши кратко",
+                               hotkeyKeycode: hotkey, hotkeyModifiers: 0)
+        }
+
+        // Local edits stamp updated_at, tombstone deletions, and notify.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            let notified = LockedCounter()
+            settings.onCustomStylesLocalChange = { notified.increment() }
+            settings.customRewriteStyles = [style("c-1", "Деловой", hotkey: 12)]
+            let created = settings.customRewriteStyles
+            try expect(created.first?.updatedAt != nil, equals: true, "a new style is stamped")
+            try expect(notified.value, equals: 1, "a new style starts a sync")
+
+            var hotkeyOnly = created
+            hotkeyOnly[0].hotkeyKeycode = 40
+            settings.customRewriteStyles = hotkeyOnly
+            try expect(settings.customRewriteStyles.first?.updatedAt, equals: created.first?.updatedAt,
+                       "a hotkey change keeps the stamp")
+            try expect(notified.value, equals: 1, "a hotkey change does not start a sync")
+
+            var renamed = settings.customRewriteStyles
+            renamed[0].name = "Деловой 2"
+            settings.customRewriteStyles = renamed
+            try expect(notified.value, equals: 2, "a rename starts a sync")
+            let changes = settings.customStyleSyncChanges(since: "")
+            try expect(changes.styles.map(\.name), equals: ["Деловой 2"], "the style is in the push set")
+            try expect(settings.customStyleSyncChanges(since: "9999-01-01T00:00:00Z").styles.isEmpty, equals: true,
+                       "a style older than the cursor is not pushed")
+
+            settings.customRewriteStyles = []
+            try expect(settings.customRewriteStyleTombstones.map(\.id), equals: ["c-1"], "a deletion leaves a tombstone")
+            try expect(notified.value, equals: 3, "a deletion starts a sync")
+            try expect(settings.customStyleSyncChanges(since: "").tombstones.count, equals: 1, "the tombstone is pushed")
+        }
+
+        // Remote styles: LWW, tombstones, local hotkey and active mode, no local-change callback.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            let notified = LockedCounter()
+            settings.onCustomStylesLocalChange = { notified.increment() }
+            func remote(_ id: String, _ name: String, deleted: Bool = false, at stamp: String) -> CustomStyleRemoteEntry {
+                CustomStyleRemoteEntry(id: id, name: name, color: "#00AAFF", instruction: "remote",
+                                       deleted: deleted, updatedAt: stamp)
+            }
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Чужой", at: "2026-11-10T10:00:00Z")]), equals: 1,
+                       "a remote style is added")
+            try expect(notified.value, equals: 0, "applying a remote style is not a local change")
+            try expect(settings.customRewriteStyles.first?.updatedAt, equals: "2026-11-10T10:00:00Z",
+                       "the remote stamp is kept (nothing to push back)")
+            try expect(settings.customStyleSyncChanges(since: "2026-11-10T10:00:01Z").styles.isEmpty, equals: true,
+                       "an applied style is not pushed again")
+
+            var local = settings.customRewriteStyles
+            local[0].hotkeyKeycode = 99
+            settings.customRewriteStyles = local
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Старый", at: "2026-11-10T09:00:00Z")]), equals: 0,
+                       "an older remote edit loses")
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Новый", at: "2026-11-10T11:00:00Z")]), equals: 1,
+                       "a newer remote edit wins")
+            try expect(settings.customRewriteStyles.first?.name, equals: "Новый", "the name is replaced")
+            try expect(settings.customRewriteStyles.first?.hotkeyKeycode, equals: 99, "the hotkey stays local")
+
+            settings.rewriteStyleID = "c-a"
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "", deleted: true, at: "2026-11-10T12:00:00Z")]),
+                       equals: 1, "a remote deletion removes the style")
+            try expect(settings.customRewriteStyles.isEmpty, equals: true, "the style is gone")
+            try expect(settings.rewriteStyleID, equals: RewriteStyle.polish.rawValue,
+                       "deleting the active style falls back to polish")
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Воскрес", at: "2026-11-10T11:30:00Z")]), equals: 0,
+                       "an older edit does not resurrect a deleted style")
+            try expect(settings.applyRemoteCustomStyles([remote("c-a", "Воскрес", at: "2026-11-10T13:00:00Z")]), equals: 1,
+                       "a newer edit recreates it")
+            try expect(notified.value, equals: 0, "no remote application started a sync")
+        }
+
+        // Usage: absolute rows of this device, others kept apart, summed without double counting.
+        do {
+            let (settings, cleanUp) = makeSettings()
+            defer { cleanUp() }
+            settings.vocabularySyncEnabled = true
+            let device = settings.usageSyncDeviceID
+            try expect(settings.usageSyncDeviceID, equals: device, "the device id is stable")
+            settings.dailyDictationUsage = [
+                DailyDictationUsage(day: "2026-11-09", dictationCount: 3, characterCount: 300, audioSeconds: 30, asrSeconds: 3),
+                DailyDictationUsage(day: "2026-11-10", dictationCount: 2, characterCount: 100, audioSeconds: 10, asrSeconds: 1),
+            ]
+            var rows = VocabularySyncEngine.usageChanges(local: settings.dailyDictationUsage, lastSent: [],
+                                                         device: device, stamp: "2026-11-10T12:00:00Z")
+            try expect(rows.count, equals: 2, "every local day goes out on the first push")
+            try expect(rows.first?.dictations, equals: 3, "values are absolute")
+            try expect(rows.first?.device, equals: device, "rows carry this device's id")
+            let sent = settings.dailyDictationUsage
+            try expect(VocabularySyncEngine.usageChanges(local: sent, lastSent: sent, device: device, stamp: "x").isEmpty,
+                       equals: true, "a repeated pass sends nothing")
+            var grown = sent
+            grown[1].add(dictations: 1, characters: 50, audio: 5, asr: 0.5)
+            rows = VocabularySyncEngine.usageChanges(local: grown, lastSent: sent, device: device, stamp: "x")
+            try expect(rows.map(\.dictations), equals: [3], "only the changed day goes out, as a total")
+
+            let other = DeviceDictationUsage(day: "2026-11-10", device: "dev-b", dictationCount: 4, characterCount: 400,
+                                             wordCount: 60, audioSeconds: 40, asrSeconds: 4, updatedAt: "2026-11-10T11:00:00Z")
+            let echo = DeviceDictationUsage(day: "2026-11-10", device: device, dictationCount: 2, characterCount: 100,
+                                            wordCount: 0, audioSeconds: 10, asrSeconds: 1, updatedAt: "2026-11-10T11:00:00Z")
+            try expect(settings.applyRemoteUsage([other, echo]), equals: 1, "this device's own echo is ignored")
+            try expect(settings.applyRemoteUsage([other]), equals: 0, "the same row again changes nothing")
+            var newer = other
+            newer.dictationCount = 7
+            newer.updatedAt = "2026-11-10T12:00:00Z"
+            try expect(settings.applyRemoteUsage([newer]), equals: 1, "a newer row of the same device replaces it")
+            let combined = settings.combinedDailyDictationUsage
+            try expect(combined.first { $0.day == "2026-11-10" }?.dictationCount, equals: 9,
+                       "the shown statistic sums the devices (2 local + 7 remote)")
+            try expect(combined.first { $0.day == "2026-11-09" }?.dictationCount, equals: 3, "local-only days stay")
+            try expect(settings.dailyDictationUsage.first { $0.day == "2026-11-10" }?.dictationCount, equals: 2,
+                       "the local counter is not mixed with remote rows")
+            settings.vocabularySyncEnabled = false
+            try expect(settings.combinedDailyDictationUsage.first { $0.day == "2026-11-10" }?.dictationCount, equals: 2,
+                       "without sync only the local counter is shown")
+            settings.resetUsageSyncState()
+            try expect(settings.remoteDailyUsage.isEmpty, equals: true, "sign-out forgets other devices' rows")
+        }
+
+        // Wire compatibility.
+        do {
+            let old = Data(#"{"revision":5,"entries":[],"hotwords":[]}"#.utf8)
+            let decodedOld = try JSONDecoder().decode(VocabularySyncResponse.self, from: old)
+            try expect(decodedOld.serverStoresHotwords, equals: true, "hotwords present")
+            try expect(decodedOld.serverStoresStyles, equals: false, "a server without styles is detected")
+            try expect(decodedOld.serverStoresUsage, equals: false, "a server without usage is detected")
+            try expect(decodedOld.styles.isEmpty && decodedOld.usage.isEmpty, equals: true, "absent collections are empty")
+
+            let fresh = Data(#"""
+            {"revision":9,"entries":[],"hotwords":[],
+             "styles":[{"id":"c-1","name":"Деловой","color":"#FF8800","instruction":"x","deleted":false,"updated_at":"2026-11-10T12:00:00Z"}],
+             "usage":[{"day":"2026-11-10","device":"d","dictations":12,"characters":3400,"audio_seconds":210.5,"updated_at":"2026-11-10T12:00:00Z"},
+                      {"day":"2026-11-09","device":"w","dictations":1,"characters":10,"words":2,"audio_seconds":1,"asr_seconds":null,"updated_at":"2026-11-10T12:00:00Z"}]}
+            """#.utf8)
+            let decoded = try JSONDecoder().decode(VocabularySyncResponse.self, from: fresh)
+            try expect(decoded.serverStoresStyles && decoded.serverStoresUsage, equals: true, "new collections detected")
+            try expect(decoded.styles.first?.updatedAt, equals: "2026-11-10T12:00:00Z", "style wire decoding")
+            try expect(decoded.usage.count, equals: 2, "usage rows without words or asr_seconds decode")
+            try expect(decoded.usage.first?.audioSeconds, equals: 210.5, "usage values decode")
+
+            let encoded = try JSONEncoder().encode(decoded.usage[0])
+            let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+            try expect(object?["audio_seconds"] as? Double, equals: 210.5, "usage uses snake_case keys")
+            try expect(object?["updated_at"] as? String, equals: "2026-11-10T12:00:00Z", "usage carries updated_at")
+        }
     }
 
     private static func testHotwordSync() throws {

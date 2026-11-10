@@ -817,6 +817,49 @@ struct CustomRewriteStyle: Identifiable, Codable, Equatable {
     /// Activation hotkey; keycode 0 = not assigned.
     var hotkeyKeycode: Int
     var hotkeyModifiers: UInt64
+    /// Last content edit (ISO-8601 UTC, `VocabularyStore.timestamp`), the
+    /// last-writer-wins stamp of the account sync. Set by `Settings` on
+    /// every local name/color/instruction change or kept from the server;
+    /// nil for styles created before sync existed. The hotkey is a local,
+    /// per-device setting and never moves this stamp.
+    var updatedAt: String? = nil
+
+    /// The stamp is bookkeeping: two styles with the same content are equal
+    /// (the Control Panel compares its draft with the stored value).
+    static func == (lhs: CustomRewriteStyle, rhs: CustomRewriteStyle) -> Bool {
+        lhs.id == rhs.id && lhs.name == rhs.name && lhs.colorHex == rhs.colorHex
+            && lhs.instruction == rhs.instruction && lhs.hotkeyKeycode == rhs.hotkeyKeycode
+            && lhs.hotkeyModifiers == rhs.hotkeyModifiers
+    }
+}
+
+/// A locally deleted custom style, kept so the deletion reaches the server.
+struct CustomRewriteStyleTombstone: Codable, Equatable, Sendable {
+    let id: String
+    let deletedAt: String
+}
+
+/// A server style row applied by `Settings.applyRemoteCustomStyles`.
+struct CustomStyleRemoteEntry: Equatable, Sendable {
+    let id: String
+    let name: String
+    let color: String
+    let instruction: String
+    let deleted: Bool
+    let updatedAt: String
+}
+
+/// One (day, device) usage row of the account (modes-and-usage-sync spec
+/// §3.2), as stored for devices other than this one.
+struct DeviceDictationUsage: Codable, Equatable, Sendable {
+    let day: String
+    let device: String
+    var dictationCount: Int
+    var characterCount: Int
+    var wordCount: Int
+    var audioSeconds: Double
+    var asrSeconds: Double
+    var updatedAt: String
 }
 
 /// The active rewrite style: either a built-in or a user-created one.

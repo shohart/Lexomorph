@@ -159,6 +159,17 @@ func mergedDailyDictationUsage(_ stats: [DailyDictationUsage],
     return Array(byDay.values.sorted { $0.day < $1.day }.suffix(maximumDays))
 }
 
+/// One statistic over all devices: this device's local counter plus the
+/// rows other devices of the account reported (never this device's own
+/// echo — `Settings.applyRemoteUsage` drops it), summed per day.
+func combinedDictationUsage(local: [DailyDictationUsage],
+                            remote: [DeviceDictationUsage]) -> [DailyDictationUsage] {
+    mergedDailyDictationUsage(local + remote.map {
+        DailyDictationUsage(day: $0.day, dictationCount: $0.dictationCount, characterCount: $0.characterCount,
+                            audioSeconds: $0.audioSeconds, asrSeconds: $0.asrSeconds)
+    })
+}
+
 func addingDictationUsageSample(to stats: [DailyDictationUsage],
                                 at date: Date,
                                 characterCount: Int,

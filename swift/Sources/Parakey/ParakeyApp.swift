@@ -3571,7 +3571,7 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func makeStatisticsOverlayContent() -> NSView {
         let calendar = Calendar.current
         let snapshot = lastSevenCompletedDictationUsage(
-            settings.dailyDictationUsage,
+            settings.combinedDailyDictationUsage,
             referenceDate: Date(),
             calendar: calendar
         )
@@ -3607,7 +3607,8 @@ final class ParakeyApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         title.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(title)
 
-        let subtitle = HistoryItemLabel("\(russianUsageDateRange(snapshot, calendar: calendar)) · сегодня не учитывается")
+        let subtitle = HistoryItemLabel("\(russianUsageDateRange(snapshot, calendar: calendar)) · сегодня не учитывается"
+            + (settings.vocabularySyncEnabled ? " · по всем устройствам аккаунта" : ""))
         subtitle.font = .systemFont(ofSize: 14, weight: .regular)
         subtitle.textColor = .secondaryLabelColor
         subtitle.translatesAutoresizingMaskIntoConstraints = false

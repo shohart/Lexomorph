@@ -832,9 +832,12 @@ case .text:
             // Rewrite section — fully independent toggles/endpoint from
             // correction (docs/specs/rewrite-tiered-correction-spec.md §1).
             content.addArrangedSubview(rewriteModeRow(draft))
+            // Custom modes are managed here even while rewriting is off, so
+            // the list is always reachable (it used to appear only with the
+            // rewrite switch on).
+            content.addArrangedSubview(customRewriteStylesBlock(draft))
             if draft.rewriteEnabled {
                 content.addArrangedSubview(rewriteStyleRow(draft))
-            content.addArrangedSubview(customRewriteStylesBlock(draft))
                 content.addArrangedSubview(rewriteModelRow(draft))
                 content.addArrangedSubview(rewriteEngineBackendRow(draft))
                 switch draft.rewriteEngineBackend {
