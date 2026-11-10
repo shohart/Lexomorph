@@ -381,3 +381,99 @@ def test_migration_adds_tables_to_existing_db():
     body = _push(h, styles=[_st("c-1", "2026-11-10T10:00:00Z")])
     assert len(body["styles"]) == 1
     service.init_db()  # idempotent
+
+
+# --- built-in style prompts --------------------------------------------------
+
+def _pr(style, stamp, prompt="Ты редактор.\n\tПиши кратко.\n", deleted=False):
+    return {"style": style, "prompt": prompt, "deleted": deleted, "updated_at": stamp}
+
+
+def test_prompts_roundtrip_verbatim():
+    h = bearer(auth("pr1@example.com").json()["token"])
+    text = "  Line1\n\tLine2  \n\n"
+    body = _push(h, prompts=[_pr("polish", "2026-11-10T10:00:00Z", text)])
+    assert body["revision"] == 1 and body["prompts"] == [
+        {"style": "polish", "prompt": text, "deleted": False, "updated_at": "2026-11-10T10:00:00Z", "revision": 1}]
+    assert client.get("/v1/vocabulary", headers=h).json()["prompts"][0]["prompt"] == text
+
+
+def test_prompts_lww_tie_and_tombstone():
+    h = bearer(auth("pr2@example.com").json()["token"])
+    _push(h, prompts=[_pr("official", "2026-11-10T10:00:00Z", "v1")])
+    for stamp in ("2026-11-10T10:00:00Z", "2026-11-10T09:00:00Z"):  # tie, older
+        body = _push(h, since=1, prompts=[_pr("official", stamp, "other")])
+        assert body["revision"] == 1 and body["prompts"] == []
+    body = _push(h, since=1, prompts=[_pr("official", "2026-11-10T11:00:00Z", "v2")])
+    assert body["revision"] == 2 and body["prompts"][0]["prompt"] == "v2"
+    body = _push(h, since=2, prompts=[_pr("official", "2026-11-10T12:00:00Z", "", deleted=True)])
+    assert body["revision"] == 3 and body["prompts"][0]["deleted"] is True
+    body = _push(h, since=3, prompts=[_pr("official", "2026-11-10T11:30:00Z", "stale")])
+    assert body["prompts"] == [] and body["revision"] == 3
+    body = _push(h, since=3, prompts=[_pr("official", "2026-11-10T13:00:00Z", "v3")])
+    assert body["prompts"][0]["deleted"] is False and body["prompts"][0]["prompt"] == "v3"
+
+
+def test_prompts_validation():
+    h = bearer(auth("pr3@example.com").json()["token"])
+    ok = _pr("polish", "2026-11-10T10:00:00Z")
+    bad = [
+        _pr("c-abc", "2026-11-10T10:00:00Z"),
+        _pr("Polish", "2026-11-10T10:00:00Z"),
+        _pr("", "2026-11-10T10:00:00Z"),
+        _pr("polish", "2026-11-10T10:00:00Z", "x" * 16001),
+        _pr("polish", "2026-11-10T10:00:00Z", ""),
+        _pr("polish", "2026-11-10T10:00:00Z", "a\x00b"),
+        _pr("polish", "2026-11-10T10:00:00Z", "a\x00b", deleted=True),
+    ]
+    for item in bad:
+        assert client.post("/v1/vocabulary", headers=h, json={"prompts": [item]}).status_code == 422, item
+    assert client.post("/v1/vocabulary", headers=h, json={"prompts": [ok, bad[0]]}).status_code == 422
+    assert client.get("/v1/vocabulary", headers=h).json()["prompts"] == []  # nothing partially stored
+    maxed = _pr("structured_task", "2026-11-10T10:00:00Z", "x" * 16000)
+    assert client.post("/v1/vocabulary", headers=h, json={"prompts": [ok, maxed]}).status_code == 200
+
+
+def test_prompts_since_and_isolation():
+    h1 = bearer(auth("pr4@example.com").json()["token"])
+    h2 = bearer(auth("pr5@example.com").json()["token"])
+    _push(h1, prompts=[_pr("polish", "2026-11-10T10:00:00Z", "A")])
+    body = _push(h1, since=0, prompts=[_pr("official", "2026-11-10T10:05:00Z", "B")])
+    assert sorted(p["style"] for p in body["prompts"]) == ["official", "polish"] and body["revision"] == 2
+    assert [p["style"] for p in client.get("/v1/vocabulary?since=1", headers=h1).json()["prompts"]] == ["official"]
+    assert client.get("/v1/vocabulary?since=2", headers=h1).json()["prompts"] == []
+    assert client.get("/v1/vocabulary", headers=h2).json()["prompts"] == []
+    body = _push(h2, prompts=[_pr("polish", "2026-11-10T09:00:00Z", "other account")])
+    assert body["prompts"][0]["prompt"] == "other account"
+    assert client.get("/v1/vocabulary", headers=h1).json()["prompts"][0]["prompt"] in ("A", "B")
+
+
+def test_prompts_share_revision_and_skip_events():
+    h = bearer(auth("pr6@example.com").json()["token"])
+    body = _push(h, styles=[_st("c-1", "2026-11-10T10:00:00Z")],
+                 prompts=[_pr("polish", "2026-11-10T10:00:00Z", "СекретныйПромпт")])
+    assert body["revision"] == 2 and [p["revision"] for p in body["prompts"]] == [2]
+    with service.db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM events WHERE account_id = (SELECT id FROM accounts"
+                            " WHERE email = 'pr6@example.com')").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM events WHERE source LIKE '%Секретный%'"
+                            " OR replacement LIKE '%Секретный%'").fetchone()[0] == 0
+
+
+def test_old_client_without_prompts_is_unaffected():
+    h = bearer(auth("pr7@example.com").json()["token"])
+    r = client.post("/v1/vocabulary", headers=h, json={"since": 0, "changes": [
+        {"source": "докер", "replacement": "Docker", "updated_at": "2026-11-10T10:00:00Z"}]})
+    assert r.status_code == 200 and r.json()["prompts"] == []
+    _push(h, since=1, prompts=[_pr("polish", "2026-11-10T10:00:00Z")])
+    old = client.post("/v1/vocabulary", headers=h, json={"since": 0, "changes": []}).json()
+    assert [e["source"] for e in old["entries"]] == ["докер"] and old["revision"] == 2
+
+
+def test_migration_adds_prompt_table_to_existing_db():
+    with service.db() as conn:
+        conn.execute("DROP TABLE prompt_entries")
+    service.init_db()
+    h = bearer(auth("mig2@example.com").json()["token"])
+    assert len(_push(h, prompts=[_pr("polish", "2026-11-10T10:00:00Z")])["prompts"]) == 1
+    service.init_db()  # idempotent

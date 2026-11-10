@@ -9,6 +9,9 @@ for the account and sync model.
   `POST /v1/vocabulary`, `GET /healthz`.
 - Besides `changes`/`hotwords`, the same payload carries optional `styles`
   (custom rewrite modes, tombstones, cap `VOCAB_SYNC_MAX_STYLES`=500) and
+  `prompts` (edited full system prompts of the built-in styles `polish`,
+  `structured_task`, `official`; 1..16000 chars verbatim, tombstone = reset
+  to default, LWW, max 3 rows per account) and
   `usage` (per-device per-day dictation statistics, absolute values, LWW).
   They share the account revision, are `[]` for old clients, and are never
   written to `events`.

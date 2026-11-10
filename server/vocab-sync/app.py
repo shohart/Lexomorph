@@ -19,20 +19,26 @@ push/pull payload: table `hotword_entries`, same key rule, same last-writer-
 wins and tombstones, the same account revision. Old clients that send and
 read only `changes`/`entries` are unaffected.
 
-Two more collections ride in the same payload and share the same revision:
+Three more collections ride in the same payload and share the same revision:
 
 * `styles` — user rewrite modes (table `style_entries`, key `id` = "c-<uuid>"):
   name, #RRGGBB colour, instruction. Last writer wins on `updated_at` (a tie
   goes to the server copy), deletions are tombstones, live rows are capped by
   VOCAB_SYNC_MAX_STYLES. Hotkeys and the active mode are local to a device
   and never travel.
+* `prompts` — the user's edited FULL system prompts of the three built-in
+  rewrite styles (table `prompt_entries`, key `style` in polish |
+  structured_task | official): prompt text stored verbatim (1..16000 chars,
+  no NUL; newlines and tabs allowed). `deleted` means "reset to the built-in
+  default" and may carry an empty prompt. Same LWW on `updated_at` (a tie
+  goes to the server copy); at most 3 rows per account, so no live cap.
 * `usage` — dictation statistics (table `usage_days`, key (day, device)).
   Every device writes only its own rows as absolute per-day values, so a
   re-push is idempotent and nothing is double counted; LWW on `updated_at`.
   The server keeps all days; clients sum rows across devices.
 
-Both are optional in the request and default to `[]` in the response, so old
-clients are unaffected. Neither is appended to `events`.
+All are optional in the request and default to `[]` in the response, so old
+clients are unaffected. None is appended to `events`.
 
 Every accepted correction change is also appended to `events`, an append-only log kept
 to improve the speech model later (the apps say so before the user signs
@@ -68,6 +74,9 @@ MAX_ENTRIES = int(os.environ.get("VOCAB_SYNC_MAX_ENTRIES", "5000"))
 MAX_HOTWORD_ENTRIES = int(os.environ.get("VOCAB_SYNC_MAX_HOTWORD_ENTRIES", "5000"))
 # Custom rewrite styles sync cap (live rows).
 MAX_STYLES = int(os.environ.get("VOCAB_SYNC_MAX_STYLES", "500"))
+# Edited full system prompts of the built-in styles (max chars per prompt).
+MAX_PROMPT_CHARS = int(os.environ.get("VOCAB_SYNC_MAX_PROMPT_CHARS", "16000"))
+PROMPT_STYLES = ("polish", "structured_task", "official")
 MAX_CHANGES_PER_PUSH = 1000
 STYLE_ID_RE = re.compile(r"^c-[A-Za-z0-9-]{1,62}$")
 STYLE_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
@@ -153,6 +162,16 @@ CREATE TABLE IF NOT EXISTS style_entries (
     PRIMARY KEY (account_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_style_entries_revision ON style_entries (account_id, revision);
+CREATE TABLE IF NOT EXISTS prompt_entries (
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    style TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    PRIMARY KEY (account_id, style)
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_entries_revision ON prompt_entries (account_id, revision);
 CREATE TABLE IF NOT EXISTS usage_days (
     account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     day TEXT NOT NULL,
@@ -338,6 +357,28 @@ class RemoteStyleEntry(StyleEntry):
     revision: int
 
 
+class PromptEntry(BaseModel):
+    style: str = Field(..., max_length=32)
+    prompt: str = Field("", max_length=MAX_PROMPT_CHARS)
+    deleted: bool = False
+    updated_at: str = Field(..., max_length=40)
+
+    @model_validator(mode="after")
+    def _check(self) -> "PromptEntry":
+        if self.style not in PROMPT_STYLES:
+            raise ValueError("invalid style")
+        # Text is kept verbatim (no strip, no normalization); only NUL is rejected.
+        if "\x00" in self.prompt:
+            raise ValueError("invalid prompt")
+        if not self.deleted and not self.prompt:
+            raise ValueError("invalid prompt")
+        return self
+
+
+class RemotePromptEntry(PromptEntry):
+    revision: int
+
+
 class UsageEntry(BaseModel):
     day: str = Field(..., max_length=10)
     device: str = Field(..., min_length=1, max_length=64)
@@ -369,6 +410,7 @@ class PushRequest(BaseModel):
     changes: List[Entry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
     hotwords: List[HotwordEntry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
     styles: List[StyleEntry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
+    prompts: List[PromptEntry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
     usage: List[UsageEntry] = Field(default_factory=list, max_length=MAX_CHANGES_PER_PUSH)
     client: ClientInfo = ClientInfo()
 
@@ -378,6 +420,7 @@ class SyncResponse(BaseModel):
     entries: List[RemoteEntry]
     hotwords: List[RemoteHotwordEntry] = Field(default_factory=list)
     styles: List[RemoteStyleEntry] = Field(default_factory=list)
+    prompts: List[RemotePromptEntry] = Field(default_factory=list)
     usage: List[RemoteUsageEntry] = Field(default_factory=list)
 
 
@@ -477,6 +520,13 @@ def _changes_since(conn: sqlite3.Connection, account_id: int, since: int) -> Syn
                   id=r["id"], name=r["name"], color=r["color"], instruction=r["instruction"],
                   deleted=bool(r["deleted"]), updated_at=r["updated_at"], revision=r["revision"])
               for r in style_rows]
+    prompt_rows = conn.execute(
+        "SELECT style, prompt, deleted, updated_at, revision FROM prompt_entries"
+        " WHERE account_id = ? AND revision > ? ORDER BY revision", (account_id, since)).fetchall()
+    prompts = [RemotePromptEntry.model_construct(
+                   style=r["style"], prompt=r["prompt"], deleted=bool(r["deleted"]),
+                   updated_at=r["updated_at"], revision=r["revision"])
+               for r in prompt_rows]
     usage_rows = conn.execute(
         "SELECT day, device, dictations, characters, words, audio_seconds, asr_seconds, updated_at, revision"
         " FROM usage_days WHERE account_id = ? AND revision > ? ORDER BY revision",
@@ -486,7 +536,8 @@ def _changes_since(conn: sqlite3.Connection, account_id: int, since: int) -> Syn
                  words=r["words"], audio_seconds=r["audio_seconds"], asr_seconds=r["asr_seconds"],
                  updated_at=r["updated_at"], revision=r["revision"])
              for r in usage_rows]
-    return SyncResponse(revision=revision, entries=entries, hotwords=hotwords, styles=styles, usage=usage)
+    return SyncResponse(revision=revision, entries=entries, hotwords=hotwords, styles=styles, prompts=prompts,
+                        usage=usage)
 
 
 @app.get("/v1/vocabulary", response_model=SyncResponse)
@@ -582,6 +633,20 @@ def push(body: PushRequest, account_id: int = Depends(current_account)) -> SyncR
                 " updated_at = excluded.updated_at, revision = excluded.revision",
                 (account_id, change.id, change.name, change.color, change.instruction, int(change.deleted),
                  change.updated_at, revision))
+        # Edited built-in prompts: same LWW (server wins ties), tombstones =
+        # reset to default; at most 3 rows so no cap; not appended to `events`.
+        for change in body.prompts:
+            existing = conn.execute("SELECT updated_at FROM prompt_entries"
+                                    " WHERE account_id = ? AND style = ?", (account_id, change.style)).fetchone()
+            if existing is not None and existing["updated_at"] >= change.updated_at:
+                continue
+            revision += 1
+            conn.execute(
+                "INSERT INTO prompt_entries (account_id, style, prompt, deleted, updated_at, revision)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (account_id, style) DO UPDATE SET prompt = excluded.prompt,"
+                " deleted = excluded.deleted, updated_at = excluded.updated_at, revision = excluded.revision",
+                (account_id, change.style, change.prompt, int(change.deleted), change.updated_at, revision))
         # Usage: one row per (day, device), absolute values, LWW on updated_at;
         # not appended to `events`.
         for change in body.usage:
