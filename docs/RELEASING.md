@@ -6,7 +6,7 @@ the tag prefix, never by which release GitHub calls "latest".
 | Platform | Tag | Asset | GitHub "latest" | Who reads it |
 |---|---|---|---|---|
 | macOS | `mac-vX.Y.Z` (up to 0.7.0: `vX.Y.Z`) | `SuperDictate.zip` | yes | `UpdateCheck.parseReleases`, `install.sh`, `update.json` |
-| Windows | `win-vX.Y.Z` | `SuperDictate-X.Y.Z-setup.exe` | **never** | `windows/superdictate/updater.py` |
+| Windows | `win-vX.Y.Z` | `Lexomorph-Setup-X.Y.Z.exe` | **never** | `windows/superdictate/updater.py` |
 
 - The macOS update check lists the releases and takes the newest published
   `mac-v*` / `v*` one, skipping Windows tags, drafts and pre-releases. It
@@ -66,6 +66,6 @@ On the Windows build machine, from `windows\`:
    `installer/SuperDictate.iss` (the port follows the macOS version).
 2. `.\build.ps1` (self-tests, the speech host, Silero VAD, PyInstaller),
    then `ISCC.exe installer\SuperDictate.iss` → `dist\SuperDictate-X.Y.Z-setup.exe`.
-3. `gh release create win-vX.Y.Z SuperDictate-X.Y.Z-setup.exe --target <full sha> --latest=false`
+3. `gh release create win-vX.Y.Z Lexomorph-Setup-X.Y.Z.exe --target <full sha> --latest=false`
    (add `--prerelease` for a test build). Never mark a Windows release
    latest: macOS 0.7.0 and earlier would read it as theirs.

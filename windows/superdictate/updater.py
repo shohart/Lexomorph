@@ -38,7 +38,7 @@ REQUEST_TIMEOUT = 15
 
 # Only Windows releases get here (by tag), so any installer or archive is
 # the right asset; requiring "win" in the name would reject
-# "SuperDictate-0.7.0-setup.exe".
+# "SuperDictate-0.7.0-setup.exe" or "Lexomorph-Setup-0.10.0.exe".
 _WINDOWS_ASSET = re.compile(r"\.(exe|msi|zip)$", re.IGNORECASE)
 
 

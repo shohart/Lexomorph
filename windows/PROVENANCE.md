@@ -1,6 +1,6 @@
 # Windows port — provenance
 
-This directory is the Windows port of SuperDictate Next. It is a separate
+This directory is the Windows port of Lexomorph (formerly SuperDictate Next). It is a separate
 application, not a build variant of the macOS app in `swift/`: the two share
 model files, setting names, data-file layouts and behaviour, but no source.
 
