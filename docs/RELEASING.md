@@ -65,7 +65,7 @@ On the Windows build machine, from `windows\`:
 1. Bump `superdictate/version.py` and `AppVersion` in
    `installer/Lexomorph.iss` (the port follows the macOS version).
 2. `.\build.ps1` (self-tests, the speech host, Silero VAD, PyInstaller),
-   then `ISCC.exe installer\SuperDictate.iss` → `dist\SuperDictate-X.Y.Z-setup.exe`.
+   then `ISCC.exe installer\Lexomorph.iss` → `dist\Lexomorph-Setup-X.Y.Z.exe`.
 3. `gh release create win-vX.Y.Z Lexomorph-Setup-X.Y.Z.exe --target <full sha> --latest=false`
    (add `--prerelease` for a test build). Never mark a Windows release
    latest: macOS 0.7.0 and earlier would read it as theirs.
