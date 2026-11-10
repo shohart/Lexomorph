@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="t d">
+  <title id="t">Lexomorph. A personal adaptive writing engine</title>
+  <desc id="d">Speak freely. Write precisely.</desc>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5EE7D8"/><stop offset="0.5" stop-color="#5DA9FF"/><stop offset="1" stop-color="#8C7CFF"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5EE7D8"/><stop offset="0.5" stop-color="#5DA9FF"/><stop offset="1" stop-color="#8C7CFF"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="1" r="1">
+      <stop offset="0" stop-color="#5EE7D8" stop-opacity="0.22"/><stop offset="1" stop-color="#5EE7D8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="1" cy="0" r="1">
+      <stop offset="0" stop-color="#8C7CFF" stop-opacity="0.26"/><stop offset="1" stop-color="#8C7CFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#0B1020"/>
+  <rect width="1200" height="630" fill="url(#glowA)"/>
+  <rect width="1200" height="630" fill="url(#glowB)"/>
+  <g stroke="#26324A" stroke-opacity="0.45" stroke-width="1"><path d="M0 0V630"/><path d="M80 0V630"/><path d="M160 0V630"/><path d="M240 0V630"/><path d="M320 0V630"/><path d="M400 0V630"/><path d="M480 0V630"/><path d="M560 0V630"/><path d="M640 0V630"/><path d="M720 0V630"/><path d="M800 0V630"/><path d="M880 0V630"/><path d="M960 0V630"/><path d="M1040 0V630"/><path d="M1120 0V630"/><path d="M0 0H1200"/><path d="M0 80H1200"/><path d="M0 160H1200"/><path d="M0 240H1200"/><path d="M0 320H1200"/><path d="M0 400H1200"/><path d="M0 480H1200"/><path d="M0 560H1200"/></g>
+  <g transform="translate(56.0 150.0) scale(1.15)"><path d="M22 0h60l-14 40H8z" fill="#5EE7D8"/><path d="M44 46h60l-14 40H30z" fill="#5DA9FF" fill-opacity="0.95"/><path d="M44 46h60l-5 16H39z" fill="#8C7CFF" fill-opacity="0.85"/></g>
+  <text x="190.0" y="246.0" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="92.0" font-weight="700" fill="#F3F6FC">Lexomorph</text>
+  <text x="58.0" y="330.0" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="38.0" fill="#F3F6FC">A personal adaptive writing engine</text>
+  <rect x="58.0" y="358.0" width="130.0" height="6" rx="3" fill="url(#bar)"/>
+  <text x="58.0" y="420.0" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="30.0" fill="#AAB6D3">Speak freely. Write precisely.</text>
+  <g transform="translate(0 0.0)">
+  <g fill="url(#bar)"><rect x="700.0" y="311.0" width="5.0" height="8.0" rx="2.5"/><rect x="711.0" y="311.0" width="5.0" height="8.0" rx="2.5"/><rect x="722.0" y="311.0" width="5.0" height="8.0" rx="2.5"/><rect x="733.0" y="304.4" width="5.0" height="21.3" rx="2.5"/><rect x="744.0" y="300.1" width="5.0" height="29.8" rx="2.5"/><rect x="755.0" y="286.4" width="5.0" height="57.1" rx="2.5"/><rect x="766.0" y="274.1" width="5.0" height="81.8" rx="2.5"/><rect x="777.0" y="260.4" width="5.0" height="109.1" rx="2.5"/><rect x="788.0" y="235.4" width="5.0" height="159.2" rx="2.5"/><rect x="799.0" y="241.1" width="5.0" height="147.9" rx="2.5"/><rect x="810.0" y="204.8" width="5.0" height="220.5" rx="2.5"/><rect x="821.0" y="244.1" width="5.0" height="141.7" rx="2.5"/><rect x="832.0" y="206.2" width="5.0" height="217.6" rx="2.5"/><rect x="843.0" y="257.9" width="5.0" height="114.3" rx="2.5"/><rect x="854.0" y="238.5" width="5.0" height="153.0" rx="2.5"/><rect x="865.0" y="273.6" width="5.0" height="82.9" rx="2.5"/><rect x="876.0" y="276.7" width="5.0" height="76.6" rx="2.5"/><rect x="887.0" y="293.8" width="5.0" height="42.5" rx="2.5"/><rect x="898.0" y="301.3" width="5.0" height="27.3" rx="2.5"/><rect x="909.0" y="307.3" width="5.0" height="15.4" rx="2.5"/><rect x="920.0" y="311.0" width="5.0" height="8.0" rx="2.5"/><rect x="931.0" y="311.0" width="5.0" height="8.0" rx="2.5"/><rect x="942.0" y="311.0" width="5.0" height="8.0" rx="2.5"/><rect x="953.0" y="311.0" width="5.0" height="8.0" rx="2.5"/></g>
+  <rect x="990.0" y="250.0" width="160.0" height="130.0" rx="22.0" fill="#11182B" stroke="url(#g)" stroke-width="2.5"/>
+  <g fill="#F3F6FC">
+    <rect x="1012.0" y="280.0" width="116.0" height="7" rx="3.5"/>
+    <rect x="1012.0" y="306.0" width="90.0" height="7" rx="3.5" fill-opacity="0.8"/>
+    <rect x="1012.0" y="332.0" width="104.0" height="7" rx="3.5" fill-opacity="0.65"/>
+  </g>
+  </g>
+</svg>
