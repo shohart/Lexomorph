@@ -59,11 +59,19 @@ codesign --verify --deep --strict "$APP" && pass "signature verifies" || failed 
 want="$(plutil -extract CFBundleShortVersionString raw "$ROOT_DIR/swift/Info.plist")"
 got="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
 [[ "$got" == "$want" ]] && pass "version $got" || failed "version $got, swift/Info.plist says $want"
+want_signer="${LEXOMORPH_SIGN_IDENTITY:-Aleksei Bykov}"
+authority() { codesign -dv --verbose=4 "$1" 2>&1 | sed -n 's/^Authority=//p' | head -n 1; }
+[[ "$(authority "$APP")" == "$want_signer" ]] \
+    && pass "signed by \"$want_signer\"" || failed "signing authority is \"$(authority "$APP")\", expected \"$want_signer\""
 if [[ -d /Applications/Lexomorph.app ]]; then
     dr() { codesign -d -r- "$1" 2>&1 | grep '^designated'; }
-    [[ "$(dr "$APP")" == "$(dr /Applications/Lexomorph.app)" ]] \
-        && pass "designated requirement equals the installed app's" \
-        || failed "designated requirement differs from the installed app's (permissions would reset)"
+    if [[ "$(authority /Applications/Lexomorph.app)" != "$want_signer" ]]; then
+        echo "WARN installed app is signed by \"$(authority /Applications/Lexomorph.app)\": signer change, permissions must be granted again"
+    elif [[ "$(dr "$APP")" == "$(dr /Applications/Lexomorph.app)" ]]; then
+        pass "designated requirement equals the installed app's"
+    else
+        failed "designated requirement differs from the installed app's (permissions would reset)"
+    fi
 fi
 for helper in LexomorphLLMHost LexomorphOnnxHost; do
     [[ -x "$APP/Contents/Helpers/$helper" ]] && pass "helper $helper" || failed "helper $helper missing"

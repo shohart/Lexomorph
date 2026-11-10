@@ -10,10 +10,12 @@
   `com.local.lexomorph.agent`.
 - Never launch a copied, test, smoke, or temporary `.app` bundle. Exercise
   diagnostics through the command-line self-tests instead.
-- Never change the signing identity during an installation. On this Mac,
-  local builds use the existing Apple Development identity (the release
-  builds use the existing "PolterType Dev" certificate) so macOS keeps the
-  same signer. Do not create new certificates.
+- The stable signing identity is "Aleksei Bykov" (a self-signed local
+  code-signing certificate). It must NOT change between installations without
+  the owner's decision: a different signer changes the designated requirement
+  and macOS resets every granted permission. The one switch from
+  "PolterType Dev" was made once, at the move to Lexomorph 0.10.0. Do not
+  create new certificates; the scripts pick the identity by its hash.
 - Never call `tccutil reset` automatically. Permission removal is an explicit
   user action.
 - Never open more than one macOS privacy pane for a permission request.

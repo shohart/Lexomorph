@@ -4,7 +4,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_APP="${1:-$ROOT_DIR/dist/Lexomorph.app}"
-SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+# Stable local identity: self-signed certificate "Aleksei Bykov" (override the
+# name with LEXOMORPH_SIGN_IDENTITY, or SIGN_IDENTITY for an exact identity or
+# "-" for ad-hoc). Without it (e.g. a user building from source) fall back to
+# ad-hoc, which resets macOS permissions on every rebuild.
+if [[ -z "${SIGN_IDENTITY:-}" ]]; then
+    sign_name="${LEXOMORPH_SIGN_IDENTITY:-Aleksei Bykov}"
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk -v n="\"$sign_name\"" 'index($0, n) && $0 !~ /\(Invalid/ { print $2; exit }')"
+    SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+fi
 
 say() {
     printf 'Lexomorph: %s\n' "$*"

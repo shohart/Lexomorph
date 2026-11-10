@@ -52,5 +52,13 @@ grep -q '^EXPECTED_SOURCE_COMMIT="${LEXOMORPH_SOURCE_COMMIT:-\$SOURCE_COMMIT}"$'
 grep -q 'verify_source_ref' install.sh
 grep -q 'validate_output_app_path "$OUTPUT_APP"' scripts/build-app.sh
 
+# The stable signing identity default must stay in step across the scripts.
+for f in scripts/build-app.sh scripts/install-local.sh scripts/verify-release.sh; do
+    grep -q 'LEXOMORPH_SIGN_IDENTITY:-Aleksei Bykov' "$f" || {
+        printf '%s does not default the signing identity to "Aleksei Bykov"\n' "$f" >&2
+        exit 1
+    }
+done
+
 git diff --check
 printf 'Lexomorph checks passed (v%s).\n' "$app_version"

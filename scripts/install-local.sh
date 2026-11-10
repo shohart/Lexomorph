@@ -27,19 +27,15 @@ installed_for_identity=""
 for candidate in "$APP_PATH" "$LEGACY_APP_PATH"; do
     if [[ -d "$candidate" ]]; then installed_for_identity="$candidate"; break; fi
 done
-identity="${LEXOMORPH_SIGN_IDENTITY:-}"
-if [[ -z "$identity" && -n "$installed_for_identity" ]]; then
-    identity="$(codesign -dv --verbose=4 "$installed_for_identity" 2>&1 \
-        | sed -n 's/^Authority=\(Apple Development:.*\)$/\1/p' \
-        | head -n 1)"
-fi
+# The one stable signing identity: a self-signed local code-signing
+# certificate (default CN "Aleksei Bykov"). It must not change between
+# installs without the owner's decision, or macOS resets every permission.
+SIGN_NAME="${LEXOMORPH_SIGN_IDENTITY:-Aleksei Bykov}"
+# Resolve by SHA-1 hash: the name can be listed twice (login + System keychain).
+identity="$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk -v n="\"$SIGN_NAME\"" 'index($0, n) && $0 !~ /\(Invalid/ { print $2; exit }')"
 if [[ -z "$identity" ]]; then
-    identity="$(security find-identity -v -p codesigning 2>/dev/null \
-        | sed -n 's/.*"\(Apple Development:.*\)"/\1/p' \
-        | head -n 1)"
-fi
-if [[ -z "$identity" ]]; then
-    printf 'Lexomorph: no Apple Development signing identity was found.\n' >&2
+    printf 'Lexomorph: no valid code-signing identity named "%s" was found.\n' "$SIGN_NAME" >&2
     printf 'Set LEXOMORPH_SIGN_IDENTITY explicitly; ad-hoc local installs are disabled because they reset macOS permissions.\n' >&2
     exit 1
 fi
@@ -62,11 +58,14 @@ signer_of() {
     printf '%s|%s' "$(sed -n 's/^Authority=//p' <<<"$info" | head -n 1)" \
         "$(sed -n 's/^TeamIdentifier=//p' <<<"$info" | head -n 1)"
 }
-if [[ -n "$installed_for_identity" ]]; then
+# A deliberate, owner-approved signer change (e.g. the one-time move from
+# "PolterType Dev" to "Aleksei Bykov") needs LEXOMORPH_ALLOW_SIGNER_CHANGE=1;
+# macOS permissions are then granted again by hand.
+if [[ -n "$installed_for_identity" && "${LEXOMORPH_ALLOW_SIGNER_CHANGE:-0}" != "1" ]]; then
     installed_signer="$(signer_of "$installed_for_identity")"
     staged_signer="$(signer_of "$STAGED_APP")"
     [[ "$installed_signer" == "$staged_signer" ]] || {
-        printf 'Lexomorph: refusing to change the signing identity (installed: %s, new: %s).\n' \
+        printf 'Lexomorph: refusing to change the signing identity (installed: %s, new: %s). Set LEXOMORPH_ALLOW_SIGNER_CHANGE=1 only on the owner's decision.\n' \
             "$installed_signer" "$staged_signer" >&2
         exit 1
     }
