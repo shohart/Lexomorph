@@ -353,6 +353,8 @@ _DEFAULTS: dict[str, Any] = {
     "rewrite_system_prompt_polish_v1": "",
     "rewrite_system_prompt_structured_task_v1": "",
     "rewrite_system_prompt_official_v1": "",
+    # Per-style sync stamps of the three overrides above (prompt_overrides.py).
+    "rewrite_system_prompt_sync_v1": {},
     "rewrite_custom_base_url_v1": "",
     "rewrite_custom_api_key_v1": "",
     "rewrite_custom_model_name_v1": "",
@@ -391,6 +393,13 @@ _RUNTIME_KEYS = frozenset({
     # by the settings window's draft (rewrite_styles.StyleStore).
     "rewrite_custom_styles_v1",
     "rewrite_custom_style_tombstones_v1",
+    # The built-in styles' prompt overrides are written by PromptOverrides
+    # (the settings window passes only what the user changed), so a stale
+    # draft cannot roll a synced prompt back.
+    "rewrite_system_prompt_polish_v1",
+    "rewrite_system_prompt_structured_task_v1",
+    "rewrite_system_prompt_official_v1",
+    "rewrite_system_prompt_sync_v1",
 })
 
 

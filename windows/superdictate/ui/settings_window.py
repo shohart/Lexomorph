@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import asr, asr_hotwords, audio, i18n, vocabulary_hygiene
+from ..prompt_overrides import STYLES as PROMPT_STYLES, prompt_key
 from ..vocabulary import DraftEntry
 from ..hotkeys import HotkeyChoice, TriggerMode
 from ..keynames import hotkey_name
@@ -330,6 +331,10 @@ class SettingsWindow(QDialog):
         self._draft: dict[str, Any] = settings.snapshot()
         # "auto" (never chosen) shows as the language actually in use.
         self._draft["interface_language"] = settings.interface_language
+        # The prompt overrides are synced; only what the user changes here is
+        # handed to PromptOverrides on save (see _save).
+        self._prompt_baseline = {style: str(self._draft.get(prompt_key(style)) or "")
+                                 for style in PROMPT_STYLES}
         self._palette = palette()
         self.setStyleSheet(stylesheet(self._palette))
 
@@ -1746,6 +1751,14 @@ class SettingsWindow(QDialog):
     def _save(self) -> None:
         previous = self._settings.snapshot()
         self._settings.apply(self._draft)
+        prompts = getattr(self._controller, "prompts", None)
+        for style in PROMPT_STYLES:
+            wanted = str(self._draft.get(prompt_key(style)) or "").strip()
+            if wanted != self._prompt_baseline[style]:
+                if prompts is not None:
+                    prompts.set_local(style, wanted)
+                else:
+                    self._settings.update_runtime({prompt_key(style): wanted})
 
         # Only the difference from what the list was loaded from: a rule
         # the sync or a learn changed meanwhile is not rolled back.

@@ -39,6 +39,7 @@ from .hotkeys import STYLE_ACTION_PREFIX, Action, HotkeyListener
 from .llm import LLMPostprocessor
 from .punctuation import PunctuationRestorer
 from .vocabulary import LearnCandidate, VocabularyStore, migrate_json_if_needed
+from .prompt_overrides import PromptOverrides
 from .rewrite_styles import StyleStore
 from .vocabulary_sync import VocabularySync
 from .logging_setup import get as get_logger
@@ -169,9 +170,10 @@ class DictationController(QObject):
         self.styles = StyleStore(settings)
         self.styles.add_listener(self.custom_styles_changed.emit)
         self.custom_styles_changed.connect(self._on_custom_styles_changed)
+        self.prompts = PromptOverrides(settings)
         self.vocabulary_sync = VocabularySync(
             self.corrections, settings, on_status=self.vocabulary_sync_status.emit,
-            styles=self.styles, usage=self.usage)
+            styles=self.styles, usage=self.usage, prompts=self.prompts)
         # Post-processing hosts are started lazily, on the first dictation
         # that actually needs one — a multi-GB model must not be loaded at
         # launch for a feature the user may never turn on.
