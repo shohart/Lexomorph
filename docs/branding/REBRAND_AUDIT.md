@@ -1,5 +1,11 @@
 # REBRAND_AUDIT — SuperDictate Next -> Lexomorph (Фаза 0, только аудит)
 
+> **Historical document, in Russian.** Written before the rename: the identifiers shown here (`SuperDictate.app`,
+> `com.local.superdictate`, `Parakey`, `SuperDictate.zip`, and so on) are the pre-0.10 ones. They have since been
+> renamed to Lexomorph; see [MIGRATION_NOTES.md](MIGRATION_NOTES.md) for the current state. The file is kept as it was.
+>
+> *Исторический документ: написан до переименования, показанные идентификаторы относятся к версиям до 0.10.*
+
 Ветка `feat/lexomorph-rebrand` (база `feat/sync-modes-stats`, версия приложения 0.9.7, build 70).
 Код и ассеты не менялись. Ничего не собиралось и не запускалось: рабочая машина Linux, macOS/Windows-сборки и
 self-тесты в этой фазе не выполнялись. Всё ниже получено чтением кода (`file:line`) и `grep`.
