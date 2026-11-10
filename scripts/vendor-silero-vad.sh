@@ -66,7 +66,7 @@ SILERO_VAD_MODEL_SIZE_BYTES=885098
 # NOT `main`/`latest` -- matching both this task's brief ("immutable URL, no
 # main/latest") and this project's own established convention for the
 # Parakeet model itself (see PARAKEET_MODEL_REVISION in
-# swift/Sources/Parakey/main.swift). The file bytes are identical to what was
+# swift/Sources/Lexomorph/main.swift). The file bytes are identical to what was
 # hashed above (same content, only the URL's ref changed from a floating
 # branch name to an immutable revision SHA).
 
@@ -1093,14 +1093,14 @@ Do not hand-edit anything under this directory — re-run the vendor script.
     infrastructure by this task — see the note below.
 - Model download wiring: OUT OF SCOPE for this vendoring task (deliberately
   — see task-1-report.md's "model-download scope decision" section for the
-  full reasoning). \`swift/Sources/Parakey/main.swift\`'s
+  full reasoning). \`swift/Sources/Lexomorph/main.swift\`'s
   \`downloadParakeetModelIfNeeded()\` (and its \`PARAKEET_MODEL_*\` constants,
   \`ParakeetModelDownloadError\`, \`sha256Hex(ofFileAt:)\`,
   \`isPlainRegularFile(_:)\`, \`speechModelCacheDirectory(for:)\`) is the
   existing safe-download pattern to mirror: temp-file download, size +
   SHA-256 verification, same-volume atomic rename via
   \`FileManager.replaceItemAt\`, storing under
-  \`~/Library/Application Support/SuperDictate/Models/\`. It is presently
+  \`~/Library/Application Support/Lexomorph/Models/\`. It is presently
   hardcoded to one file (not parameterized), so Task 2/7 (whichever task
   first needs the model file present to test the real VAD path) should
   either duplicate it with a sibling

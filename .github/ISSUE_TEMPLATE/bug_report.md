@@ -22,14 +22,14 @@ What you expected to happen.
 
 ## 💻 Environment
 
-- Lexomorph version: <!-- Settings → About, or `/Applications/SuperDictate.app/Contents/Info.plist` (the app file keeps its old name) -->
+- Lexomorph version: <!-- Settings → About, or `/Applications/Lexomorph.app/Contents/Info.plist` -->
 - OS and version: <!-- e.g. macOS 15.7 (Sequoia) or Windows 11 24H2 -->
 - Machine / chip: <!-- e.g. MacBook Pro M2, or Intel Xeon E5-2678 v3 -->
 - Installed via: <!-- one-line installer / build from source -->
 
 ## 📋 Logs
 
-Please attach relevant excerpts from `~/Library/Logs/SuperDictate*` (macOS) or `%LOCALAPPDATA%\SuperDictate` (Windows). The log folders keep the old name.
+Please attach relevant excerpts from `~/Library/Logs/Lexomorph-*` (macOS) or `%LOCALAPPDATA%\SuperDictate` (Windows, the Windows folder keeps the old name).
 
 ⚠️ **Do not paste transcript text, audio, or anything private** — see
 [SECURITY.md](../../SECURITY.md) and [PRIVACY.md](../../PRIVACY.md).

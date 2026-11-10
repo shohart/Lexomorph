@@ -22,27 +22,27 @@ jobs:
           cmake --build native/asr-runtime/build -j
           ctest --test-dir native/asr-runtime/build --output-on-failure
       - name: Swift self-tests
-        run: swift run -c debug --package-path swift Parakey --self-test all
+        run: swift run -c debug --package-path swift Lexomorph --self-test all
       - name: Build app bundle
-        run: ./scripts/build-app.sh "$RUNNER_TEMP/SuperDictate.app"
+        run: ./scripts/build-app.sh "$RUNNER_TEMP/Lexomorph.app"
       - name: Verify app bundle
         run: |
-          test -x "$RUNNER_TEMP/SuperDictate.app/Contents/MacOS/SuperDictate"
-          test -x "$RUNNER_TEMP/SuperDictate.app/Contents/Helpers/SuperDictateOnnxHost"
-          test -f "$RUNNER_TEMP/SuperDictate.app/Contents/Frameworks/libonnxruntime.1.23.2.dylib"
-          test -f "$RUNNER_TEMP/SuperDictate.app/Contents/Resources/onnx-asr/onnx-models.json"
-          codesign --verify --deep --strict "$RUNNER_TEMP/SuperDictate.app"
+          test -x "$RUNNER_TEMP/Lexomorph.app/Contents/MacOS/Lexomorph"
+          test -x "$RUNNER_TEMP/Lexomorph.app/Contents/Helpers/LexomorphOnnxHost"
+          test -f "$RUNNER_TEMP/Lexomorph.app/Contents/Frameworks/libonnxruntime.1.23.2.dylib"
+          test -f "$RUNNER_TEMP/Lexomorph.app/Contents/Resources/onnx-asr/onnx-models.json"
+          codesign --verify --deep --strict "$RUNNER_TEMP/Lexomorph.app"
       - name: Exercise installer and uninstaller
         run: |
           mkdir -p "$RUNNER_TEMP/release"
           ditto -c -k --sequesterRsrc --keepParent \
-            "$RUNNER_TEMP/SuperDictate.app" "$RUNNER_TEMP/release/SuperDictate.zip"
-          checksum="$(shasum -a 256 "$RUNNER_TEMP/release/SuperDictate.zip" | awk '{print $1}')"
-          SUPERDICTATE_RELEASE_URL="file://$RUNNER_TEMP/release/SuperDictate.zip" \
-          SUPERDICTATE_RELEASE_SHA256="$checksum" \
-          SUPERDICTATE_NO_OPEN=1 \
+            "$RUNNER_TEMP/Lexomorph.app" "$RUNNER_TEMP/release/Lexomorph.zip"
+          checksum="$(shasum -a 256 "$RUNNER_TEMP/release/Lexomorph.zip" | awk '{print $1}')"
+          LEXOMORPH_RELEASE_URL="file://$RUNNER_TEMP/release/Lexomorph.zip" \
+          LEXOMORPH_RELEASE_SHA256="$checksum" \
+          LEXOMORPH_NO_OPEN=1 \
             ./install.sh
-          test -x /Applications/SuperDictate.app/Contents/MacOS/SuperDictate
-          codesign --verify --deep --strict /Applications/SuperDictate.app
+          test -x /Applications/Lexomorph.app/Contents/MacOS/Lexomorph
+          codesign --verify --deep --strict /Applications/Lexomorph.app
           ./uninstall.sh
-          test ! -e /Applications/SuperDictate.app
+          test ! -e /Applications/Lexomorph.app
