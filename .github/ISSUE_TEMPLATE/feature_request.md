@@ -1,6 +1,6 @@
 ---
 name: "✨ Feature request"
-about: Suggest an idea or improvement for SuperDictate
+about: Suggest an idea or improvement for Lexomorph
 title: "[Feature] "
 labels: enhancement
 assignees: ''
