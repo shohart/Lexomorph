@@ -32,6 +32,7 @@ import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from . import (asr, audio, dictation_trace, edit_watch, focus_target, i18n, incremental, inject, system,
+               recording_flow,
                textproc, transcription, vocabulary_hygiene)
 from .history import History, HistoryEntry, UsageStats
 from .hotkeys import STYLE_ACTION_PREFIX, Action, HotkeyListener
@@ -631,7 +632,17 @@ class DictationController(QObject):
         self._insertion_target = self.focus.capture()
         # A new dictation ends the watch on the previous one.
         self.edit_watch.stop()
-        if not self.recorder.start(self.settings.input_device):
+        # The start cue goes out before the microphone is opened, so the
+        # (slow) stream open does not delay it. With the output mute on, the
+        # mute waits for the cue to finish (see _mute_after_cue).
+        then = None
+        if self.settings.mute_while_recording:
+            with self._playback_lock:
+                self._recording_session += 1
+                session = self._recording_session
+            then = lambda: self._mute_after_cue(session)
+        if not recording_flow.begin(self.recorder, self.sounds,
+                                    self.settings.input_device, then=then):
             self._drop_insertion_target()
             self._restore_playback()
             message = self._microphone_error_message(self.recorder.last_error or "")
@@ -644,23 +655,6 @@ class DictationController(QObject):
         # Before the recording-time windows start, so they and the final
         # pass decode with the same list.
         self._refresh_hotwords()
-        # The mute waits for the start cue to finish. Muting first silenced
-        # the cue along with everything else, so the one sound that says
-        # "it is listening now" was the one nobody could hear.
-        #
-        # The recorder is already running by then, so the cue itself lands
-        # in the first fraction of a second of the clip. That is the right
-        # way round: a beep at the front of a recording costs nothing, and
-        # holding the microphone shut until the cue ends would clip the
-        # first word of anybody who starts talking straight away.
-        if self.settings.mute_while_recording:
-            with self._playback_lock:
-                self._recording_session += 1
-                session = self._recording_session
-            self.sounds.play("start",
-                             then=lambda: self._mute_after_cue(session))
-        else:
-            self.sounds.play("start")
         self._start_preview()
         self._start_speculative()
 
@@ -679,10 +673,9 @@ class DictationController(QObject):
             return
         self._stop_preview(clear=False)
         speculative, self._speculative = self._speculative, None
-        samples = self.recorder.stop()
-        self._restore_playback()
+        samples = recording_flow.end(self.recorder, self.sounds,
+                                     restore=self._restore_playback)
         audio.clear_pending_dictation()
-        self.sounds.play("stop")
 
         duration = len(samples) / audio.SAMPLE_RATE
         if duration < audio.MIN_CLIP_SECONDS:
