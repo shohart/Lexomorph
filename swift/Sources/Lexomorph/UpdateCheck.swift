@@ -203,9 +203,31 @@ enum UpdateCheck {
     }
 }
 
+/// `update.json`. `sha256` is the checksum of `SuperDictate.zip` (the transition bridge that
+/// pre-0.10 clients download); `lexomorph_sha256` is the checksum of `Lexomorph.zip`, the archive
+/// this client downloads. Extra keys are ignored, so the same file stays valid for old clients.
 struct LexomorphUpdateManifest: Decodable, Equatable, Sendable {
     let version: String
     let sha256: String
+    let lexomorphSHA256: String?
+
+    init(version: String, sha256: String, lexomorphSHA256: String? = nil) {
+        self.version = version
+        self.sha256 = sha256
+        self.lexomorphSHA256 = lexomorphSHA256
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case version, sha256
+        case lexomorphSHA256 = "lexomorph_sha256"
+    }
+
+    /// The checksum of the archive this client installs: `lexomorph_sha256` first, then `sha256`.
+    var archiveSHA256: String { lexomorphSHA256 ?? sha256 }
+
+    static func isHexSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy { $0.isHexDigit }
+    }
 }
 
 struct PreparedLexomorphUpdate: Sendable {
@@ -292,8 +314,8 @@ enum LexomorphUpdateInstaller {
                               expectedVersion: String) throws -> LexomorphUpdateManifest {
         guard let manifest = try? JSONDecoder().decode(LexomorphUpdateManifest.self, from: data),
               UpdateCheck.normalizedReleaseVersion(from: manifest.version) == manifest.version,
-              manifest.sha256.count == 64,
-              manifest.sha256.allSatisfy({ $0.isHexDigit }) else {
+              LexomorphUpdateManifest.isHexSHA256(manifest.archiveSHA256),
+              manifest.lexomorphSHA256 == nil || LexomorphUpdateManifest.isHexSHA256(manifest.sha256) else {
             throw LexomorphUpdateInstallerError.invalidManifest
         }
         guard manifest.version == expectedVersion else {
@@ -334,7 +356,7 @@ enum LexomorphUpdateInstaller {
         var hasher = SHA256()
         hasher.update(data: archiveData)
         let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        guard digest.caseInsensitiveCompare(manifest.sha256) == .orderedSame else {
+        guard digest.caseInsensitiveCompare(manifest.archiveSHA256) == .orderedSame else {
             throw LexomorphUpdateInstallerError.checksumMismatch
         }
 
