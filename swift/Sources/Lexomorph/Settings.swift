@@ -131,6 +131,7 @@ final class Settings: @unchecked Sendable {
     private static let keyRewriteStyle = "rewrite_style_v1"
     private static let keyCustomRewriteStyles = "rewrite_custom_styles_v1"
     private static let keyCustomRewriteStyleTombstones = "rewrite_custom_style_tombstones_v1"
+    private static let keyRewritePromptStamps = "rewrite_system_prompt_stamps_v1"
     private static let keyUsageDeviceID = "usage_sync_device_id_v1"
     private static let keyUsageSyncLastSent = "usage_sync_last_sent_v1"
     private static let keyRemoteDailyUsage = "remote_daily_usage_v1"
@@ -1509,9 +1510,90 @@ final class Settings: @unchecked Sendable {
         defaults.string(forKey: "rewrite_system_prompt_\(id)_v1") ?? ""
     }
 
+    /// LOCAL edit path. For a built-in style a changed value is stamped
+    /// (an emptied override becomes a tombstone) and starts an account sync
+    /// through `onCustomStylesLocalChange`; custom-style prompts stay local
+    /// (they travel with the style's own row). Writing the same value again
+    /// is not a change.
     func setRewriteSystemPromptOverride(_ value: String, forStyleID id: String) {
-        defaults.set(value, forKey: "rewrite_system_prompt_\(id)_v1")
+        let key = "rewrite_system_prompt_\(id)_v1"
+        let previous = defaults.string(forKey: key) ?? ""
+        defaults.set(value, forKey: key)
+        guard RewriteStyle(rawValue: id) != nil, previous != value else { return }
+        var stamps = rewritePromptStamps
+        stamps[id] = VocabularyStore.timestamp()
+        rewritePromptStamps = stamps
+        onCustomStylesLocalChange?()
     }
+
+    /// `updated_at` of the last local or remote change of each built-in
+    /// style's prompt override. An empty override with a stamp is a tombstone
+    /// (the override was reset to the built-in default).
+    private var rewritePromptStamps: [String: String] {
+        get {
+            guard let data = defaults.data(forKey: Self.keyRewritePromptStamps) else { return [:] }
+            return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        }
+        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.keyRewritePromptStamps) }
+    }
+
+    /// Built-in prompt overrides (and reset tombstones) edited at or after
+    /// `stamp` (empty = all). A non-empty override that never had a stamp
+    /// (edited before sync existed) is stamped now, so it uploads once.
+    func rewritePromptSyncChanges(since stamp: String) -> [RewritePromptSyncRecord] {
+        var stamps = rewritePromptStamps
+        var result: [RewritePromptSyncRecord] = []
+        var stampsChanged = false
+        for style in RewriteStyle.allCases {
+            let id = style.rawValue
+            let prompt = rewriteSystemPromptOverride(forStyleID: id)
+            var at = stamps[id]
+            if at == nil {
+                guard !prompt.isEmpty else { continue }
+                at = VocabularyStore.timestamp()
+                stamps[id] = at
+                stampsChanged = true
+            }
+            guard let at, at >= stamp else { continue }
+            result.append(RewritePromptSyncRecord(style: id, prompt: prompt, deleted: prompt.isEmpty, updatedAt: at))
+        }
+        if stampsChanged { rewritePromptStamps = stamps }
+        return result
+    }
+
+    /// Applies server prompt rows by last-writer-wins on `updated_at` (a tie
+    /// goes to the server). A tombstone clears the override. Writes the
+    /// stored value directly, so it never calls `onCustomStylesLocalChange`
+    /// (no sync loop). Returns how many overrides actually changed.
+    @discardableResult
+    func applyRemoteRewritePrompts(_ entries: [RewritePromptRemoteEntry]) -> Int {
+        guard !entries.isEmpty else { return 0 }
+        var stamps = rewritePromptStamps
+        var changed = 0
+        for entry in entries where !entry.updatedAt.isEmpty {
+            guard RewriteStyle(rawValue: entry.style) != nil else { continue }
+            let current = rewriteSystemPromptOverride(forStyleID: entry.style)
+            let localStamp = stamps[entry.style] ?? (current.isEmpty ? "" : Self.epochStamp)
+            guard entry.updatedAt >= localStamp else { continue }
+            let next: String
+            if entry.deleted {
+                next = ""
+            } else {
+                guard !entry.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      entry.prompt.unicodeScalars.count <= Self.maxRewritePromptLength else { continue }
+                next = entry.prompt
+            }
+            if next != current {
+                defaults.set(next, forKey: "rewrite_system_prompt_\(entry.style)_v1")
+                changed += 1
+            }
+            stamps[entry.style] = entry.updatedAt
+        }
+        rewritePromptStamps = stamps
+        return changed
+    }
+
+    static let maxRewritePromptLength = 16000
 
     /// Which bundled model the rewrite pass loads when
     /// rewriteEngineBackend is `.bundledLocal` — one of

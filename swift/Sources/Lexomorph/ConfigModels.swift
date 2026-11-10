@@ -849,6 +849,22 @@ struct CustomStyleRemoteEntry: Equatable, Sendable {
     let updatedAt: String
 }
 
+/// A built-in style's prompt override (or its reset tombstone) to push.
+struct RewritePromptSyncRecord: Equatable, Sendable {
+    let style: String
+    let prompt: String
+    let deleted: Bool
+    let updatedAt: String
+}
+
+/// A server prompt row applied by `Settings.applyRemoteRewritePrompts`.
+struct RewritePromptRemoteEntry: Equatable, Sendable {
+    let style: String
+    let prompt: String
+    let deleted: Bool
+    let updatedAt: String
+}
+
 /// One (day, device) usage row of the account (modes-and-usage-sync spec
 /// §3.2), as stored for devices other than this one.
 struct DeviceDictationUsage: Codable, Equatable, Sendable {

@@ -6,6 +6,10 @@ chronological order. This file covers the release history published on
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+- Account sync now also carries the full system prompts you edit for the three built-in rewrite styles (polish, structured task, official). The newest edit wins; resetting a prompt to the default syncs too. Active mode and hotkeys stay local. An older sync server is detected and the prompts are sent again once it is upgraded.
+
 ## 1.0.0 (2026-11-10)
 
 macOS ships as `mac-v1.0.0` and Windows as `win-v1.0.0`. Copies of 0.9.x cannot update into Lexomorph directly (they check for `SuperDictate.app` and `SuperDictate.zip`), so `mac-v1.0.0` also carries `SuperDictate.zip`, a small bridge app under the old name that explains the rename and installs Lexomorph; see `docs/specs/transition-release-spec.md` and `docs/branding/MIGRATION_NOTES.md`.
