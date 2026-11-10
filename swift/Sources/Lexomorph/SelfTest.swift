@@ -6006,6 +6006,29 @@ enum LexomorphSelfTest {
                        "direct update manifest should describe version disagreement")
         }
 
+        // Transition manifest: lexomorph_sha256 wins; sha256 (the bridge) is the fallback.
+        let bridgeChecksum = String(repeating: "b", count: 64)
+        let transition = Data("{\"version\":\"9.8.7\",\"sha256\":\"\(bridgeChecksum)\",\"lexomorph_sha256\":\"\(checksum)\"}".utf8)
+        let parsed = try LexomorphUpdateInstaller.parseManifest(transition, expectedVersion: "9.8.7")
+        try expect(parsed.archiveSHA256, equals: checksum,
+                   "lexomorph_sha256 should take priority over sha256")
+        try expect(parsed.sha256, equals: bridgeChecksum,
+                   "sha256 should still be decoded for old clients")
+        try expect(try LexomorphUpdateInstaller.parseManifest(validData, expectedVersion: "9.8.7").archiveSHA256,
+                   equals: checksum, "a manifest without lexomorph_sha256 should fall back to sha256")
+        // The old (0.9.x) client decodes the same file ignoring the extra key.
+        struct LegacyManifest: Decodable { let version: String; let sha256: String }
+        let legacy = try JSONDecoder().decode(LegacyManifest.self, from: transition)
+        try expect(legacy.version, equals: "9.8.7", "a transition manifest should decode for a legacy client")
+        try expect(legacy.sha256, equals: bridgeChecksum, "a legacy client should see the bridge checksum")
+        let badLexo = Data("{\"version\":\"9.8.7\",\"sha256\":\"\(checksum)\",\"lexomorph_sha256\":\"zz\"}".utf8)
+        do {
+            _ = try LexomorphUpdateInstaller.parseManifest(badLexo, expectedVersion: "9.8.7")
+            throw SelfTestFailure.failed("a malformed lexomorph_sha256 should be rejected")
+        } catch let error as LexomorphUpdateInstallerError {
+            try expect(error, equals: .invalidManifest, "a malformed lexomorph_sha256 should be rejected")
+        }
+
         let invalidChecksum = Data(#"{"version":"9.8.7","sha256":"not-a-checksum"}"#.utf8)
         do {
             _ = try LexomorphUpdateInstaller.parseManifest(invalidChecksum,
