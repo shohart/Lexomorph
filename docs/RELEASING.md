@@ -42,7 +42,7 @@ the tag prefix, never by which release GitHub calls "latest".
    were found only in the build tree, a worktree that was deleted after the
    build.
 4. Put the version, `RELEASE_TAG="mac-vX.Y.Z"` and the zip's sha256 into
-   `install.sh`, and the version and sha256 into `update.json`;
+   `install.sh`, and into `update.json` the version, `sha256` (the `SuperDictate.zip` bridge) and `lexomorph_sha256` (`Lexomorph.zip`);
    `scripts/check.sh` checks that they agree. Add a CHANGELOG entry and
    commit (S). In a second commit, set `SOURCE_COMMIT=S` in `install.sh`.
 5. `gh release create mac-vX.Y.Z dist/Lexomorph.zip --target <full sha of the second commit> --latest`,
@@ -72,7 +72,11 @@ On the Windows build machine, from `windows\`:
 
 **1.0.0 (Lexomorph rename).** The macOS asset is now `Lexomorph.zip` holding
 `Lexomorph.app` (bundle id `com.local.lexomorph`). Clients up to 0.9.x validate
-the old names and cannot self-update into it: they move over with `install.sh`.
+the old names and cannot self-update into it, so the release also carries `SuperDictate.zip`: a bridge app under
+the old names (build: `scripts/build-bridge.sh Lexomorph.zip`, check: `scripts/check-bridge.sh`) that explains the
+rename and installs Lexomorph. `update.json` holds `sha256` (the bridge, for 0.9.x) and `lexomorph_sha256`
+(`Lexomorph.zip`, for 1.0 clients and `install.sh`). Publish both zips in the same release; until the owner decides
+old clients are gone, every macOS release needs a bridge of the same version.
 `install.sh` and `update.json` carry placeholder pins (all-zero SHA-256 and
 source commit) until this procedure fills them in; do not merge the rename to
 `main` before the release is published. See `docs/branding/MIGRATION_NOTES.md`.

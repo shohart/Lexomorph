@@ -7,11 +7,8 @@ RELEASE_VERSION="1.0.0"
 # macOS releases are tagged mac-vX.Y.Z (Windows ones win-vX.Y.Z, same repo);
 # 0.7.0 and earlier carry the legacy vX.Y.Z tag.
 RELEASE_TAG="mac-v1.0.0"
-# PLACEHOLDERS until mac-v1.0.0 is published: scripts/verify-release.sh and
-# docs/RELEASING.md set the real SHA-256 and source commit. Until then the
-# installer fails closed on the checksum.
-RELEASE_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
-SOURCE_COMMIT="0000000000000000000000000000000000000000"
+RELEASE_SHA256="93e9f93d0785f3fd2656748ac1093c4727cb55c2cac23541cf0b25698955a9a4"
+SOURCE_COMMIT="dcdce7c0f7d5826ca1e39adcfa3345a40689ca9a"
 RELEASE_URL="${LEXOMORPH_RELEASE_URL:-https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/Lexomorph.zip}"
 EXPECTED_SHA256="${LEXOMORPH_RELEASE_SHA256:-$RELEASE_SHA256}"
 REF="${LEXOMORPH_REF:-$SOURCE_COMMIT}"

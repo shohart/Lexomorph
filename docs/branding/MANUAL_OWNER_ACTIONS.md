@@ -24,10 +24,10 @@ line numbers (as of before the rename) are in `REBRAND_AUDIT.md`. Identifiers ar
 
 ## 1. Release order (the critical path)
 
-1. **Transition release under the old names** (macOS `mac-v0.9.x`): explains the rename and leads to the Lexomorph
-   installation, because 0.9.x clients cannot update into Lexomorph from inside the app. **Not implemented in the code
-   yet; it is yours to build and publish.** Requirements are in `MIGRATION_NOTES.md`, section 5.
-2. Let the transition release spread.
+1. **Transition release under the old names:** done as the bridge app `SuperDictate.zip`, published inside the same
+   `mac-v1.0.0` release (0.9.x clients download it as their update; it explains the rename and installs Lexomorph).
+   Design: `docs/specs/transition-release-spec.md`.
+2. Keep publishing a bridge with every macOS release until you decide old clients are gone.
 3. Publish 1.0.0 following `docs/RELEASING.md`: macOS `mac-v1.0.0` with `Lexomorph.zip`, Windows `win-v1.0.0` with
    `Lexomorph-Setup-1.0.0.exe` (never "latest"). Self-tests and the mandatory `scripts/verify-release.sh`.
 4. Fill in the pins: `install.sh` (`RELEASE_SHA256`, `SOURCE_COMMIT`) and `update.json` currently hold placeholders

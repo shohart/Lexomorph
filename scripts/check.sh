@@ -18,7 +18,15 @@ installer_tag="$(sed -n 's/^RELEASE_TAG="\([^"]*\)"$/\1/p' install.sh)"
 }
 installer_sha256="$(sed -n 's/^RELEASE_SHA256="\([^"]*\)"$/\1/p' install.sh)"
 manifest_version="$(plutil -extract version raw -o - update.json)"
-manifest_sha256="$(plutil -extract sha256 raw -o - update.json)"
+# update.json: "sha256" is the SuperDictate.zip bridge that 0.9.x clients
+# verify; "lexomorph_sha256" is Lexomorph.zip, which install.sh pins.
+bridge_sha256="$(plutil -extract sha256 raw -o - update.json)"
+manifest_sha256="$(plutil -extract lexomorph_sha256 raw -o - update.json 2>/dev/null || true)"
+[[ -n "$manifest_sha256" ]] || manifest_sha256="$bridge_sha256"
+[[ "$bridge_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+    printf 'update.json sha256 (bridge) is not a SHA-256: %s\n' "$bridge_sha256" >&2
+    exit 1
+}
 [[ -n "$installer_version" && "$app_version" == "$installer_version" ]] || {
     printf 'Version mismatch: Info.plist=%s install.sh=%s\n' "$app_version" "$installer_version" >&2
     exit 1
@@ -35,7 +43,7 @@ manifest_sha256="$(plutil -extract sha256 raw -o - update.json)"
 # The legacy SuperDictate/Parakey names live only in the migration code, the
 # install/uninstall scripts, tests and deliberately kept infrastructure.
 legacy_hits="$(grep -rIn -i -E 'superdictate|parakey' swift/Sources/Lexomorph swift/Package.swift \
-    | grep -v -E 'Migration\.swift|SelfTest\.swift|SuperDictate-Next|bykovlegal|shlgd/|superdictate_|based on Parakey|Parakey by|[Ff]ormerly SuperDictate|HOMEBREW_CASK_INSTALLED_TOKEN|superdictate-corrections|CorrectionsTransfer\.swift|main\.swift' || true)"
+    | grep -v -E 'Migration\.swift|SelfTest\.swift|SuperDictate-Next|bykovlegal|shlgd/|superdictate_|based on Parakey|Parakey by|[Ff]ormerly SuperDictate|HOMEBREW_CASK_INSTALLED_TOKEN|superdictate-corrections|CorrectionsTransfer\.swift|main\.swift|SuperDictate\.zip' || true)"
 [[ -z "$legacy_hits" ]] || {
     printf 'Legacy names outside the migration code:\n%s\n' "$legacy_hits" >&2
     exit 1

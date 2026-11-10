@@ -131,7 +131,9 @@ macOS, or `%LOCALAPPDATA%\Lexomorph` on Windows. This is an explicit user action
   `.zip` asset of the newest `win-v*` release, so `Lexomorph-Setup-1.0.0.exe` is offered normally and the user runs
   it. The installer removes the old SuperDictate and the first launch copies the data.
 
-### Transition release (TODO for the owner; not implemented in code yet)
+### Transition release (implemented as the bridge app; requirements kept for reference)
+
+Implemented: `mac-v1.0.0` also publishes `SuperDictate.zip`, a bridge app under the old names that shows this explanation and installs Lexomorph (design: `docs/specs/transition-release-spec.md`, source: `bridge/`). The text below is the original requirement list.
 
 Because 0.9.x macOS clients can never update into Lexomorph, a **transition release under the old names** is needed
 before (or together with) 1.0.0. It must be built and published the old way: bundle `SuperDictate.app`, bundle ID

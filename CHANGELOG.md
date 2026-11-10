@@ -6,9 +6,9 @@ chronological order. This file covers the release history published on
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased (1.0.0)
+## 1.0.0 (2026-11-10)
 
-Not released yet; the publication date is set when the release is published. macOS ships as `mac-v1.0.0` and Windows as `win-v1.0.0`. `install.sh` and `update.json` hold placeholder pins (all-zero SHA-256 and source commit) until the release procedure in `docs/RELEASING.md` fills them in, and the rename must not be merged into `main` before then. Copies of 0.9.x cannot update into Lexomorph from inside the app (they check for `SuperDictate.app` and `SuperDictate.zip`); a transition release under the old names is planned and is not implemented yet, see `docs/branding/MIGRATION_NOTES.md`.
+macOS ships as `mac-v1.0.0` and Windows as `win-v1.0.0`. Copies of 0.9.x cannot update into Lexomorph directly (they check for `SuperDictate.app` and `SuperDictate.zip`), so `mac-v1.0.0` also carries `SuperDictate.zip`, a small bridge app under the old name that explains the rename and installs Lexomorph; see `docs/specs/transition-release-spec.md` and `docs/branding/MIGRATION_NOTES.md`.
 
 ### Changed
 - **Rename: Lexomorph is the new name of SuperDictate Next, in every identifier, on both platforms.** Tagline: "Speak freely. Write precisely."
@@ -34,7 +34,7 @@ Not released yet; the publication date is set when the release is published. mac
 - **Windows installer:** the uninstall question about the data folder pointed at `Dictation` instead of the real folder, and the autostart value was written and then deleted by an entry of the same name, which could remove the autostart entry right after it was created. Both are fixed; the installer also reads its Russian messages correctly now (UTF-8 BOM).
 
 ### Checked
-- Windows, on the Windows build PC: 93 self-tests pass, `build.ps1` builds `Lexomorph.exe` (file version 1.0.0), and Inno Setup compiles `Lexomorph-Setup-1.0.0.exe`. The installer was not run.
+- Windows, on the Windows build PC: 101 self-tests pass, `build.ps1` builds `Lexomorph.exe` (file version 1.0.0), and Inno Setup compiles `Lexomorph-Setup-1.0.0.exe`. The installer was not run.
 
 ## 0.9.7 — 2026-11-06
 

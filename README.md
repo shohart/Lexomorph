@@ -286,7 +286,7 @@ that server, so they leave the device.
 |---|---|
 | Replacement dictionary and ASR terms between your Macs (one JSON file in a folder you choose, for example iCloud, Dropbox or Syncthing; no account) | released (macOS) |
 | Dictionary and ASR terms between macOS and Windows, through an account (e-mail and password) on the sync server | released: dictionary in 0.9.3, ASR terms in 0.9.5; off until you sign in |
-| Custom writing modes (name, color, instruction) and dictation statistics per day and device | **unreleased: ships with 1.0.0; no published release contains it yet** |
+| Custom writing modes (name, color, instruction) and dictation statistics per day and device | shipped (1.0.0) |
 | Settings, hotkeys, the active mode | not synced (hotkeys and the active mode are intentionally local) |
 | Mobile devices | no client exists |
 
