@@ -66,7 +66,7 @@ code and the documentation. Order:
 
 ## 4. Signing and checks on real machines
 
-- Confirm that the release is signed with the same "PolterType Dev" certificate. If it is not, the designated
+- Confirm that the release is signed with the same "Aleksei Bykov" certificate. If it is not, the designated
   requirement changes and everyone loses the macOS permissions (they are re-requested anyway because of the new
   bundle ID, but it must not happen a second time). Releases are not notarized.
 - Any change to `Info.plist` changes the ZIP: a new checksum in `install.sh` and `update.json`, and the mandatory

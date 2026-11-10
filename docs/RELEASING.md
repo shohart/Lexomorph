@@ -20,8 +20,8 @@ the tag prefix, never by which release GitHub calls "latest".
 
 1. Bump `swift/Info.plist`. Build and sign in the main checkout, not in a
    temporary worktree or clone:
-   `SIGN_IDENTITY=C78D9D87EB6EC8BF75D2DF035A59D6FB300C9ED9 scripts/build-app.sh`
-   (the "PolterType Dev" certificate, by hash: its name is ambiguous in
+   `SIGN_IDENTITY=EA07B70DDA62AFD391E335D22C2629C976B5BBE7 scripts/build-app.sh`
+   (the "Aleksei Bykov" certificate, by hash: its name is ambiguous in
    the keychain). Then zip it:
    `ditto -c -k --sequesterRsrc --keepParent dist/Lexomorph.app dist/Lexomorph.zip`.
 2. **Self-tests from the build tree, with the real models** (`swift build -c debug`

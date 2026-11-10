@@ -43,7 +43,7 @@ fail() { printf 'build-test-app: %s\n' "$*" >&2; exit 1; }
 # force ad-hoc deliberately (permissions WILL reset on every rebuild).
 if [[ -z "${SIGN_IDENTITY+x}" ]]; then
     # First identity valid FOR CODESIGNING (skip "(Invalid ...)" entries);
-    # name-agnostic — this Mac's identity is custom-named ("PolterType Dev").
+    # name-agnostic — this Mac's identity is custom-named ("Aleksei Bykov").
     SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
         | grep -v '(' \
         | sed -n 's/.*"\(.*\)".*/\1/p' \

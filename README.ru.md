@@ -149,7 +149,7 @@ curl -fsSL https://raw.githubusercontent.com/shohart/SuperDictate-Next/main/inst
 права на микрофон, затем заменяет `/Applications/Lexomorph.app` и открывает
 приложение. Xcode не нужен. История, настройки и скачанные модели сохраняются.
 
-Релизные сборки подписаны сертификатом разработчика («PolterType Dev») и **не
+Релизные сборки подписаны сертификатом разработчика («Aleksei Bykov») и **не
 нотаризованы Apple**. Установка этой командой проверяется, но ZIP, скачанный
 через браузер, может вызвать предупреждение Gatekeeper. Локальные сборки
 `scripts/build-app.sh` подписываются ad-hoc, если не передан `SIGN_IDENTITY`.

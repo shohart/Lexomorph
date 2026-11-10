@@ -149,7 +149,7 @@ code signature and the microphone entitlements, then replaces
 `/Applications/Lexomorph.app` and opens it. Xcode is not needed. Your
 history, settings and downloaded models are kept.
 
-Release builds are signed with a developer certificate ("PolterType Dev") and
+Release builds are signed with a developer certificate ("Aleksei Bykov") and
 are **not notarized by Apple**. The installer path above is verified, but a ZIP
 downloaded through a browser can trigger a Gatekeeper warning. Local builds made
 with `scripts/build-app.sh` are signed ad-hoc unless you pass `SIGN_IDENTITY`.
