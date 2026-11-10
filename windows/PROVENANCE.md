@@ -1,5 +1,7 @@
 # Windows port — provenance
 
+**[Читать по-русски](PROVENANCE.ru.md)**
+
 This directory is the Windows port of Lexomorph (formerly SuperDictate Next). It is a separate
 application, not a build variant of the macOS app in `swift/`: the two share
 model files, setting names, data-file layouts and behaviour, but no source.
@@ -35,12 +37,12 @@ Shared by construction, and deliberately kept in sync:
 
 - **Model files.** The same weights, pinned to the same repositories and
   revisions, verified by the same SHA-256 digests: the LLM GGUFs as in
-  `swift/Sources/Parakey/ModelDownload.swift`, the speech models through the
+  `swift/Sources/Lexomorph/ModelDownload.swift`, the speech models through the
   shared ONNX catalog (below).
 - **Setting names.** Where a setting exists on both platforms it carries
   the same key, so behaviour is comparable and support answers transfer.
 - **Prompts.** The correction and rewrite prompts are carried over
-  verbatim from `swift/Sources/Parakey/LLMPostprocessingPrompts.swift`.
+  verbatim from `swift/Sources/Lexomorph/LLMPostprocessingPrompts.swift`.
   They were tuned empirically against these exact models; changing one on
   one platform without the other silently forks the product's behaviour.
 

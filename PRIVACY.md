@@ -1,5 +1,7 @@
 # 🔒 Privacy
 
+**[Читать по-русски](PRIVACY.ru.md)**
+
 Lexomorph (formerly SuperDictate Next) is built around local speech
 recognition. This page lists what stays on your device and what can leave it.
 The sync server address and the repository still carry the old name on purpose;

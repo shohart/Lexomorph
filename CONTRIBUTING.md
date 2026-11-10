@@ -1,5 +1,7 @@
 # 🤝 Contributing
 
+**[Читать по-русски](CONTRIBUTING.ru.md)**
+
 Issues and pull requests are welcome to Lexomorph (formerly SuperDictate
 Next). Please keep changes focused, keep audio on the device, document any new
 network use in the README privacy table and PRIVACY.md, and test on macOS 14 or

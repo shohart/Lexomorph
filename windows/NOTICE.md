@@ -1,32 +1,35 @@
-# Происхождение / Attribution
+# Attribution
 
-Это порт для Windows. Он не содержит кода macOS-версии (весь код написан
-заново на Python + PySide6), но повторяет её поведение, названия настроек
-и структуру данных, поэтому цепочка авторства сохраняется целиком.
+**[Читать по-русски](NOTICE.ru.md)**
 
-| Проект | Автор | Роль |
+This is the Windows port of Lexomorph (formerly SuperDictate Next). It contains
+no code from the macOS version (all of it is written from scratch in Python +
+PySide6), but it follows that version's behaviour, setting names and data
+layout, so the chain of authorship is kept in full.
+
+| Project | Author | Role |
 | --- | --- | --- |
-| [Parakey](https://github.com/rcourtman/Parakey) | Richard Courtman | оригинал (macOS, Swift) |
-| [SuperDictate](https://github.com/shlgd/SuperDictate) | shlgd | форк Parakey, от которого взято поведение |
-| Dictation for Windows | metawka | этот порт (Python, PySide6) |
+| [Parakey](https://github.com/rcourtman/Parakey) | Richard Courtman | original (macOS, Swift) |
+| [SuperDictate](https://github.com/shlgd/SuperDictate) | shlgd | fork of Parakey whose behaviour was followed (later developed into Lexomorph) |
+| Dictation for Windows | metawka | this port (Python, PySide6) |
 
-Все три распространяются по лицензии MIT, см. [LICENSE](LICENSE).
+All three are distributed under the MIT licence, see [LICENSE](LICENSE).
 
-## Сторонние компоненты
+## Third-party components
 
-| Компонент | Лицензия | Назначение |
+| Component | Licence | Purpose |
 | --- | --- | --- |
-| [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | CC-BY-4.0 (NVIDIA) | модель распознавания речи |
-| [onnx-asr](https://github.com/istupakov/onnx-asr) | MIT | загрузчик и декодер модели |
-| [Parakeet TDT 0.6B v3, OpenVINO](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov) (FluidInference, зеркало [VoiceScribe](https://huggingface.co/VoiceScribe/voicescribe-parakeet)) | CC-BY-4.0 | модель для NPU |
-| [GigaAM v3](https://huggingface.co/ai-sage/GigaAM-v3), OpenVINO и NPU-калибровка [Andrewsab](https://huggingface.co/Andrewsab/gigaam-v3-e2e-rnnt-ov-npu) (зеркала [VoiceScribe](https://huggingface.co/VoiceScribe/voicescribe-gigaam-npu)) | MIT | модель для NPU |
-| [Horizon Labs punctuation-restoration](https://huggingface.co/Horizon-Labs/punctuation-restoration-base) (Small, Base; на основе [mmBERT](https://huggingface.co/jhu-clsp/mmBERT-base), MIT) | Apache-2.0 | восстановление пунктуации |
-| [OpenVINO](https://github.com/openvinotoolkit/openvino) | Apache-2.0 | исполнение моделей на NPU |
-| [ONNX Runtime](https://onnxruntime.ai/) | MIT | исполнение модели |
-| [PySide6](https://doc.qt.io/qtforpython/) | LGPLv3 | интерфейс |
-| [sounddevice](https://python-sounddevice.readthedocs.io/) / PortAudio | MIT | захват звука |
-| [pycaw](https://github.com/AndreMiras/pycaw) | MIT | приглушение системного звука |
+| [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | CC-BY-4.0 (NVIDIA) | speech recognition model |
+| [onnx-asr](https://github.com/istupakov/onnx-asr) | MIT | model loader and decoder |
+| [Parakeet TDT 0.6B v3, OpenVINO](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-ov) (FluidInference, mirror [VoiceScribe](https://huggingface.co/VoiceScribe/voicescribe-parakeet)) | CC-BY-4.0 | NPU model |
+| [GigaAM v3](https://huggingface.co/ai-sage/GigaAM-v3), OpenVINO and NPU calibration by [Andrewsab](https://huggingface.co/Andrewsab/gigaam-v3-e2e-rnnt-ov-npu) (mirror [VoiceScribe](https://huggingface.co/VoiceScribe/voicescribe-gigaam-npu)) | MIT | NPU model |
+| [Horizon Labs punctuation-restoration](https://huggingface.co/Horizon-Labs/punctuation-restoration-base) (Small, Base; based on [mmBERT](https://huggingface.co/jhu-clsp/mmBERT-base), MIT) | Apache-2.0 | punctuation restoration |
+| [OpenVINO](https://github.com/openvinotoolkit/openvino) | Apache-2.0 | running models on the NPU |
+| [ONNX Runtime](https://onnxruntime.ai/) | MIT | running the model |
+| [PySide6](https://doc.qt.io/qtforpython/) | LGPLv3 | user interface |
+| [sounddevice](https://python-sounddevice.readthedocs.io/) / PortAudio | MIT | audio capture |
+| [pycaw](https://github.com/AndreMiras/pycaw) | MIT | system audio ducking |
 
-Веса модели не входят в состав установщика: они скачиваются при первом
-запуске в `%LOCALAPPDATA%\Dictation\Models` и остаются под лицензией
-CC-BY-4.0 NVIDIA.
+Model weights are not part of the installer: they are downloaded on first run
+to `%LOCALAPPDATA%\Lexomorph\Models` and remain under NVIDIA's CC-BY-4.0
+licence.

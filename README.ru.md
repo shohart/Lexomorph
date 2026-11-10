@@ -131,7 +131,7 @@ Linux не поддерживается. На ноутбуках Intel с NPU в
   после обработки.
 
 Синхронизация необязательна и единственная требует аккаунта. Подробнее:
-[PRIVACY.md](PRIVACY.md).
+[PRIVACY.ru.md](PRIVACY.ru.md).
 
 ## Установка
 
@@ -415,7 +415,7 @@ Lexomorph — тот же проект под новым именем. С вер
 
 ## Участие
 
-Issue и pull request приветствуются: [CONTRIBUTING.md](CONTRIBUTING.md) перечисляет
+Issue и pull request приветствуются: [CONTRIBUTING.ru.md](CONTRIBUTING.ru.md) перечисляет
 проверки, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — правила сообщества. Проверки
 перед pull request:
 
