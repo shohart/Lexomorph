@@ -234,7 +234,13 @@ public:
         // investigated as a suspect.)
         params.fit_params = false;
         params.model.path = cfg.model_path;
-        params.n_ctx = cfg.n_ctx;
+        // Learned prompt prefixes stay resident in the memory as their own
+        // sequences 1..kPrefixSlots (see generate()), so the context holds a
+        // fixed budget for them on top of what one request may use, in one
+        // unified KV cache shared by all sequences.
+        params.n_ctx = cfg.n_ctx + static_cast<int32_t>(kPrefixBudgetTokens);
+        params.n_parallel = 1 + static_cast<int32_t>(kPrefixSlots);
+        params.kv_unified = true;
         params.n_batch = std::min<int32_t>(2048, std::max<int32_t>(512, cfg.n_ctx));
         // 0 = CPU only (struct default is -1 = "auto", which would offload
         // to any compiled-in GPU backend unconditionally -- explicit 0
@@ -274,6 +280,16 @@ public:
         // ggml_aligned_malloc aborts. Mirror the CLI's implicit default
         // (batch threads == regular threads unless told otherwise).
         params.cpuparams_batch.n_threads = resolved_threads;
+#if defined(__APPLE__)
+        // macOS GPUs reach Vulkan only through MoltenVK, which has no
+        // cooperative-matrix path, so its flash-attention shaders are far
+        // slower than the plain attention ones. Measured on a Radeon
+        // Instinct MI50, YandexGPT-5-Lite-8B Q4_K_M: generation 9.4 t/s with
+        // flash attention, 37.6 t/s without; prompt 273 vs 364 t/s. Older
+        // llama.cpp reported it unsupported there, so "auto" turned it off;
+        // newer versions support it and "auto" would turn it on.
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+#endif
         // Correction mode is always greedy (temperature <= 0 samples
         // greedily -- see common_params_sampling::temp's own doc comment).
         params.sampling.temp = 0.0f;
@@ -368,11 +384,22 @@ public:
         // prompt ~240 of ~275. Decoding them once and restoring that state
         // saves most of the prompt work. Qwen3.5 is a hybrid (recurrent +
         // attention layers) whose memory cannot be trimmed back to a prefix
-        // with llama_memory_seq_rm, so each prefix is kept as a full
-        // sequence-state snapshot (llama_state_seq_get_data) and restored
-        // with llama_state_seq_set_data. Measured with llama.cpp b11826 on a
-        // Core Ultra 5 225H CPU, 65-sentence correction corpus: p50 0.75 s
-        // -> 0.32 s per sentence, identical outputs (65/65).
+        // with llama_memory_seq_rm, so a prefix is not trimmed out of the
+        // previous request: it is kept as its own sequence (1..kPrefixSlots)
+        // in the same memory and copied onto sequence 0 with
+        // llama_memory_seq_cp. For the attention KV cache that copy only
+        // tags the cells with the new sequence id; for a recurrent state the
+        // cell is shared and copied on the next decode. Measured with
+        // llama.cpp b11826 on a Core Ultra 5 225H CPU, 65-sentence
+        // correction corpus: p50 0.75 s -> 0.32 s per sentence, identical
+        // outputs (65/65).
+        //
+        // It used to be a byte snapshot (llama_state_seq_get_data/set_data).
+        // From llama.cpp ded522f, restoring one on Vulkan is a single batched
+        // upload of every V row (the V cache is transposed without flash
+        // attention: 32 layers x 1024 rows for YandexGPT-5-Lite-8B), which
+        // MoltenVK runs as one blit per row: 5 s per request on a Radeon
+        // Instinct MI50, against 2.2 s with no reuse at all.
         //
         // Prefixes are learned, not configured: one is the opening this
         // prompt shares with one of the last few prompts. There are several
@@ -416,13 +443,9 @@ public:
 
         int n_past = 0;
         if (best != nullptr) {
-            if (llama_state_seq_set_data(ctx_, best->state.data(), best->state.size(), 0) == best->state.size()) {
-                n_past = static_cast<int>(best->tokens.size());
-                best->last_used = ++prefix_clock_;
-            } else {
-                llama_memory_seq_rm(mem, 0, -1, -1);  // a failed restore may leave part of it
-                prefix_slots_.erase(prefix_slots_.begin() + (best - prefix_slots_.data()));
-            }
+            llama_memory_seq_cp(mem, best->seq_id, 0, -1, -1);
+            n_past = static_cast<int>(best->tokens.size());
+            best->last_used = ++prefix_clock_;
         }
         if (shared >= static_cast<size_t>(n_past) + kMinPrefixTokens) {
             if (llama_decode(ctx_, llama_batch_get_one(tokens.data() + n_past,
@@ -480,29 +503,43 @@ public:
 private:
     struct PrefixSlot {
         std::vector<llama_token> tokens;
-        std::vector<uint8_t>     state;
+        llama_seq_id             seq_id = 0;
         uint64_t                 last_used = 0;
     };
 
-    // Snapshots the sequence state, whose memory holds exactly `prefix`,
-    // into a slot: the least recently used one goes when all are taken.
+    // Keeps sequence 0, whose memory holds exactly `prefix`, as a prefix
+    // sequence of its own. The least recently used prefixes go first when
+    // all sequence ids are taken or their tokens would pass the budget.
     void take_prefix_snapshot(std::vector<llama_token> prefix) {
-        const size_t size = llama_state_seq_get_size(ctx_, 0);
-        if (size == 0 || size > kMaxPrefixStateBytes) {
+        if (prefix.size() > kPrefixBudgetTokens) {
             return;
         }
-        PrefixSlot slot;
-        slot.state.resize(size);
-        if (llama_state_seq_get_data(ctx_, slot.state.data(), size, 0) != size) {
-            return;
-        }
-        slot.tokens = std::move(prefix);
-        slot.last_used = ++prefix_clock_;
-        if (prefix_slots_.size() >= kPrefixSlots) {
+        llama_memory_t mem = llama_get_memory(ctx_);
+        auto budget_used = [&] {
+            size_t n = 0;
+            for (const auto & slot : prefix_slots_) {
+                n += slot.tokens.size();
+            }
+            return n;
+        };
+        while (!prefix_slots_.empty() &&
+               (prefix_slots_.size() >= kPrefixSlots || budget_used() + prefix.size() > kPrefixBudgetTokens)) {
             auto oldest = std::min_element(prefix_slots_.begin(), prefix_slots_.end(),
                 [](const PrefixSlot & a, const PrefixSlot & b) { return a.last_used < b.last_used; });
+            llama_memory_seq_rm(mem, oldest->seq_id, -1, -1);
             prefix_slots_.erase(oldest);
         }
+        llama_seq_id free_id = 1;
+        while (std::any_of(prefix_slots_.begin(), prefix_slots_.end(),
+                           [&](const PrefixSlot & slot) { return slot.seq_id == free_id; })) {
+            free_id++;
+        }
+        llama_memory_seq_rm(mem, free_id, -1, -1);
+        llama_memory_seq_cp(mem, 0, free_id, -1, -1);
+        PrefixSlot slot;
+        slot.tokens = std::move(prefix);
+        slot.seq_id = free_id;
+        slot.last_used = ++prefix_clock_;
         prefix_slots_.push_back(std::move(slot));
     }
 
@@ -537,11 +574,12 @@ private:
         return v == nullptr || std::strcmp(v, "0") != 0;
     }();
     // Correction, rewrite and the three rewrite styles fit, with room for a
-    // custom prompt; each snapshot of a ~250-token prefix is tens of MB for
-    // an 8B model, and one larger than kMaxPrefixStateBytes is not kept.
+    // custom prompt. Their tokens share kPrefixBudgetTokens of extra
+    // context: ~250-300 tokens each, ~256 MiB of f16 KV cache for an 8B
+    // model (32 layers x 1024 K + 1024 V values per token).
     static constexpr size_t    kPrefixSlots = 6;
     static constexpr size_t    kRecentPrompts = 6;
-    static constexpr size_t    kMaxPrefixStateBytes = 512u << 20;
+    static constexpr size_t    kPrefixBudgetTokens = 2048;
     std::vector<PrefixSlot>    prefix_slots_;
     std::vector<std::vector<llama_token>> recent_prompts_;
     uint64_t                   prefix_clock_ = 0;
