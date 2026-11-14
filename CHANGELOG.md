@@ -13,8 +13,11 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.
 - **Prompt prefixes stay in the model's memory.** The correction prompt and each rewrite style prompt are kept as their own sequences in the KV cache and reused without copying, instead of byte snapshots that the new runtime restored slowly on Vulkan (7 s per request on the MI50). Outputs are the same as without reuse (greedy, checked on YandexGPT and Qwen3.5-0.8B).
 - **macOS: flash attention is off for the local models.** Through MoltenVK it made YandexGPT generate 9.4 tokens/s instead of 37.6.
 
+- **Windows: the GPU LLM host can use the cooperative-matrix, integer-dot and bfloat16 shaders** (an RTX 4070 now reports `int dot: 1 | matrix cores: NV_coopmat2`). They were in the shader set but never enabled.
+
 ### Fixed
-- **Switching rewrite off while it was still running moved every local model to the CPU** until the app restarted. A host the app stops itself is no longer treated as a GPU fault.
+- **Switching rewrite off while it was still running moved every local model to the CPU** until the app restarted. A host the app stops itself is no longer treated as a GPU fault. (macOS; the Windows client already kept the GPU in that case.)
+- **Windows: GigaAM could fail to load with "sha256 mismatch for 'hotword_tokenizer'"** in a build made from a checkout with CRLF line endings. The hash-pinned ASR assets are now kept byte-exact by git.
 
 ## 1.0.1 (2026-11-10)
 
