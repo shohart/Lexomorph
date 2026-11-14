@@ -150,6 +150,11 @@ let package = Package(
                 // what it can see (LLMHostProcess.swift, LLMGPUProbe.swift,
                 // superdictate_llm_host_main.cpp); this define only makes
                 // the backend available to register.
+                // The GGML_VULKAN_*_GLSLC_SUPPORT macros of
+                // upstream/ggml-vulkan/glslc-support.txt (cooperative
+                // matrix, integer dot, bfloat16) are left out here: MoltenVK
+                // offers none of those, so the shaders would never run.
+                // The Windows host defines them.
                 .define("GGML_USE_VULKAN"),
                 .define("LLAMA_VERSION", to: "\"ded522f8304554317e7ff8f88698dbbbca5425aa\""),
                 .define("LLAMA_COMMIT", to: "\"ded522f8304554317e7ff8f88698dbbbca5425aa\""),

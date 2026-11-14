@@ -83,6 +83,12 @@ target_link_libraries(lexomorph-llm-host PRIVATE ws2_32 crypt32)
 if(SD_LLM_VULKAN)
   find_package(Vulkan REQUIRED)
   target_compile_definitions(lexomorph-llm-host PRIVATE GGML_USE_VULKAN)
+  # The shader variants the vendored corpus holds (cooperative matrix,
+  # integer dot, bfloat16, ...), recorded by scripts/vendor-llama-cpp.sh.
+  # Without these macros ggml-vulkan.cpp never picks them: an RTX 4070 then
+  # reported "int dot: 0 | matrix cores: none" and ran the slowest matmuls.
+  file(STRINGS "${SD_LLAMA}/upstream/ggml-vulkan/glslc-support.txt" SD_VK_GLSLC_SUPPORT)
+  target_compile_definitions(lexomorph-llm-host PRIVATE ${SD_VK_GLSLC_SUPPORT})
   target_link_libraries(lexomorph-llm-host PRIVATE Vulkan::Vulkan)
 endif()
 endif()

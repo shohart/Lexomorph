@@ -288,6 +288,19 @@ vendor_vulkan_backend() {
         -DLLAMA_BUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release >/dev/null
     cmake --build "$vk_build" --target ggml-vulkan -j
 
+    # The shader corpus holds the cooperative-matrix, integer-dot and
+    # bfloat16 variants this glslc could compile; ggml-vulkan.cpp only uses
+    # them when the matching GGML_VULKAN_*_GLSLC_SUPPORT macros are defined
+    # (without them an RTX 4070 ran the slowest matmul path). Record the
+    # set upstream's CMake chose, for the builds to define.
+    local flags_make="$vk_build/ggml/src/ggml-vulkan/CMakeFiles/ggml-vulkan.dir/flags.make"
+    if [[ ! -f "$flags_make" ]]; then
+        echo "vendor-llama-cpp.sh: FATAL: $flags_make not found -- upstream's CMake output layout may have changed" >&2
+        exit 1
+    fi
+    grep -oE -- '-DGGML_VULKAN_[A-Z0-9_]+_GLSLC_SUPPORT' "$flags_make" | sed 's/^-D//' | sort -u \
+        > "$vk_dest/glslc-support.txt"
+
     local gen_dir="$vk_build/ggml/src/ggml-vulkan"
     local spv_dir="$gen_dir/vulkan-shaders.spv"
     if [[ ! -d "$spv_dir" ]]; then
