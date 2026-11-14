@@ -1,0 +1,5 @@
+# The ASR runtime assets are pinned by SHA-256 in the model manifests
+# (gigaam_v3_spm.tsv is the GigaAM hotword tokenizer). Never convert their
+# line endings: with core.autocrlf=true a Windows checkout turned the .tsv
+# into CRLF, its hash stopped matching, and GigaAM refused to load.
+native/asr-runtime/assets/* -text
