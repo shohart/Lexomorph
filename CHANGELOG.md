@@ -6,6 +6,16 @@ chronological order. This file covers the release history published on
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 1.0.2 (2026-11-14)
+
+### Changed
+- **The bundled LLM runtime is llama.cpp ded522f (was d59d455 from August), on both platforms.** On a Radeon Instinct MI50 under macOS (Vulkan through MoltenVK) the first YandexGPT request after loading drops from 13 s to about 1.3 s, and the pre-warm from 25-54 s to a few seconds; warmed-up requests take 0.5-0.7 s. The updated vendor script also copies the files upstream split out since then.
+- **Prompt prefixes stay in the model's memory.** The correction prompt and each rewrite style prompt are kept as their own sequences in the KV cache and reused without copying, instead of byte snapshots that the new runtime restored slowly on Vulkan (7 s per request on the MI50). Outputs are the same as without reuse (greedy, checked on YandexGPT and Qwen3.5-0.8B).
+- **macOS: flash attention is off for the local models.** Through MoltenVK it made YandexGPT generate 9.4 tokens/s instead of 37.6.
+
+### Fixed
+- **Switching rewrite off while it was still running moved every local model to the CPU** until the app restarted. A host the app stops itself is no longer treated as a GPU fault.
+
 ## 1.0.1 (2026-11-10)
 
 ### Added
