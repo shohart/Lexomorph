@@ -3,7 +3,7 @@
 Do not hand-edit anything under this directory -- re-run the vendor script.
 
 - llama.cpp: https://github.com/ggml-org/llama.cpp
-  commit: d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd
+  commit: ded522f8304554317e7ff8f88698dbbbca5425aa
 - ggml: llama.cpp's own in-tree copy at the same commit (ggml/ -- NOT
   shared with swift/Sources/parakeet_cpp/upstream/'s independently pinned
   ggml v0.13.0; deliberately two separate vendor trees, see this script's
@@ -18,4 +18,4 @@ Do not hand-edit anything under this directory -- re-run the vendor script.
 - License: both llama.cpp and its in-tree ggml are MIT-licensed. See
   LICENSE-llama-cpp.txt in this directory for the exact upstream notice at
   the pinned commit above.
-- Vendored on: 2026-08-20T11:40:11Z
+- Vendored on: 2026-11-13T23:46:03Z

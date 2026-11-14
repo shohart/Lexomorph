@@ -47,7 +47,7 @@
 Общие также Silero VAD и (экспериментальный, не выпускаемый) хост LLM в `engines\`:
 их собирает `tools/build-engines.ps1` (`native/engines/CMakeLists.txt`) из тех же
 вендорных копий в `swift/Sources/`, что и macOS-приложение: Silero VAD из whisper.cpp
-поверх ggml v0.13.0 и llama.cpp d59d455 с бэкендом CPU (и по желанию Vulkan).
+поверх ggml v0.13.0 и llama.cpp ded522f с бэкендом CPU (и по желанию Vulkan).
 Релизные сборки выполняют коррекцию и рерайт только через OpenAI-совместимый
 endpoint. Ранние ревизии подключали llama.cpp / whisper.cpp из апстрима, собранные с
 CUDA; эти бинарные файлы никогда не коммитились и не могли быть пересобраны.

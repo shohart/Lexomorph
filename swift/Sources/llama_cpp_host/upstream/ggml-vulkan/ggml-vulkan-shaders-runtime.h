@@ -110,6 +110,9 @@ class lazy_data {
 public:
     explicit constexpr lazy_data(const char * name) : name_(name) {}
     operator const void *() const { return get_data(name_); }
+    // Newer ggml-vulkan.cpp also picks a shader with a ternary into a
+    // `const unsigned char *` local (CREATE_UNARY_MUL and friends).
+    operator const unsigned char *() const { return static_cast<const unsigned char *>(get_data(name_)); }
 private:
     const char * name_;
 };

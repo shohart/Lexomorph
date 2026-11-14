@@ -64,10 +64,10 @@ add_executable(lexomorph-llm-host ${SD_LLAMA_SOURCES})
 target_compile_options(lexomorph-llm-host PRIVATE ${SD_COMMON_OPTIONS})
 target_compile_definitions(lexomorph-llm-host PRIVATE
   ${SD_COMMON_DEFINITIONS}
-  LLAMA_VERSION="d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd"
-  LLAMA_COMMIT="d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd"
-  GGML_VERSION="0.20.2"
-  GGML_COMMIT="d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd")
+  LLAMA_VERSION="ded522f8304554317e7ff8f88698dbbbca5425aa"
+  LLAMA_COMMIT="ded522f8304554317e7ff8f88698dbbbca5425aa"
+  GGML_VERSION="1.0.0"
+  GGML_COMMIT="ded522f8304554317e7ff8f88698dbbbca5425aa")
 # Order matters, as in Package.swift: common/ before src/, because both
 # vendor a different unicode.h and common/jinja/ resolves it by search path.
 target_include_directories(lexomorph-llm-host PRIVATE

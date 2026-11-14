@@ -151,10 +151,10 @@ let package = Package(
                 // superdictate_llm_host_main.cpp); this define only makes
                 // the backend available to register.
                 .define("GGML_USE_VULKAN"),
-                .define("LLAMA_VERSION", to: "\"d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd\""),
-                .define("LLAMA_COMMIT", to: "\"d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd\""),
-                .define("GGML_VERSION", to: "\"0.20.2\""),
-                .define("GGML_COMMIT", to: "\"d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd\""),
+                .define("LLAMA_VERSION", to: "\"ded522f8304554317e7ff8f88698dbbbca5425aa\""),
+                .define("LLAMA_COMMIT", to: "\"ded522f8304554317e7ff8f88698dbbbca5425aa\""),
+                .define("GGML_VERSION", to: "\"1.0.0\""),
+                .define("GGML_COMMIT", to: "\"ded522f8304554317e7ff8f88698dbbbca5425aa\""),
                 .headerSearchPath("upstream"),
                 .headerSearchPath("upstream/include"),
                 // common/ before src/: common/jinja/*.cpp quote-includes
@@ -190,10 +190,10 @@ let package = Package(
                 .define("ACCELERATE_NEW_LAPACK"),
                 .define("ACCELERATE_LAPACK_ILP64"),
                 .define("GGML_USE_VULKAN"),
-                .define("LLAMA_VERSION", to: "\"d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd\""),
-                .define("LLAMA_COMMIT", to: "\"d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd\""),
-                .define("GGML_VERSION", to: "\"0.20.2\""),
-                .define("GGML_COMMIT", to: "\"d59d455fd8ea09e5a2e87ce2a9d668267ffb5ccd\""),
+                .define("LLAMA_VERSION", to: "\"ded522f8304554317e7ff8f88698dbbbca5425aa\""),
+                .define("LLAMA_COMMIT", to: "\"ded522f8304554317e7ff8f88698dbbbca5425aa\""),
+                .define("GGML_VERSION", to: "\"1.0.0\""),
+                .define("GGML_COMMIT", to: "\"ded522f8304554317e7ff8f88698dbbbca5425aa\""),
                 .headerSearchPath("upstream"),
                 .headerSearchPath("upstream/include"),
                 // common/ before src/: common/jinja/*.cpp quote-includes

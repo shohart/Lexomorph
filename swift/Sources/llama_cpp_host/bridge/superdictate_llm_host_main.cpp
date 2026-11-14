@@ -349,7 +349,7 @@ public:
         }
 
         std::vector<llama_token> tokens =
-            common_tokenize(vocab_, chat_params.prompt, /*add_special=*/true, /*parse_special=*/true);
+            common_tokenize(vocab_, chat_params.prompt.str(), /*add_special=*/true, /*parse_special=*/true);
 
         const int32_t max_new = std::max<int32_t>(1, std::min<int32_t>(max_tokens, n_ctx_ - static_cast<int32_t>(tokens.size()) - 8));
         if (static_cast<int32_t>(tokens.size()) >= n_ctx_ - 8) {

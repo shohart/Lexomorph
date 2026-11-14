@@ -127,11 +127,26 @@ extern const lazy_data concat_i64_data;
 extern const lazy_len concat_i8_len;
 extern const lazy_data concat_i8_data;
 
+extern const lazy_len concat_transpose_i16_len;
+extern const lazy_data concat_transpose_i16_data;
+
+extern const lazy_len concat_transpose_i32_len;
+extern const lazy_data concat_transpose_i32_data;
+
+extern const lazy_len concat_transpose_i8_len;
+extern const lazy_data concat_transpose_i8_data;
+
+extern const lazy_len contig_cpy_16_len;
+extern const lazy_data contig_cpy_16_data;
+
+extern const lazy_len contig_cpy_32_len;
+extern const lazy_data contig_cpy_32_data;
+
+extern const lazy_len contig_cpy_bf16_f16_len;
+extern const lazy_data contig_cpy_bf16_f16_data;
+
 extern const lazy_len contig_cpy_bf16_f32_len;
 extern const lazy_data contig_cpy_bf16_f32_data;
-
-extern const lazy_len contig_cpy_f16_f16_len;
-extern const lazy_data contig_cpy_f16_f16_data;
 
 extern const lazy_len contig_cpy_f16_f32_len;
 extern const lazy_data contig_cpy_f16_f32_data;
@@ -141,9 +156,6 @@ extern const lazy_data contig_cpy_f32_bf16_data;
 
 extern const lazy_len contig_cpy_f32_f16_len;
 extern const lazy_data contig_cpy_f32_f16_data;
-
-extern const lazy_len contig_cpy_f32_f32_len;
-extern const lazy_data contig_cpy_f32_f32_data;
 
 extern const lazy_len contig_cpy_f32_i32_len;
 extern const lazy_data contig_cpy_f32_i32_data;
@@ -250,11 +262,20 @@ extern const lazy_data count_equal_i32_data;
 extern const lazy_len count_experts_len;
 extern const lazy_data count_experts_data;
 
+extern const lazy_len count_experts_subgroup_len;
+extern const lazy_data count_experts_subgroup_data;
+
+extern const lazy_len cpy_16_len;
+extern const lazy_data cpy_16_data;
+
+extern const lazy_len cpy_32_len;
+extern const lazy_data cpy_32_data;
+
+extern const lazy_len cpy_bf16_f16_len;
+extern const lazy_data cpy_bf16_f16_data;
+
 extern const lazy_len cpy_bf16_f32_len;
 extern const lazy_data cpy_bf16_f32_data;
-
-extern const lazy_len cpy_f16_f16_len;
-extern const lazy_data cpy_f16_f16_data;
 
 extern const lazy_len cpy_f16_f32_len;
 extern const lazy_data cpy_f16_f32_data;
@@ -264,9 +285,6 @@ extern const lazy_data cpy_f32_bf16_data;
 
 extern const lazy_len cpy_f32_f16_len;
 extern const lazy_data cpy_f32_f16_data;
-
-extern const lazy_len cpy_f32_f32_len;
-extern const lazy_data cpy_f32_f32_data;
 
 extern const lazy_len cpy_f32_i32_len;
 extern const lazy_data cpy_f32_i32_data;
@@ -333,6 +351,12 @@ extern const lazy_data cpy_transpose_16_data;
 
 extern const lazy_len cpy_transpose_32_len;
 extern const lazy_data cpy_transpose_32_data;
+
+extern const lazy_len cross_entropy_loss_back_f32_len;
+extern const lazy_data cross_entropy_loss_back_f32_data;
+
+extern const lazy_len cross_entropy_loss_f32_len;
+extern const lazy_data cross_entropy_loss_f32_data;
 
 extern const lazy_len cumsum_f32_len;
 extern const lazy_data cumsum_f32_data;
@@ -418,6 +442,9 @@ extern const lazy_data dequant_q8_0_data;
 extern const lazy_len dequant_q8_0_transpose_len;
 extern const lazy_data dequant_q8_0_transpose_data;
 
+extern const lazy_len dequant_tq1_0_len;
+extern const lazy_data dequant_tq1_0_data;
+
 extern const lazy_len dequant_tq2_0_len;
 extern const lazy_data dequant_tq2_0_data;
 
@@ -426,9 +453,6 @@ extern const lazy_data diag_f16_data;
 
 extern const lazy_len diag_f32_len;
 extern const lazy_data diag_f32_data;
-
-extern const lazy_len diag_mask_inf_f32_len;
-extern const lazy_data diag_mask_inf_f32_data;
 
 extern const lazy_len div_f16_f16_f16_len;
 extern const lazy_data div_f16_f16_f16_data;
@@ -457,6 +481,15 @@ extern const lazy_data div_f32_f32_f16_data;
 extern const lazy_len div_f32_f32_f32_len;
 extern const lazy_data div_f32_f32_f32_data;
 
+extern const lazy_len dsv4_hc_comb_f32_len;
+extern const lazy_data dsv4_hc_comb_f32_data;
+
+extern const lazy_len dsv4_hc_post_f32_len;
+extern const lazy_data dsv4_hc_post_f32_data;
+
+extern const lazy_len dsv4_hc_pre_f32_len;
+extern const lazy_data dsv4_hc_pre_f32_data;
+
 extern const lazy_len elu_f16_len;
 extern const lazy_data elu_f16_data;
 
@@ -475,8 +508,23 @@ extern const lazy_data expm1_f16_data;
 extern const lazy_len expm1_f32_len;
 extern const lazy_data expm1_f32_data;
 
+extern const lazy_len fa_decode_ph1_cm1_len;
+extern const lazy_data fa_decode_ph1_cm1_data;
+
+extern const lazy_len fa_decode_ph2_cm1_len;
+extern const lazy_data fa_decode_ph2_cm1_data;
+
 extern const lazy_len fa_mask_opt_len;
 extern const lazy_data fa_mask_opt_data;
+
+extern const lazy_len fa_prefill_cm1_len;
+extern const lazy_data fa_prefill_cm1_data;
+
+extern const lazy_len fa_sparse_compact_len;
+extern const lazy_data fa_sparse_compact_data;
+
+extern const lazy_len fa_sparse_compact_subgroup_len;
+extern const lazy_data fa_sparse_compact_subgroup_data;
 
 extern const lazy_len fa_split_k_reduce_len;
 extern const lazy_data fa_split_k_reduce_data;
@@ -541,8 +589,14 @@ extern const lazy_data floor_f16_data;
 extern const lazy_len floor_f32_len;
 extern const lazy_data floor_f32_data;
 
+extern const lazy_len fwht_f16_len;
+extern const lazy_data fwht_f16_data;
+
 extern const lazy_len fwht_f32_len;
 extern const lazy_data fwht_f32_data;
+
+extern const lazy_len fwht_shmem_f16_len;
+extern const lazy_data fwht_shmem_f16_data;
 
 extern const lazy_len fwht_shmem_f32_len;
 extern const lazy_data fwht_shmem_f32_data;
@@ -588,6 +642,12 @@ extern const lazy_data gelu_f16_data;
 
 extern const lazy_len gelu_f32_len;
 extern const lazy_data gelu_f32_data;
+
+extern const lazy_len gelu_mul_f16_len;
+extern const lazy_data gelu_mul_f16_data;
+
+extern const lazy_len gelu_mul_f32_len;
+extern const lazy_data gelu_mul_f32_data;
 
 extern const lazy_len gelu_quick_f16_len;
 extern const lazy_data gelu_quick_f16_data;
@@ -757,6 +817,12 @@ extern const lazy_data get_rows_q8_0_data;
 extern const lazy_len get_rows_q8_0_f32_len;
 extern const lazy_data get_rows_q8_0_f32_data;
 
+extern const lazy_len get_rows_tq1_0_len;
+extern const lazy_data get_rows_tq1_0_data;
+
+extern const lazy_len get_rows_tq1_0_f32_len;
+extern const lazy_data get_rows_tq1_0_f32_data;
+
 extern const lazy_len get_rows_tq2_0_len;
 extern const lazy_data get_rows_tq2_0_data;
 
@@ -810,6 +876,9 @@ extern const lazy_data leaky_relu_f16_data;
 
 extern const lazy_len leaky_relu_f32_len;
 extern const lazy_data leaky_relu_f32_data;
+
+extern const lazy_len lightning_indexer_f32_len;
+extern const lazy_data lightning_indexer_f32_data;
 
 extern const lazy_len log_f16_len;
 extern const lazy_data log_f16_data;
@@ -1183,6 +1252,12 @@ extern const lazy_data matmul_id_iq3_s_f32_f16acc_data;
 extern const lazy_len matmul_id_iq3_s_f32_fp32_len;
 extern const lazy_data matmul_id_iq3_s_f32_fp32_data;
 
+extern const lazy_len matmul_id_iq3_s_q8_1_len;
+extern const lazy_data matmul_id_iq3_s_q8_1_data;
+
+extern const lazy_len matmul_id_iq3_s_q8_1_fp32_len;
+extern const lazy_data matmul_id_iq3_s_q8_1_fp32_data;
+
 extern const lazy_len matmul_id_iq3_xxs_f16_len;
 extern const lazy_data matmul_id_iq3_xxs_f16_data;
 
@@ -1273,6 +1348,12 @@ extern const lazy_data matmul_id_iq4_xs_f32_f16acc_data;
 extern const lazy_len matmul_id_iq4_xs_f32_fp32_len;
 extern const lazy_data matmul_id_iq4_xs_f32_fp32_data;
 
+extern const lazy_len matmul_id_iq4_xs_q8_1_len;
+extern const lazy_data matmul_id_iq4_xs_q8_1_data;
+
+extern const lazy_len matmul_id_iq4_xs_q8_1_fp32_len;
+extern const lazy_data matmul_id_iq4_xs_q8_1_fp32_data;
+
 extern const lazy_len matmul_id_mxfp4_f16_len;
 extern const lazy_data matmul_id_mxfp4_f16_data;
 
@@ -1339,101 +1420,11 @@ extern const lazy_data matmul_id_nvfp4_f32_f16acc_data;
 extern const lazy_len matmul_id_nvfp4_f32_fp32_len;
 extern const lazy_data matmul_id_nvfp4_f32_fp32_data;
 
-extern const lazy_len matmul_id_q1_0_f16_len;
-extern const lazy_data matmul_id_q1_0_f16_data;
-
-extern const lazy_len matmul_id_q1_0_f16_dot2_len;
-extern const lazy_data matmul_id_q1_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_q1_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q1_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q1_0_f16_f16acc_len;
-extern const lazy_data matmul_id_q1_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q1_0_f16_fp32_len;
-extern const lazy_data matmul_id_q1_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_q1_0_f32_len;
-extern const lazy_data matmul_id_q1_0_f32_data;
-
-extern const lazy_len matmul_id_q1_0_f32_dot2_len;
-extern const lazy_data matmul_id_q1_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_q1_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q1_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q1_0_f32_f16acc_len;
-extern const lazy_data matmul_id_q1_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q1_0_f32_fp32_len;
-extern const lazy_data matmul_id_q1_0_f32_fp32_data;
-
-extern const lazy_len matmul_id_q2_0_f16_len;
-extern const lazy_data matmul_id_q2_0_f16_data;
-
-extern const lazy_len matmul_id_q2_0_f16_dot2_len;
-extern const lazy_data matmul_id_q2_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_q2_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q2_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q2_0_f16_f16acc_len;
-extern const lazy_data matmul_id_q2_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q2_0_f16_fp32_len;
-extern const lazy_data matmul_id_q2_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_q2_0_f32_len;
-extern const lazy_data matmul_id_q2_0_f32_data;
-
-extern const lazy_len matmul_id_q2_0_f32_dot2_len;
-extern const lazy_data matmul_id_q2_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_q2_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q2_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q2_0_f32_f16acc_len;
-extern const lazy_data matmul_id_q2_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q2_0_f32_fp32_len;
-extern const lazy_data matmul_id_q2_0_f32_fp32_data;
-
 extern const lazy_len matmul_id_q2_0_q8_1_len;
 extern const lazy_data matmul_id_q2_0_q8_1_data;
 
 extern const lazy_len matmul_id_q2_0_q8_1_fp32_len;
 extern const lazy_data matmul_id_q2_0_q8_1_fp32_data;
-
-extern const lazy_len matmul_id_q2_k_f16_len;
-extern const lazy_data matmul_id_q2_k_f16_data;
-
-extern const lazy_len matmul_id_q2_k_f16_dot2_len;
-extern const lazy_data matmul_id_q2_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_q2_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q2_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q2_k_f16_f16acc_len;
-extern const lazy_data matmul_id_q2_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q2_k_f16_fp32_len;
-extern const lazy_data matmul_id_q2_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_q2_k_f32_len;
-extern const lazy_data matmul_id_q2_k_f32_data;
-
-extern const lazy_len matmul_id_q2_k_f32_dot2_len;
-extern const lazy_data matmul_id_q2_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_q2_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q2_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q2_k_f32_f16acc_len;
-extern const lazy_data matmul_id_q2_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q2_k_f32_fp32_len;
-extern const lazy_data matmul_id_q2_k_f32_fp32_data;
 
 extern const lazy_len matmul_id_q2_k_q8_1_len;
 extern const lazy_data matmul_id_q2_k_q8_1_data;
@@ -1441,71 +1432,11 @@ extern const lazy_data matmul_id_q2_k_q8_1_data;
 extern const lazy_len matmul_id_q2_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_q2_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_q3_k_f16_len;
-extern const lazy_data matmul_id_q3_k_f16_data;
-
-extern const lazy_len matmul_id_q3_k_f16_dot2_len;
-extern const lazy_data matmul_id_q3_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_q3_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q3_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q3_k_f16_f16acc_len;
-extern const lazy_data matmul_id_q3_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q3_k_f16_fp32_len;
-extern const lazy_data matmul_id_q3_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_q3_k_f32_len;
-extern const lazy_data matmul_id_q3_k_f32_data;
-
-extern const lazy_len matmul_id_q3_k_f32_dot2_len;
-extern const lazy_data matmul_id_q3_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_q3_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q3_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q3_k_f32_f16acc_len;
-extern const lazy_data matmul_id_q3_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q3_k_f32_fp32_len;
-extern const lazy_data matmul_id_q3_k_f32_fp32_data;
-
 extern const lazy_len matmul_id_q3_k_q8_1_len;
 extern const lazy_data matmul_id_q3_k_q8_1_data;
 
 extern const lazy_len matmul_id_q3_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_q3_k_q8_1_fp32_data;
-
-extern const lazy_len matmul_id_q4_0_f16_len;
-extern const lazy_data matmul_id_q4_0_f16_data;
-
-extern const lazy_len matmul_id_q4_0_f16_dot2_len;
-extern const lazy_data matmul_id_q4_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_q4_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q4_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q4_0_f16_f16acc_len;
-extern const lazy_data matmul_id_q4_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q4_0_f16_fp32_len;
-extern const lazy_data matmul_id_q4_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_q4_0_f32_len;
-extern const lazy_data matmul_id_q4_0_f32_data;
-
-extern const lazy_len matmul_id_q4_0_f32_dot2_len;
-extern const lazy_data matmul_id_q4_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_q4_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q4_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q4_0_f32_f16acc_len;
-extern const lazy_data matmul_id_q4_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q4_0_f32_fp32_len;
-extern const lazy_data matmul_id_q4_0_f32_fp32_data;
 
 extern const lazy_len matmul_id_q4_0_q8_1_len;
 extern const lazy_data matmul_id_q4_0_q8_1_data;
@@ -1513,71 +1444,11 @@ extern const lazy_data matmul_id_q4_0_q8_1_data;
 extern const lazy_len matmul_id_q4_0_q8_1_fp32_len;
 extern const lazy_data matmul_id_q4_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_q4_1_f16_len;
-extern const lazy_data matmul_id_q4_1_f16_data;
-
-extern const lazy_len matmul_id_q4_1_f16_dot2_len;
-extern const lazy_data matmul_id_q4_1_f16_dot2_data;
-
-extern const lazy_len matmul_id_q4_1_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q4_1_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q4_1_f16_f16acc_len;
-extern const lazy_data matmul_id_q4_1_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q4_1_f16_fp32_len;
-extern const lazy_data matmul_id_q4_1_f16_fp32_data;
-
-extern const lazy_len matmul_id_q4_1_f32_len;
-extern const lazy_data matmul_id_q4_1_f32_data;
-
-extern const lazy_len matmul_id_q4_1_f32_dot2_len;
-extern const lazy_data matmul_id_q4_1_f32_dot2_data;
-
-extern const lazy_len matmul_id_q4_1_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q4_1_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q4_1_f32_f16acc_len;
-extern const lazy_data matmul_id_q4_1_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q4_1_f32_fp32_len;
-extern const lazy_data matmul_id_q4_1_f32_fp32_data;
-
 extern const lazy_len matmul_id_q4_1_q8_1_len;
 extern const lazy_data matmul_id_q4_1_q8_1_data;
 
 extern const lazy_len matmul_id_q4_1_q8_1_fp32_len;
 extern const lazy_data matmul_id_q4_1_q8_1_fp32_data;
-
-extern const lazy_len matmul_id_q4_k_f16_len;
-extern const lazy_data matmul_id_q4_k_f16_data;
-
-extern const lazy_len matmul_id_q4_k_f16_dot2_len;
-extern const lazy_data matmul_id_q4_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_q4_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q4_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q4_k_f16_f16acc_len;
-extern const lazy_data matmul_id_q4_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q4_k_f16_fp32_len;
-extern const lazy_data matmul_id_q4_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_q4_k_f32_len;
-extern const lazy_data matmul_id_q4_k_f32_data;
-
-extern const lazy_len matmul_id_q4_k_f32_dot2_len;
-extern const lazy_data matmul_id_q4_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_q4_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q4_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q4_k_f32_f16acc_len;
-extern const lazy_data matmul_id_q4_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q4_k_f32_fp32_len;
-extern const lazy_data matmul_id_q4_k_f32_fp32_data;
 
 extern const lazy_len matmul_id_q4_k_q8_1_len;
 extern const lazy_data matmul_id_q4_k_q8_1_data;
@@ -1585,71 +1456,11 @@ extern const lazy_data matmul_id_q4_k_q8_1_data;
 extern const lazy_len matmul_id_q4_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_q4_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_q5_0_f16_len;
-extern const lazy_data matmul_id_q5_0_f16_data;
-
-extern const lazy_len matmul_id_q5_0_f16_dot2_len;
-extern const lazy_data matmul_id_q5_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_q5_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q5_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q5_0_f16_f16acc_len;
-extern const lazy_data matmul_id_q5_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q5_0_f16_fp32_len;
-extern const lazy_data matmul_id_q5_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_q5_0_f32_len;
-extern const lazy_data matmul_id_q5_0_f32_data;
-
-extern const lazy_len matmul_id_q5_0_f32_dot2_len;
-extern const lazy_data matmul_id_q5_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_q5_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q5_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q5_0_f32_f16acc_len;
-extern const lazy_data matmul_id_q5_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q5_0_f32_fp32_len;
-extern const lazy_data matmul_id_q5_0_f32_fp32_data;
-
 extern const lazy_len matmul_id_q5_0_q8_1_len;
 extern const lazy_data matmul_id_q5_0_q8_1_data;
 
 extern const lazy_len matmul_id_q5_0_q8_1_fp32_len;
 extern const lazy_data matmul_id_q5_0_q8_1_fp32_data;
-
-extern const lazy_len matmul_id_q5_1_f16_len;
-extern const lazy_data matmul_id_q5_1_f16_data;
-
-extern const lazy_len matmul_id_q5_1_f16_dot2_len;
-extern const lazy_data matmul_id_q5_1_f16_dot2_data;
-
-extern const lazy_len matmul_id_q5_1_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q5_1_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q5_1_f16_f16acc_len;
-extern const lazy_data matmul_id_q5_1_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q5_1_f16_fp32_len;
-extern const lazy_data matmul_id_q5_1_f16_fp32_data;
-
-extern const lazy_len matmul_id_q5_1_f32_len;
-extern const lazy_data matmul_id_q5_1_f32_data;
-
-extern const lazy_len matmul_id_q5_1_f32_dot2_len;
-extern const lazy_data matmul_id_q5_1_f32_dot2_data;
-
-extern const lazy_len matmul_id_q5_1_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q5_1_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q5_1_f32_f16acc_len;
-extern const lazy_data matmul_id_q5_1_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q5_1_f32_fp32_len;
-extern const lazy_data matmul_id_q5_1_f32_fp32_data;
 
 extern const lazy_len matmul_id_q5_1_q8_1_len;
 extern const lazy_data matmul_id_q5_1_q8_1_data;
@@ -1657,71 +1468,11 @@ extern const lazy_data matmul_id_q5_1_q8_1_data;
 extern const lazy_len matmul_id_q5_1_q8_1_fp32_len;
 extern const lazy_data matmul_id_q5_1_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_q5_k_f16_len;
-extern const lazy_data matmul_id_q5_k_f16_data;
-
-extern const lazy_len matmul_id_q5_k_f16_dot2_len;
-extern const lazy_data matmul_id_q5_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_q5_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q5_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q5_k_f16_f16acc_len;
-extern const lazy_data matmul_id_q5_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q5_k_f16_fp32_len;
-extern const lazy_data matmul_id_q5_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_q5_k_f32_len;
-extern const lazy_data matmul_id_q5_k_f32_data;
-
-extern const lazy_len matmul_id_q5_k_f32_dot2_len;
-extern const lazy_data matmul_id_q5_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_q5_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q5_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q5_k_f32_f16acc_len;
-extern const lazy_data matmul_id_q5_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q5_k_f32_fp32_len;
-extern const lazy_data matmul_id_q5_k_f32_fp32_data;
-
 extern const lazy_len matmul_id_q5_k_q8_1_len;
 extern const lazy_data matmul_id_q5_k_q8_1_data;
 
 extern const lazy_len matmul_id_q5_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_q5_k_q8_1_fp32_data;
-
-extern const lazy_len matmul_id_q6_k_f16_len;
-extern const lazy_data matmul_id_q6_k_f16_data;
-
-extern const lazy_len matmul_id_q6_k_f16_dot2_len;
-extern const lazy_data matmul_id_q6_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_q6_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q6_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q6_k_f16_f16acc_len;
-extern const lazy_data matmul_id_q6_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q6_k_f16_fp32_len;
-extern const lazy_data matmul_id_q6_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_q6_k_f32_len;
-extern const lazy_data matmul_id_q6_k_f32_data;
-
-extern const lazy_len matmul_id_q6_k_f32_dot2_len;
-extern const lazy_data matmul_id_q6_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_q6_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q6_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q6_k_f32_f16acc_len;
-extern const lazy_data matmul_id_q6_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q6_k_f32_fp32_len;
-extern const lazy_data matmul_id_q6_k_f32_fp32_data;
 
 extern const lazy_len matmul_id_q6_k_q8_1_len;
 extern const lazy_data matmul_id_q6_k_q8_1_data;
@@ -1729,41 +1480,41 @@ extern const lazy_data matmul_id_q6_k_q8_1_data;
 extern const lazy_len matmul_id_q6_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_q6_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_q8_0_f16_len;
-extern const lazy_data matmul_id_q8_0_f16_data;
-
-extern const lazy_len matmul_id_q8_0_f16_dot2_len;
-extern const lazy_data matmul_id_q8_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_q8_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_q8_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q8_0_f16_f16acc_len;
-extern const lazy_data matmul_id_q8_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_q8_0_f16_fp32_len;
-extern const lazy_data matmul_id_q8_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_q8_0_f32_len;
-extern const lazy_data matmul_id_q8_0_f32_data;
-
-extern const lazy_len matmul_id_q8_0_f32_dot2_len;
-extern const lazy_data matmul_id_q8_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_q8_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_q8_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_q8_0_f32_f16acc_len;
-extern const lazy_data matmul_id_q8_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_q8_0_f32_fp32_len;
-extern const lazy_data matmul_id_q8_0_f32_fp32_data;
-
 extern const lazy_len matmul_id_q8_0_q8_1_len;
 extern const lazy_data matmul_id_q8_0_q8_1_data;
 
 extern const lazy_len matmul_id_q8_0_q8_1_fp32_len;
 extern const lazy_data matmul_id_q8_0_q8_1_fp32_data;
+
+extern const lazy_len matmul_id_quant_f16_len;
+extern const lazy_data matmul_id_quant_f16_data;
+
+extern const lazy_len matmul_id_quant_f16_dot2_len;
+extern const lazy_data matmul_id_quant_f16_dot2_data;
+
+extern const lazy_len matmul_id_quant_f16_dot2_f16acc_len;
+extern const lazy_data matmul_id_quant_f16_dot2_f16acc_data;
+
+extern const lazy_len matmul_id_quant_f16_f16acc_len;
+extern const lazy_data matmul_id_quant_f16_f16acc_data;
+
+extern const lazy_len matmul_id_quant_f16_fp32_len;
+extern const lazy_data matmul_id_quant_f16_fp32_data;
+
+extern const lazy_len matmul_id_quant_f32_len;
+extern const lazy_data matmul_id_quant_f32_data;
+
+extern const lazy_len matmul_id_quant_f32_dot2_len;
+extern const lazy_data matmul_id_quant_f32_dot2_data;
+
+extern const lazy_len matmul_id_quant_f32_dot2_f16acc_len;
+extern const lazy_data matmul_id_quant_f32_dot2_f16acc_data;
+
+extern const lazy_len matmul_id_quant_f32_f16acc_len;
+extern const lazy_data matmul_id_quant_f32_f16acc_data;
+
+extern const lazy_len matmul_id_quant_f32_fp32_len;
+extern const lazy_data matmul_id_quant_f32_fp32_data;
 
 extern const lazy_len matmul_id_subgroup_bf16_len;
 extern const lazy_data matmul_id_subgroup_bf16_data;
@@ -2170,6 +1921,12 @@ extern const lazy_data matmul_id_subgroup_iq3_s_f32_f16acc_cm1_data;
 extern const lazy_len matmul_id_subgroup_iq3_s_f32_fp32_len;
 extern const lazy_data matmul_id_subgroup_iq3_s_f32_fp32_data;
 
+extern const lazy_len matmul_id_subgroup_iq3_s_q8_1_len;
+extern const lazy_data matmul_id_subgroup_iq3_s_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_iq3_s_q8_1_fp32_len;
+extern const lazy_data matmul_id_subgroup_iq3_s_q8_1_fp32_data;
+
 extern const lazy_len matmul_id_subgroup_iq3_xxs_f16_len;
 extern const lazy_data matmul_id_subgroup_iq3_xxs_f16_data;
 
@@ -2266,6 +2023,9 @@ extern const lazy_data matmul_id_subgroup_iq4_nl_f32_f16acc_cm1_data;
 extern const lazy_len matmul_id_subgroup_iq4_nl_f32_fp32_len;
 extern const lazy_data matmul_id_subgroup_iq4_nl_f32_fp32_data;
 
+extern const lazy_len matmul_id_subgroup_iq4_nl_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_iq4_nl_q8_1_cm1_data;
+
 extern const lazy_len matmul_id_subgroup_iq4_xs_f16_len;
 extern const lazy_data matmul_id_subgroup_iq4_xs_f16_data;
 
@@ -2313,6 +2073,15 @@ extern const lazy_data matmul_id_subgroup_iq4_xs_f32_f16acc_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_iq4_xs_f32_fp32_len;
 extern const lazy_data matmul_id_subgroup_iq4_xs_f32_fp32_data;
+
+extern const lazy_len matmul_id_subgroup_iq4_xs_q8_1_len;
+extern const lazy_data matmul_id_subgroup_iq4_xs_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_iq4_xs_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_iq4_xs_q8_1_cm1_data;
+
+extern const lazy_len matmul_id_subgroup_iq4_xs_q8_1_fp32_len;
+extern const lazy_data matmul_id_subgroup_iq4_xs_q8_1_fp32_data;
 
 extern const lazy_len matmul_id_subgroup_mxfp4_f16_len;
 extern const lazy_data matmul_id_subgroup_mxfp4_f16_data;
@@ -2383,6 +2152,9 @@ extern const lazy_data matmul_id_subgroup_mxfp4_f32_ocp_f16acc_cm1_data;
 extern const lazy_len matmul_id_subgroup_mxfp4_q8_1_len;
 extern const lazy_data matmul_id_subgroup_mxfp4_q8_1_data;
 
+extern const lazy_len matmul_id_subgroup_mxfp4_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_mxfp4_q8_1_cm1_data;
+
 extern const lazy_len matmul_id_subgroup_mxfp4_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_mxfp4_q8_1_fp32_data;
 
@@ -2452,101 +2224,8 @@ extern const lazy_data matmul_id_subgroup_nvfp4_f32_ocp_cm1_data;
 extern const lazy_len matmul_id_subgroup_nvfp4_f32_ocp_f16acc_cm1_len;
 extern const lazy_data matmul_id_subgroup_nvfp4_f32_ocp_f16acc_cm1_data;
 
-extern const lazy_len matmul_id_subgroup_q1_0_f16_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f32_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q1_0_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q1_0_f32_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f32_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q2_0_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q2_0_f32_fp32_data;
+extern const lazy_len matmul_id_subgroup_nvfp4_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_nvfp4_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q2_0_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q2_0_q8_1_data;
@@ -2554,623 +2233,152 @@ extern const lazy_data matmul_id_subgroup_q2_0_q8_1_data;
 extern const lazy_len matmul_id_subgroup_q2_0_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q2_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q2_k_f16_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f32_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q2_k_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q2_k_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q2_k_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q2_k_q8_1_data;
 
 extern const lazy_len matmul_id_subgroup_q2_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q2_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q3_k_f16_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f32_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q3_k_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q3_k_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q3_k_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q3_k_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q3_k_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q3_k_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q3_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q3_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q4_0_f16_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f32_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_0_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q4_0_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q4_0_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q4_0_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q4_0_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q4_0_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q4_0_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q4_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q4_1_f16_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f32_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_1_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q4_1_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q4_1_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q4_1_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q4_1_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q4_1_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q4_1_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q4_1_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q4_k_f16_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f16_cm1_data;
-
 extern const lazy_len matmul_id_subgroup_q4_k_f16_cm2_len;
 extern const lazy_data matmul_id_subgroup_q4_k_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f16_f16acc_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q4_k_f16_f16acc_cm2_len;
 extern const lazy_data matmul_id_subgroup_q4_k_f16_f16acc_cm2_data;
 
-extern const lazy_len matmul_id_subgroup_q4_k_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f32_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q4_k_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q4_k_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q4_k_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q4_k_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q4_k_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q4_k_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q4_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q4_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q5_0_f16_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f32_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_0_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q5_0_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q5_0_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q5_0_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q5_0_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q5_0_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q5_0_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q5_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q5_1_f16_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f32_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_1_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q5_1_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q5_1_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q5_1_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q5_1_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q5_1_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q5_1_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q5_1_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q5_k_f16_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f16_cm1_data;
-
 extern const lazy_len matmul_id_subgroup_q5_k_f16_cm2_len;
 extern const lazy_data matmul_id_subgroup_q5_k_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f16_f16acc_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q5_k_f16_f16acc_cm2_len;
 extern const lazy_data matmul_id_subgroup_q5_k_f16_f16acc_cm2_data;
 
-extern const lazy_len matmul_id_subgroup_q5_k_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f32_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q5_k_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q5_k_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q5_k_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q5_k_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q5_k_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q5_k_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q5_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q5_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q6_k_f16_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f32_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q6_k_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q6_k_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q6_k_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q6_k_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q6_k_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q6_k_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q6_k_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q6_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_q8_0_f16_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f32_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f32_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f32_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_id_subgroup_q8_0_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_q8_0_f32_fp32_data;
-
 extern const lazy_len matmul_id_subgroup_q8_0_q8_1_len;
 extern const lazy_data matmul_id_subgroup_q8_0_q8_1_data;
+
+extern const lazy_len matmul_id_subgroup_q8_0_q8_1_cm1_len;
+extern const lazy_data matmul_id_subgroup_q8_0_q8_1_cm1_data;
 
 extern const lazy_len matmul_id_subgroup_q8_0_q8_1_fp32_len;
 extern const lazy_data matmul_id_subgroup_q8_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_cm1_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_cm1_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_cm1_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_cm1_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_cm2_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_cm2_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_cm2_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_cm2_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_dot2_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_dot2_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_dot2_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_dot2_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_dot2_f16acc_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_dot2_f16acc_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_dot2_f16acc_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_f16acc_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_f16acc_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_f16acc_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_f16acc_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_f16acc_cm1_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_f16acc_cm1_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_f16acc_cm1_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_f16acc_cm2_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_f16acc_cm2_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_f16acc_cm2_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f16_fp32_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f16_fp32_data;
+extern const lazy_len matmul_id_subgroup_quant_f16_fp32_len;
+extern const lazy_data matmul_id_subgroup_quant_f16_fp32_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f32_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f32_data;
+extern const lazy_len matmul_id_subgroup_quant_f32_len;
+extern const lazy_data matmul_id_subgroup_quant_f32_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f32_cm1_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f32_cm1_data;
+extern const lazy_len matmul_id_subgroup_quant_f32_cm1_len;
+extern const lazy_data matmul_id_subgroup_quant_f32_cm1_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f32_dot2_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f32_dot2_data;
+extern const lazy_len matmul_id_subgroup_quant_f32_dot2_len;
+extern const lazy_data matmul_id_subgroup_quant_f32_dot2_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f32_dot2_f16acc_data;
+extern const lazy_len matmul_id_subgroup_quant_f32_dot2_f16acc_len;
+extern const lazy_data matmul_id_subgroup_quant_f32_dot2_f16acc_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f32_f16acc_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f32_f16acc_data;
+extern const lazy_len matmul_id_subgroup_quant_f32_f16acc_len;
+extern const lazy_data matmul_id_subgroup_quant_f32_f16acc_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f32_f16acc_cm1_data;
+extern const lazy_len matmul_id_subgroup_quant_f32_f16acc_cm1_len;
+extern const lazy_data matmul_id_subgroup_quant_f32_f16acc_cm1_data;
 
-extern const lazy_len matmul_id_subgroup_tq2_0_f32_fp32_len;
-extern const lazy_data matmul_id_subgroup_tq2_0_f32_fp32_data;
-
-extern const lazy_len matmul_id_tq2_0_f16_len;
-extern const lazy_data matmul_id_tq2_0_f16_data;
-
-extern const lazy_len matmul_id_tq2_0_f16_dot2_len;
-extern const lazy_data matmul_id_tq2_0_f16_dot2_data;
-
-extern const lazy_len matmul_id_tq2_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_id_tq2_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_tq2_0_f16_f16acc_len;
-extern const lazy_data matmul_id_tq2_0_f16_f16acc_data;
-
-extern const lazy_len matmul_id_tq2_0_f16_fp32_len;
-extern const lazy_data matmul_id_tq2_0_f16_fp32_data;
-
-extern const lazy_len matmul_id_tq2_0_f32_len;
-extern const lazy_data matmul_id_tq2_0_f32_data;
-
-extern const lazy_len matmul_id_tq2_0_f32_dot2_len;
-extern const lazy_data matmul_id_tq2_0_f32_dot2_data;
-
-extern const lazy_len matmul_id_tq2_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_id_tq2_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_id_tq2_0_f32_f16acc_len;
-extern const lazy_data matmul_id_tq2_0_f32_f16acc_data;
-
-extern const lazy_len matmul_id_tq2_0_f32_fp32_len;
-extern const lazy_data matmul_id_tq2_0_f32_fp32_data;
+extern const lazy_len matmul_id_subgroup_quant_f32_fp32_len;
+extern const lazy_data matmul_id_subgroup_quant_f32_fp32_data;
 
 extern const lazy_len matmul_iq1_m_f16_len;
 extern const lazy_data matmul_iq1_m_f16_data;
@@ -3460,6 +2668,12 @@ extern const lazy_data matmul_iq3_s_f32_f16acc_cm1_data;
 extern const lazy_len matmul_iq3_s_f32_fp32_len;
 extern const lazy_data matmul_iq3_s_f32_fp32_data;
 
+extern const lazy_len matmul_iq3_s_q8_1_len;
+extern const lazy_data matmul_iq3_s_q8_1_data;
+
+extern const lazy_len matmul_iq3_s_q8_1_fp32_len;
+extern const lazy_data matmul_iq3_s_q8_1_fp32_data;
+
 extern const lazy_len matmul_iq3_xxs_f16_len;
 extern const lazy_data matmul_iq3_xxs_f16_data;
 
@@ -3556,6 +2770,9 @@ extern const lazy_data matmul_iq4_nl_f32_f16acc_cm1_data;
 extern const lazy_len matmul_iq4_nl_f32_fp32_len;
 extern const lazy_data matmul_iq4_nl_f32_fp32_data;
 
+extern const lazy_len matmul_iq4_nl_q8_1_cm1_len;
+extern const lazy_data matmul_iq4_nl_q8_1_cm1_data;
+
 extern const lazy_len matmul_iq4_xs_f16_len;
 extern const lazy_data matmul_iq4_xs_f16_data;
 
@@ -3603,6 +2820,15 @@ extern const lazy_data matmul_iq4_xs_f32_f16acc_cm1_data;
 
 extern const lazy_len matmul_iq4_xs_f32_fp32_len;
 extern const lazy_data matmul_iq4_xs_f32_fp32_data;
+
+extern const lazy_len matmul_iq4_xs_q8_1_len;
+extern const lazy_data matmul_iq4_xs_q8_1_data;
+
+extern const lazy_len matmul_iq4_xs_q8_1_cm1_len;
+extern const lazy_data matmul_iq4_xs_q8_1_cm1_data;
+
+extern const lazy_len matmul_iq4_xs_q8_1_fp32_len;
+extern const lazy_data matmul_iq4_xs_q8_1_fp32_data;
 
 extern const lazy_len matmul_mxfp4_f16_len;
 extern const lazy_data matmul_mxfp4_f16_data;
@@ -3673,6 +2899,9 @@ extern const lazy_data matmul_mxfp4_f32_ocp_f16acc_cm1_data;
 extern const lazy_len matmul_mxfp4_q8_1_len;
 extern const lazy_data matmul_mxfp4_q8_1_data;
 
+extern const lazy_len matmul_mxfp4_q8_1_cm1_len;
+extern const lazy_data matmul_mxfp4_q8_1_cm1_data;
+
 extern const lazy_len matmul_mxfp4_q8_1_fp32_len;
 extern const lazy_data matmul_mxfp4_q8_1_fp32_data;
 
@@ -3742,101 +2971,8 @@ extern const lazy_data matmul_nvfp4_f32_ocp_cm1_data;
 extern const lazy_len matmul_nvfp4_f32_ocp_f16acc_cm1_len;
 extern const lazy_data matmul_nvfp4_f32_ocp_f16acc_cm1_data;
 
-extern const lazy_len matmul_q1_0_f16_len;
-extern const lazy_data matmul_q1_0_f16_data;
-
-extern const lazy_len matmul_q1_0_f16_cm1_len;
-extern const lazy_data matmul_q1_0_f16_cm1_data;
-
-extern const lazy_len matmul_q1_0_f16_cm2_len;
-extern const lazy_data matmul_q1_0_f16_cm2_data;
-
-extern const lazy_len matmul_q1_0_f16_dot2_len;
-extern const lazy_data matmul_q1_0_f16_dot2_data;
-
-extern const lazy_len matmul_q1_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q1_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q1_0_f16_f16acc_len;
-extern const lazy_data matmul_q1_0_f16_f16acc_data;
-
-extern const lazy_len matmul_q1_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q1_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q1_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q1_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q1_0_f16_fp32_len;
-extern const lazy_data matmul_q1_0_f16_fp32_data;
-
-extern const lazy_len matmul_q1_0_f32_len;
-extern const lazy_data matmul_q1_0_f32_data;
-
-extern const lazy_len matmul_q1_0_f32_cm1_len;
-extern const lazy_data matmul_q1_0_f32_cm1_data;
-
-extern const lazy_len matmul_q1_0_f32_dot2_len;
-extern const lazy_data matmul_q1_0_f32_dot2_data;
-
-extern const lazy_len matmul_q1_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q1_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q1_0_f32_f16acc_len;
-extern const lazy_data matmul_q1_0_f32_f16acc_data;
-
-extern const lazy_len matmul_q1_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q1_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q1_0_f32_fp32_len;
-extern const lazy_data matmul_q1_0_f32_fp32_data;
-
-extern const lazy_len matmul_q2_0_f16_len;
-extern const lazy_data matmul_q2_0_f16_data;
-
-extern const lazy_len matmul_q2_0_f16_cm1_len;
-extern const lazy_data matmul_q2_0_f16_cm1_data;
-
-extern const lazy_len matmul_q2_0_f16_cm2_len;
-extern const lazy_data matmul_q2_0_f16_cm2_data;
-
-extern const lazy_len matmul_q2_0_f16_dot2_len;
-extern const lazy_data matmul_q2_0_f16_dot2_data;
-
-extern const lazy_len matmul_q2_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q2_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q2_0_f16_f16acc_len;
-extern const lazy_data matmul_q2_0_f16_f16acc_data;
-
-extern const lazy_len matmul_q2_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q2_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q2_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q2_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q2_0_f16_fp32_len;
-extern const lazy_data matmul_q2_0_f16_fp32_data;
-
-extern const lazy_len matmul_q2_0_f32_len;
-extern const lazy_data matmul_q2_0_f32_data;
-
-extern const lazy_len matmul_q2_0_f32_cm1_len;
-extern const lazy_data matmul_q2_0_f32_cm1_data;
-
-extern const lazy_len matmul_q2_0_f32_dot2_len;
-extern const lazy_data matmul_q2_0_f32_dot2_data;
-
-extern const lazy_len matmul_q2_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q2_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q2_0_f32_f16acc_len;
-extern const lazy_data matmul_q2_0_f32_f16acc_data;
-
-extern const lazy_len matmul_q2_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q2_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q2_0_f32_fp32_len;
-extern const lazy_data matmul_q2_0_f32_fp32_data;
+extern const lazy_len matmul_nvfp4_q8_1_cm1_len;
+extern const lazy_data matmul_nvfp4_q8_1_cm1_data;
 
 extern const lazy_len matmul_q2_0_q8_1_len;
 extern const lazy_data matmul_q2_0_q8_1_data;
@@ -3844,593 +2980,152 @@ extern const lazy_data matmul_q2_0_q8_1_data;
 extern const lazy_len matmul_q2_0_q8_1_fp32_len;
 extern const lazy_data matmul_q2_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_q2_k_f16_len;
-extern const lazy_data matmul_q2_k_f16_data;
-
-extern const lazy_len matmul_q2_k_f16_cm1_len;
-extern const lazy_data matmul_q2_k_f16_cm1_data;
-
-extern const lazy_len matmul_q2_k_f16_cm2_len;
-extern const lazy_data matmul_q2_k_f16_cm2_data;
-
-extern const lazy_len matmul_q2_k_f16_dot2_len;
-extern const lazy_data matmul_q2_k_f16_dot2_data;
-
-extern const lazy_len matmul_q2_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q2_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q2_k_f16_f16acc_len;
-extern const lazy_data matmul_q2_k_f16_f16acc_data;
-
-extern const lazy_len matmul_q2_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q2_k_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q2_k_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q2_k_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q2_k_f16_fp32_len;
-extern const lazy_data matmul_q2_k_f16_fp32_data;
-
-extern const lazy_len matmul_q2_k_f32_len;
-extern const lazy_data matmul_q2_k_f32_data;
-
-extern const lazy_len matmul_q2_k_f32_cm1_len;
-extern const lazy_data matmul_q2_k_f32_cm1_data;
-
-extern const lazy_len matmul_q2_k_f32_dot2_len;
-extern const lazy_data matmul_q2_k_f32_dot2_data;
-
-extern const lazy_len matmul_q2_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q2_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q2_k_f32_f16acc_len;
-extern const lazy_data matmul_q2_k_f32_f16acc_data;
-
-extern const lazy_len matmul_q2_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q2_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q2_k_f32_fp32_len;
-extern const lazy_data matmul_q2_k_f32_fp32_data;
-
 extern const lazy_len matmul_q2_k_q8_1_len;
 extern const lazy_data matmul_q2_k_q8_1_data;
 
 extern const lazy_len matmul_q2_k_q8_1_fp32_len;
 extern const lazy_data matmul_q2_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_q3_k_f16_len;
-extern const lazy_data matmul_q3_k_f16_data;
-
-extern const lazy_len matmul_q3_k_f16_cm1_len;
-extern const lazy_data matmul_q3_k_f16_cm1_data;
-
-extern const lazy_len matmul_q3_k_f16_cm2_len;
-extern const lazy_data matmul_q3_k_f16_cm2_data;
-
-extern const lazy_len matmul_q3_k_f16_dot2_len;
-extern const lazy_data matmul_q3_k_f16_dot2_data;
-
-extern const lazy_len matmul_q3_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q3_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q3_k_f16_f16acc_len;
-extern const lazy_data matmul_q3_k_f16_f16acc_data;
-
-extern const lazy_len matmul_q3_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q3_k_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q3_k_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q3_k_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q3_k_f16_fp32_len;
-extern const lazy_data matmul_q3_k_f16_fp32_data;
-
-extern const lazy_len matmul_q3_k_f32_len;
-extern const lazy_data matmul_q3_k_f32_data;
-
-extern const lazy_len matmul_q3_k_f32_cm1_len;
-extern const lazy_data matmul_q3_k_f32_cm1_data;
-
-extern const lazy_len matmul_q3_k_f32_dot2_len;
-extern const lazy_data matmul_q3_k_f32_dot2_data;
-
-extern const lazy_len matmul_q3_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q3_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q3_k_f32_f16acc_len;
-extern const lazy_data matmul_q3_k_f32_f16acc_data;
-
-extern const lazy_len matmul_q3_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q3_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q3_k_f32_fp32_len;
-extern const lazy_data matmul_q3_k_f32_fp32_data;
-
 extern const lazy_len matmul_q3_k_q8_1_len;
 extern const lazy_data matmul_q3_k_q8_1_data;
+
+extern const lazy_len matmul_q3_k_q8_1_cm1_len;
+extern const lazy_data matmul_q3_k_q8_1_cm1_data;
 
 extern const lazy_len matmul_q3_k_q8_1_fp32_len;
 extern const lazy_data matmul_q3_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_q4_0_f16_len;
-extern const lazy_data matmul_q4_0_f16_data;
-
-extern const lazy_len matmul_q4_0_f16_cm1_len;
-extern const lazy_data matmul_q4_0_f16_cm1_data;
-
-extern const lazy_len matmul_q4_0_f16_cm2_len;
-extern const lazy_data matmul_q4_0_f16_cm2_data;
-
-extern const lazy_len matmul_q4_0_f16_dot2_len;
-extern const lazy_data matmul_q4_0_f16_dot2_data;
-
-extern const lazy_len matmul_q4_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q4_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q4_0_f16_f16acc_len;
-extern const lazy_data matmul_q4_0_f16_f16acc_data;
-
-extern const lazy_len matmul_q4_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q4_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q4_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q4_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q4_0_f16_fp32_len;
-extern const lazy_data matmul_q4_0_f16_fp32_data;
-
-extern const lazy_len matmul_q4_0_f32_len;
-extern const lazy_data matmul_q4_0_f32_data;
-
-extern const lazy_len matmul_q4_0_f32_cm1_len;
-extern const lazy_data matmul_q4_0_f32_cm1_data;
-
-extern const lazy_len matmul_q4_0_f32_dot2_len;
-extern const lazy_data matmul_q4_0_f32_dot2_data;
-
-extern const lazy_len matmul_q4_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q4_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q4_0_f32_f16acc_len;
-extern const lazy_data matmul_q4_0_f32_f16acc_data;
-
-extern const lazy_len matmul_q4_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q4_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q4_0_f32_fp32_len;
-extern const lazy_data matmul_q4_0_f32_fp32_data;
-
 extern const lazy_len matmul_q4_0_q8_1_len;
 extern const lazy_data matmul_q4_0_q8_1_data;
+
+extern const lazy_len matmul_q4_0_q8_1_cm1_len;
+extern const lazy_data matmul_q4_0_q8_1_cm1_data;
 
 extern const lazy_len matmul_q4_0_q8_1_fp32_len;
 extern const lazy_data matmul_q4_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_q4_1_f16_len;
-extern const lazy_data matmul_q4_1_f16_data;
-
-extern const lazy_len matmul_q4_1_f16_cm1_len;
-extern const lazy_data matmul_q4_1_f16_cm1_data;
-
-extern const lazy_len matmul_q4_1_f16_cm2_len;
-extern const lazy_data matmul_q4_1_f16_cm2_data;
-
-extern const lazy_len matmul_q4_1_f16_dot2_len;
-extern const lazy_data matmul_q4_1_f16_dot2_data;
-
-extern const lazy_len matmul_q4_1_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q4_1_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q4_1_f16_f16acc_len;
-extern const lazy_data matmul_q4_1_f16_f16acc_data;
-
-extern const lazy_len matmul_q4_1_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q4_1_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q4_1_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q4_1_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q4_1_f16_fp32_len;
-extern const lazy_data matmul_q4_1_f16_fp32_data;
-
-extern const lazy_len matmul_q4_1_f32_len;
-extern const lazy_data matmul_q4_1_f32_data;
-
-extern const lazy_len matmul_q4_1_f32_cm1_len;
-extern const lazy_data matmul_q4_1_f32_cm1_data;
-
-extern const lazy_len matmul_q4_1_f32_dot2_len;
-extern const lazy_data matmul_q4_1_f32_dot2_data;
-
-extern const lazy_len matmul_q4_1_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q4_1_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q4_1_f32_f16acc_len;
-extern const lazy_data matmul_q4_1_f32_f16acc_data;
-
-extern const lazy_len matmul_q4_1_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q4_1_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q4_1_f32_fp32_len;
-extern const lazy_data matmul_q4_1_f32_fp32_data;
-
 extern const lazy_len matmul_q4_1_q8_1_len;
 extern const lazy_data matmul_q4_1_q8_1_data;
+
+extern const lazy_len matmul_q4_1_q8_1_cm1_len;
+extern const lazy_data matmul_q4_1_q8_1_cm1_data;
 
 extern const lazy_len matmul_q4_1_q8_1_fp32_len;
 extern const lazy_data matmul_q4_1_q8_1_fp32_data;
 
-extern const lazy_len matmul_q4_k_f16_len;
-extern const lazy_data matmul_q4_k_f16_data;
-
-extern const lazy_len matmul_q4_k_f16_cm1_len;
-extern const lazy_data matmul_q4_k_f16_cm1_data;
-
 extern const lazy_len matmul_q4_k_f16_cm2_len;
 extern const lazy_data matmul_q4_k_f16_cm2_data;
-
-extern const lazy_len matmul_q4_k_f16_dot2_len;
-extern const lazy_data matmul_q4_k_f16_dot2_data;
-
-extern const lazy_len matmul_q4_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q4_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q4_k_f16_f16acc_len;
-extern const lazy_data matmul_q4_k_f16_f16acc_data;
-
-extern const lazy_len matmul_q4_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q4_k_f16_f16acc_cm1_data;
 
 extern const lazy_len matmul_q4_k_f16_f16acc_cm2_len;
 extern const lazy_data matmul_q4_k_f16_f16acc_cm2_data;
 
-extern const lazy_len matmul_q4_k_f16_fp32_len;
-extern const lazy_data matmul_q4_k_f16_fp32_data;
-
-extern const lazy_len matmul_q4_k_f32_len;
-extern const lazy_data matmul_q4_k_f32_data;
-
-extern const lazy_len matmul_q4_k_f32_cm1_len;
-extern const lazy_data matmul_q4_k_f32_cm1_data;
-
-extern const lazy_len matmul_q4_k_f32_dot2_len;
-extern const lazy_data matmul_q4_k_f32_dot2_data;
-
-extern const lazy_len matmul_q4_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q4_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q4_k_f32_f16acc_len;
-extern const lazy_data matmul_q4_k_f32_f16acc_data;
-
-extern const lazy_len matmul_q4_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q4_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q4_k_f32_fp32_len;
-extern const lazy_data matmul_q4_k_f32_fp32_data;
-
 extern const lazy_len matmul_q4_k_q8_1_len;
 extern const lazy_data matmul_q4_k_q8_1_data;
+
+extern const lazy_len matmul_q4_k_q8_1_cm1_len;
+extern const lazy_data matmul_q4_k_q8_1_cm1_data;
 
 extern const lazy_len matmul_q4_k_q8_1_fp32_len;
 extern const lazy_data matmul_q4_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_q5_0_f16_len;
-extern const lazy_data matmul_q5_0_f16_data;
-
-extern const lazy_len matmul_q5_0_f16_cm1_len;
-extern const lazy_data matmul_q5_0_f16_cm1_data;
-
-extern const lazy_len matmul_q5_0_f16_cm2_len;
-extern const lazy_data matmul_q5_0_f16_cm2_data;
-
-extern const lazy_len matmul_q5_0_f16_dot2_len;
-extern const lazy_data matmul_q5_0_f16_dot2_data;
-
-extern const lazy_len matmul_q5_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q5_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q5_0_f16_f16acc_len;
-extern const lazy_data matmul_q5_0_f16_f16acc_data;
-
-extern const lazy_len matmul_q5_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q5_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q5_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q5_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q5_0_f16_fp32_len;
-extern const lazy_data matmul_q5_0_f16_fp32_data;
-
-extern const lazy_len matmul_q5_0_f32_len;
-extern const lazy_data matmul_q5_0_f32_data;
-
-extern const lazy_len matmul_q5_0_f32_cm1_len;
-extern const lazy_data matmul_q5_0_f32_cm1_data;
-
-extern const lazy_len matmul_q5_0_f32_dot2_len;
-extern const lazy_data matmul_q5_0_f32_dot2_data;
-
-extern const lazy_len matmul_q5_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q5_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q5_0_f32_f16acc_len;
-extern const lazy_data matmul_q5_0_f32_f16acc_data;
-
-extern const lazy_len matmul_q5_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q5_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q5_0_f32_fp32_len;
-extern const lazy_data matmul_q5_0_f32_fp32_data;
-
 extern const lazy_len matmul_q5_0_q8_1_len;
 extern const lazy_data matmul_q5_0_q8_1_data;
+
+extern const lazy_len matmul_q5_0_q8_1_cm1_len;
+extern const lazy_data matmul_q5_0_q8_1_cm1_data;
 
 extern const lazy_len matmul_q5_0_q8_1_fp32_len;
 extern const lazy_data matmul_q5_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_q5_1_f16_len;
-extern const lazy_data matmul_q5_1_f16_data;
-
-extern const lazy_len matmul_q5_1_f16_cm1_len;
-extern const lazy_data matmul_q5_1_f16_cm1_data;
-
-extern const lazy_len matmul_q5_1_f16_cm2_len;
-extern const lazy_data matmul_q5_1_f16_cm2_data;
-
-extern const lazy_len matmul_q5_1_f16_dot2_len;
-extern const lazy_data matmul_q5_1_f16_dot2_data;
-
-extern const lazy_len matmul_q5_1_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q5_1_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q5_1_f16_f16acc_len;
-extern const lazy_data matmul_q5_1_f16_f16acc_data;
-
-extern const lazy_len matmul_q5_1_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q5_1_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q5_1_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q5_1_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q5_1_f16_fp32_len;
-extern const lazy_data matmul_q5_1_f16_fp32_data;
-
-extern const lazy_len matmul_q5_1_f32_len;
-extern const lazy_data matmul_q5_1_f32_data;
-
-extern const lazy_len matmul_q5_1_f32_cm1_len;
-extern const lazy_data matmul_q5_1_f32_cm1_data;
-
-extern const lazy_len matmul_q5_1_f32_dot2_len;
-extern const lazy_data matmul_q5_1_f32_dot2_data;
-
-extern const lazy_len matmul_q5_1_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q5_1_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q5_1_f32_f16acc_len;
-extern const lazy_data matmul_q5_1_f32_f16acc_data;
-
-extern const lazy_len matmul_q5_1_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q5_1_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q5_1_f32_fp32_len;
-extern const lazy_data matmul_q5_1_f32_fp32_data;
-
 extern const lazy_len matmul_q5_1_q8_1_len;
 extern const lazy_data matmul_q5_1_q8_1_data;
+
+extern const lazy_len matmul_q5_1_q8_1_cm1_len;
+extern const lazy_data matmul_q5_1_q8_1_cm1_data;
 
 extern const lazy_len matmul_q5_1_q8_1_fp32_len;
 extern const lazy_data matmul_q5_1_q8_1_fp32_data;
 
-extern const lazy_len matmul_q5_k_f16_len;
-extern const lazy_data matmul_q5_k_f16_data;
-
-extern const lazy_len matmul_q5_k_f16_cm1_len;
-extern const lazy_data matmul_q5_k_f16_cm1_data;
-
 extern const lazy_len matmul_q5_k_f16_cm2_len;
 extern const lazy_data matmul_q5_k_f16_cm2_data;
-
-extern const lazy_len matmul_q5_k_f16_dot2_len;
-extern const lazy_data matmul_q5_k_f16_dot2_data;
-
-extern const lazy_len matmul_q5_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q5_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q5_k_f16_f16acc_len;
-extern const lazy_data matmul_q5_k_f16_f16acc_data;
-
-extern const lazy_len matmul_q5_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q5_k_f16_f16acc_cm1_data;
 
 extern const lazy_len matmul_q5_k_f16_f16acc_cm2_len;
 extern const lazy_data matmul_q5_k_f16_f16acc_cm2_data;
 
-extern const lazy_len matmul_q5_k_f16_fp32_len;
-extern const lazy_data matmul_q5_k_f16_fp32_data;
-
-extern const lazy_len matmul_q5_k_f32_len;
-extern const lazy_data matmul_q5_k_f32_data;
-
-extern const lazy_len matmul_q5_k_f32_cm1_len;
-extern const lazy_data matmul_q5_k_f32_cm1_data;
-
-extern const lazy_len matmul_q5_k_f32_dot2_len;
-extern const lazy_data matmul_q5_k_f32_dot2_data;
-
-extern const lazy_len matmul_q5_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q5_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q5_k_f32_f16acc_len;
-extern const lazy_data matmul_q5_k_f32_f16acc_data;
-
-extern const lazy_len matmul_q5_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q5_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q5_k_f32_fp32_len;
-extern const lazy_data matmul_q5_k_f32_fp32_data;
-
 extern const lazy_len matmul_q5_k_q8_1_len;
 extern const lazy_data matmul_q5_k_q8_1_data;
+
+extern const lazy_len matmul_q5_k_q8_1_cm1_len;
+extern const lazy_data matmul_q5_k_q8_1_cm1_data;
 
 extern const lazy_len matmul_q5_k_q8_1_fp32_len;
 extern const lazy_data matmul_q5_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_q6_k_f16_len;
-extern const lazy_data matmul_q6_k_f16_data;
-
-extern const lazy_len matmul_q6_k_f16_cm1_len;
-extern const lazy_data matmul_q6_k_f16_cm1_data;
-
-extern const lazy_len matmul_q6_k_f16_cm2_len;
-extern const lazy_data matmul_q6_k_f16_cm2_data;
-
-extern const lazy_len matmul_q6_k_f16_dot2_len;
-extern const lazy_data matmul_q6_k_f16_dot2_data;
-
-extern const lazy_len matmul_q6_k_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q6_k_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q6_k_f16_f16acc_len;
-extern const lazy_data matmul_q6_k_f16_f16acc_data;
-
-extern const lazy_len matmul_q6_k_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q6_k_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q6_k_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q6_k_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q6_k_f16_fp32_len;
-extern const lazy_data matmul_q6_k_f16_fp32_data;
-
-extern const lazy_len matmul_q6_k_f32_len;
-extern const lazy_data matmul_q6_k_f32_data;
-
-extern const lazy_len matmul_q6_k_f32_cm1_len;
-extern const lazy_data matmul_q6_k_f32_cm1_data;
-
-extern const lazy_len matmul_q6_k_f32_dot2_len;
-extern const lazy_data matmul_q6_k_f32_dot2_data;
-
-extern const lazy_len matmul_q6_k_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q6_k_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q6_k_f32_f16acc_len;
-extern const lazy_data matmul_q6_k_f32_f16acc_data;
-
-extern const lazy_len matmul_q6_k_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q6_k_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q6_k_f32_fp32_len;
-extern const lazy_data matmul_q6_k_f32_fp32_data;
-
 extern const lazy_len matmul_q6_k_q8_1_len;
 extern const lazy_data matmul_q6_k_q8_1_data;
+
+extern const lazy_len matmul_q6_k_q8_1_cm1_len;
+extern const lazy_data matmul_q6_k_q8_1_cm1_data;
 
 extern const lazy_len matmul_q6_k_q8_1_fp32_len;
 extern const lazy_data matmul_q6_k_q8_1_fp32_data;
 
-extern const lazy_len matmul_q8_0_f16_len;
-extern const lazy_data matmul_q8_0_f16_data;
-
-extern const lazy_len matmul_q8_0_f16_cm1_len;
-extern const lazy_data matmul_q8_0_f16_cm1_data;
-
-extern const lazy_len matmul_q8_0_f16_cm2_len;
-extern const lazy_data matmul_q8_0_f16_cm2_data;
-
-extern const lazy_len matmul_q8_0_f16_dot2_len;
-extern const lazy_data matmul_q8_0_f16_dot2_data;
-
-extern const lazy_len matmul_q8_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_q8_0_f16_dot2_f16acc_data;
-
-extern const lazy_len matmul_q8_0_f16_f16acc_len;
-extern const lazy_data matmul_q8_0_f16_f16acc_data;
-
-extern const lazy_len matmul_q8_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_q8_0_f16_f16acc_cm1_data;
-
-extern const lazy_len matmul_q8_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_q8_0_f16_f16acc_cm2_data;
-
-extern const lazy_len matmul_q8_0_f16_fp32_len;
-extern const lazy_data matmul_q8_0_f16_fp32_data;
-
-extern const lazy_len matmul_q8_0_f32_len;
-extern const lazy_data matmul_q8_0_f32_data;
-
-extern const lazy_len matmul_q8_0_f32_cm1_len;
-extern const lazy_data matmul_q8_0_f32_cm1_data;
-
-extern const lazy_len matmul_q8_0_f32_dot2_len;
-extern const lazy_data matmul_q8_0_f32_dot2_data;
-
-extern const lazy_len matmul_q8_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_q8_0_f32_dot2_f16acc_data;
-
-extern const lazy_len matmul_q8_0_f32_f16acc_len;
-extern const lazy_data matmul_q8_0_f32_f16acc_data;
-
-extern const lazy_len matmul_q8_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_q8_0_f32_f16acc_cm1_data;
-
-extern const lazy_len matmul_q8_0_f32_fp32_len;
-extern const lazy_data matmul_q8_0_f32_fp32_data;
-
 extern const lazy_len matmul_q8_0_q8_1_len;
 extern const lazy_data matmul_q8_0_q8_1_data;
+
+extern const lazy_len matmul_q8_0_q8_1_cm1_len;
+extern const lazy_data matmul_q8_0_q8_1_cm1_data;
 
 extern const lazy_len matmul_q8_0_q8_1_fp32_len;
 extern const lazy_data matmul_q8_0_q8_1_fp32_data;
 
-extern const lazy_len matmul_tq2_0_f16_len;
-extern const lazy_data matmul_tq2_0_f16_data;
+extern const lazy_len matmul_quant_f16_len;
+extern const lazy_data matmul_quant_f16_data;
 
-extern const lazy_len matmul_tq2_0_f16_cm1_len;
-extern const lazy_data matmul_tq2_0_f16_cm1_data;
+extern const lazy_len matmul_quant_f16_cm1_len;
+extern const lazy_data matmul_quant_f16_cm1_data;
 
-extern const lazy_len matmul_tq2_0_f16_cm2_len;
-extern const lazy_data matmul_tq2_0_f16_cm2_data;
+extern const lazy_len matmul_quant_f16_cm2_len;
+extern const lazy_data matmul_quant_f16_cm2_data;
 
-extern const lazy_len matmul_tq2_0_f16_dot2_len;
-extern const lazy_data matmul_tq2_0_f16_dot2_data;
+extern const lazy_len matmul_quant_f16_dot2_len;
+extern const lazy_data matmul_quant_f16_dot2_data;
 
-extern const lazy_len matmul_tq2_0_f16_dot2_f16acc_len;
-extern const lazy_data matmul_tq2_0_f16_dot2_f16acc_data;
+extern const lazy_len matmul_quant_f16_dot2_f16acc_len;
+extern const lazy_data matmul_quant_f16_dot2_f16acc_data;
 
-extern const lazy_len matmul_tq2_0_f16_f16acc_len;
-extern const lazy_data matmul_tq2_0_f16_f16acc_data;
+extern const lazy_len matmul_quant_f16_f16acc_len;
+extern const lazy_data matmul_quant_f16_f16acc_data;
 
-extern const lazy_len matmul_tq2_0_f16_f16acc_cm1_len;
-extern const lazy_data matmul_tq2_0_f16_f16acc_cm1_data;
+extern const lazy_len matmul_quant_f16_f16acc_cm1_len;
+extern const lazy_data matmul_quant_f16_f16acc_cm1_data;
 
-extern const lazy_len matmul_tq2_0_f16_f16acc_cm2_len;
-extern const lazy_data matmul_tq2_0_f16_f16acc_cm2_data;
+extern const lazy_len matmul_quant_f16_f16acc_cm2_len;
+extern const lazy_data matmul_quant_f16_f16acc_cm2_data;
 
-extern const lazy_len matmul_tq2_0_f16_fp32_len;
-extern const lazy_data matmul_tq2_0_f16_fp32_data;
+extern const lazy_len matmul_quant_f16_fp32_len;
+extern const lazy_data matmul_quant_f16_fp32_data;
 
-extern const lazy_len matmul_tq2_0_f32_len;
-extern const lazy_data matmul_tq2_0_f32_data;
+extern const lazy_len matmul_quant_f32_len;
+extern const lazy_data matmul_quant_f32_data;
 
-extern const lazy_len matmul_tq2_0_f32_cm1_len;
-extern const lazy_data matmul_tq2_0_f32_cm1_data;
+extern const lazy_len matmul_quant_f32_cm1_len;
+extern const lazy_data matmul_quant_f32_cm1_data;
 
-extern const lazy_len matmul_tq2_0_f32_dot2_len;
-extern const lazy_data matmul_tq2_0_f32_dot2_data;
+extern const lazy_len matmul_quant_f32_dot2_len;
+extern const lazy_data matmul_quant_f32_dot2_data;
 
-extern const lazy_len matmul_tq2_0_f32_dot2_f16acc_len;
-extern const lazy_data matmul_tq2_0_f32_dot2_f16acc_data;
+extern const lazy_len matmul_quant_f32_dot2_f16acc_len;
+extern const lazy_data matmul_quant_f32_dot2_f16acc_data;
 
-extern const lazy_len matmul_tq2_0_f32_f16acc_len;
-extern const lazy_data matmul_tq2_0_f32_f16acc_data;
+extern const lazy_len matmul_quant_f32_f16acc_len;
+extern const lazy_data matmul_quant_f32_f16acc_data;
 
-extern const lazy_len matmul_tq2_0_f32_f16acc_cm1_len;
-extern const lazy_data matmul_tq2_0_f32_f16acc_cm1_data;
+extern const lazy_len matmul_quant_f32_f16acc_cm1_len;
+extern const lazy_data matmul_quant_f32_f16acc_cm1_data;
 
-extern const lazy_len matmul_tq2_0_f32_fp32_len;
-extern const lazy_data matmul_tq2_0_f32_fp32_data;
+extern const lazy_len matmul_quant_f32_fp32_len;
+extern const lazy_data matmul_quant_f32_fp32_data;
 
 extern const lazy_len mul_f16_f16_f16_len;
 extern const lazy_data mul_f16_f16_f16_data;
@@ -4638,6 +3333,15 @@ extern const lazy_data mul_mat_vec_id_iq4_xs_f32_f32_subgroup_data;
 
 extern const lazy_len mul_mat_vec_id_iq4_xs_f32_f32_subgroup_no_shmem_len;
 extern const lazy_data mul_mat_vec_id_iq4_xs_f32_f32_subgroup_no_shmem_data;
+
+extern const lazy_len mul_mat_vec_id_iq4_xs_q8_1_f32_len;
+extern const lazy_data mul_mat_vec_id_iq4_xs_q8_1_f32_data;
+
+extern const lazy_len mul_mat_vec_id_iq4_xs_q8_1_f32_subgroup_len;
+extern const lazy_data mul_mat_vec_id_iq4_xs_q8_1_f32_subgroup_data;
+
+extern const lazy_len mul_mat_vec_id_iq4_xs_q8_1_f32_subgroup_no_shmem_len;
+extern const lazy_data mul_mat_vec_id_iq4_xs_q8_1_f32_subgroup_no_shmem_data;
 
 extern const lazy_len mul_mat_vec_id_mxfp4_f32_f32_len;
 extern const lazy_data mul_mat_vec_id_mxfp4_f32_f32_data;
@@ -4891,6 +3595,15 @@ extern const lazy_data mul_mat_vec_id_q8_0_q8_1_f32_subgroup_data;
 extern const lazy_len mul_mat_vec_id_q8_0_q8_1_f32_subgroup_no_shmem_len;
 extern const lazy_data mul_mat_vec_id_q8_0_q8_1_f32_subgroup_no_shmem_data;
 
+extern const lazy_len mul_mat_vec_id_tq1_0_f32_f32_len;
+extern const lazy_data mul_mat_vec_id_tq1_0_f32_f32_data;
+
+extern const lazy_len mul_mat_vec_id_tq1_0_f32_f32_subgroup_len;
+extern const lazy_data mul_mat_vec_id_tq1_0_f32_f32_subgroup_data;
+
+extern const lazy_len mul_mat_vec_id_tq1_0_f32_f32_subgroup_no_shmem_len;
+extern const lazy_data mul_mat_vec_id_tq1_0_f32_f32_subgroup_no_shmem_data;
+
 extern const lazy_len mul_mat_vec_id_tq2_0_f32_f32_len;
 extern const lazy_data mul_mat_vec_id_tq2_0_f32_f32_data;
 
@@ -5079,6 +3792,15 @@ extern const lazy_data mul_mat_vec_iq4_xs_f32_f32_subgroup_data;
 
 extern const lazy_len mul_mat_vec_iq4_xs_f32_f32_subgroup_no_shmem_len;
 extern const lazy_data mul_mat_vec_iq4_xs_f32_f32_subgroup_no_shmem_data;
+
+extern const lazy_len mul_mat_vec_iq4_xs_q8_1_f32_len;
+extern const lazy_data mul_mat_vec_iq4_xs_q8_1_f32_data;
+
+extern const lazy_len mul_mat_vec_iq4_xs_q8_1_f32_subgroup_len;
+extern const lazy_data mul_mat_vec_iq4_xs_q8_1_f32_subgroup_data;
+
+extern const lazy_len mul_mat_vec_iq4_xs_q8_1_f32_subgroup_no_shmem_len;
+extern const lazy_data mul_mat_vec_iq4_xs_q8_1_f32_subgroup_no_shmem_data;
 
 extern const lazy_len mul_mat_vec_mxfp4_f16_f32_len;
 extern const lazy_data mul_mat_vec_mxfp4_f16_f32_data;
@@ -5485,6 +4207,24 @@ extern const lazy_data mul_mat_vec_q8_0_q8_1_f32_subgroup_data;
 extern const lazy_len mul_mat_vec_q8_0_q8_1_f32_subgroup_no_shmem_len;
 extern const lazy_data mul_mat_vec_q8_0_q8_1_f32_subgroup_no_shmem_data;
 
+extern const lazy_len mul_mat_vec_tq1_0_f16_f32_len;
+extern const lazy_data mul_mat_vec_tq1_0_f16_f32_data;
+
+extern const lazy_len mul_mat_vec_tq1_0_f16_f32_subgroup_len;
+extern const lazy_data mul_mat_vec_tq1_0_f16_f32_subgroup_data;
+
+extern const lazy_len mul_mat_vec_tq1_0_f16_f32_subgroup_no_shmem_len;
+extern const lazy_data mul_mat_vec_tq1_0_f16_f32_subgroup_no_shmem_data;
+
+extern const lazy_len mul_mat_vec_tq1_0_f32_f32_len;
+extern const lazy_data mul_mat_vec_tq1_0_f32_f32_data;
+
+extern const lazy_len mul_mat_vec_tq1_0_f32_f32_subgroup_len;
+extern const lazy_data mul_mat_vec_tq1_0_f32_f32_subgroup_data;
+
+extern const lazy_len mul_mat_vec_tq1_0_f32_f32_subgroup_no_shmem_len;
+extern const lazy_data mul_mat_vec_tq1_0_f32_f32_subgroup_no_shmem_data;
+
 extern const lazy_len mul_mat_vec_tq2_0_f16_f32_len;
 extern const lazy_data mul_mat_vec_tq2_0_f16_f32_data;
 
@@ -5530,11 +4270,17 @@ extern const lazy_data out_prod_f32_data;
 extern const lazy_len pad_f32_len;
 extern const lazy_data pad_f32_data;
 
+extern const lazy_len pad_reflect_1d_f32_len;
+extern const lazy_data pad_reflect_1d_f32_data;
+
 extern const lazy_len pool1d_f32_len;
 extern const lazy_data pool1d_f32_data;
 
 extern const lazy_len pool2d_f32_len;
 extern const lazy_data pool2d_f32_data;
+
+extern const lazy_len pool2d_subgroup_f32_len;
+extern const lazy_data pool2d_subgroup_f32_data;
 
 extern const lazy_len quantize_q8_1_len;
 extern const lazy_data quantize_q8_1_data;
@@ -5575,14 +4321,44 @@ extern const lazy_data rms_norm_back_f32_data;
 extern const lazy_len rms_norm_f32_len;
 extern const lazy_data rms_norm_f32_data;
 
+extern const lazy_len rms_norm_f32_subgroup_len;
+extern const lazy_data rms_norm_f32_subgroup_data;
+
+extern const lazy_len rms_norm_mul_add_f32_len;
+extern const lazy_data rms_norm_mul_add_f32_data;
+
+extern const lazy_len rms_norm_mul_add_f32_subgroup_len;
+extern const lazy_data rms_norm_mul_add_f32_subgroup_data;
+
+extern const lazy_len rms_norm_mul_add_partials_f32_len;
+extern const lazy_data rms_norm_mul_add_partials_f32_data;
+
 extern const lazy_len rms_norm_mul_rope_f32_f16_len;
 extern const lazy_data rms_norm_mul_rope_f32_f16_data;
+
+extern const lazy_len rms_norm_mul_rope_f32_f16_subgroup_len;
+extern const lazy_data rms_norm_mul_rope_f32_f16_subgroup_data;
 
 extern const lazy_len rms_norm_mul_rope_f32_f32_len;
 extern const lazy_data rms_norm_mul_rope_f32_f32_data;
 
+extern const lazy_len rms_norm_mul_rope_f32_f32_subgroup_len;
+extern const lazy_data rms_norm_mul_rope_f32_f32_subgroup_data;
+
 extern const lazy_len rms_norm_partials_f32_len;
 extern const lazy_data rms_norm_partials_f32_data;
+
+extern const lazy_len rms_norm_set_rows_f32_f16_len;
+extern const lazy_data rms_norm_set_rows_f32_f16_data;
+
+extern const lazy_len rms_norm_set_rows_f32_f16_subgroup_len;
+extern const lazy_data rms_norm_set_rows_f32_f16_subgroup_data;
+
+extern const lazy_len rms_norm_set_rows_f32_f32_len;
+extern const lazy_data rms_norm_set_rows_f32_f32_data;
+
+extern const lazy_len rms_norm_set_rows_f32_f32_subgroup_len;
+extern const lazy_data rms_norm_set_rows_f32_f32_subgroup_data;
 
 extern const lazy_len roll_f32_len;
 extern const lazy_data roll_f32_data;
@@ -5779,6 +4555,12 @@ extern const lazy_data sigmoid_f16_data;
 extern const lazy_len sigmoid_f32_len;
 extern const lazy_data sigmoid_f32_data;
 
+extern const lazy_len sigmoid_mul_f16_len;
+extern const lazy_data sigmoid_mul_f16_data;
+
+extern const lazy_len sigmoid_mul_f32_len;
+extern const lazy_data sigmoid_mul_f32_data;
+
 extern const lazy_len silu_back_f32_len;
 extern const lazy_data silu_back_f32_data;
 
@@ -5787,6 +4569,12 @@ extern const lazy_data silu_f16_data;
 
 extern const lazy_len silu_f32_len;
 extern const lazy_data silu_f32_data;
+
+extern const lazy_len silu_mul_f16_len;
+extern const lazy_data silu_mul_f16_data;
+
+extern const lazy_len silu_mul_f32_len;
+extern const lazy_data silu_mul_f32_data;
 
 extern const lazy_len sin_f16_len;
 extern const lazy_data sin_f16_data;
@@ -5835,6 +4623,12 @@ extern const lazy_data softplus_f16_data;
 
 extern const lazy_len softplus_f32_len;
 extern const lazy_data softplus_f32_data;
+
+extern const lazy_len softplus_mul_f16_len;
+extern const lazy_data softplus_mul_f16_data;
+
+extern const lazy_len softplus_mul_f32_len;
+extern const lazy_data softplus_mul_f32_data;
 
 extern const lazy_len solve_tri_f32_len;
 extern const lazy_data solve_tri_f32_data;
@@ -5899,6 +4693,12 @@ extern const lazy_data sub_f32_f32_f32_data;
 extern const lazy_len sum_rows_f32_len;
 extern const lazy_data sum_rows_f32_data;
 
+extern const lazy_len swiglu_clamp_f16_len;
+extern const lazy_data swiglu_clamp_f16_data;
+
+extern const lazy_len swiglu_clamp_f32_len;
+extern const lazy_data swiglu_clamp_f32_data;
+
 extern const lazy_len swiglu_f16_len;
 extern const lazy_data swiglu_f16_data;
 
@@ -5920,6 +4720,12 @@ extern const lazy_data tanh_f32_data;
 extern const lazy_len timestep_embedding_f32_len;
 extern const lazy_data timestep_embedding_f32_data;
 
+extern const lazy_len top_k_mask_f16_len;
+extern const lazy_data top_k_mask_f16_data;
+
+extern const lazy_len top_k_mask_f32_len;
+extern const lazy_data top_k_mask_f32_data;
+
 extern const lazy_len topk_argsort_f32_len;
 extern const lazy_data topk_argsort_f32_data;
 
@@ -5928,6 +4734,9 @@ extern const lazy_data topk_moe_f32_data;
 
 extern const lazy_len topk_nary_search_f32_len;
 extern const lazy_data topk_nary_search_f32_data;
+
+extern const lazy_len topk_radix_select_f32_len;
+extern const lazy_data topk_radix_select_f32_data;
 
 extern const lazy_len tri_f16_len;
 extern const lazy_data tri_f16_data;
@@ -6001,6 +4810,8 @@ extern const lazy_data arr_dmmv_id_iq4_nl_f32_f32_data[3];
 extern const lazy_len arr_dmmv_id_iq4_nl_f32_f32_len[3];
 extern const lazy_data arr_dmmv_id_iq4_xs_f32_f32_data[3];
 extern const lazy_len arr_dmmv_id_iq4_xs_f32_f32_len[3];
+extern const lazy_data arr_dmmv_id_iq4_xs_q8_1_f32_data[3];
+extern const lazy_len arr_dmmv_id_iq4_xs_q8_1_f32_len[3];
 extern const lazy_data arr_dmmv_id_mxfp4_f32_f32_data[3];
 extern const lazy_len arr_dmmv_id_mxfp4_f32_f32_len[3];
 extern const lazy_data arr_dmmv_id_mxfp4_f32_f32_ocp_data[3];
@@ -6057,6 +4868,8 @@ extern const lazy_data arr_dmmv_id_q8_0_f32_f32_data[3];
 extern const lazy_len arr_dmmv_id_q8_0_f32_f32_len[3];
 extern const lazy_data arr_dmmv_id_q8_0_q8_1_f32_data[3];
 extern const lazy_len arr_dmmv_id_q8_0_q8_1_f32_len[3];
+extern const lazy_data arr_dmmv_id_tq1_0_f32_f32_data[3];
+extern const lazy_len arr_dmmv_id_tq1_0_f32_f32_len[3];
 extern const lazy_data arr_dmmv_id_tq2_0_f32_f32_data[3];
 extern const lazy_len arr_dmmv_id_tq2_0_f32_f32_len[3];
 extern const lazy_data arr_dmmv_iq1_m_f16_f32_data[3];
@@ -6099,6 +4912,8 @@ extern const lazy_data arr_dmmv_iq4_xs_f16_f32_data[3];
 extern const lazy_len arr_dmmv_iq4_xs_f16_f32_len[3];
 extern const lazy_data arr_dmmv_iq4_xs_f32_f32_data[3];
 extern const lazy_len arr_dmmv_iq4_xs_f32_f32_len[3];
+extern const lazy_data arr_dmmv_iq4_xs_q8_1_f32_data[3];
+extern const lazy_len arr_dmmv_iq4_xs_q8_1_f32_len[3];
 extern const lazy_data arr_dmmv_mxfp4_f16_f32_data[3];
 extern const lazy_len arr_dmmv_mxfp4_f16_f32_len[3];
 extern const lazy_data arr_dmmv_mxfp4_f16_f32_ocp_data[3];
@@ -6187,6 +5002,10 @@ extern const lazy_data arr_dmmv_q8_0_f32_f32_data[3];
 extern const lazy_len arr_dmmv_q8_0_f32_f32_len[3];
 extern const lazy_data arr_dmmv_q8_0_q8_1_f32_data[3];
 extern const lazy_len arr_dmmv_q8_0_q8_1_f32_len[3];
+extern const lazy_data arr_dmmv_tq1_0_f16_f32_data[3];
+extern const lazy_len arr_dmmv_tq1_0_f16_f32_len[3];
+extern const lazy_data arr_dmmv_tq1_0_f32_f32_data[3];
+extern const lazy_len arr_dmmv_tq1_0_f32_f32_len[3];
 extern const lazy_data arr_dmmv_tq2_0_f16_f32_data[3];
 extern const lazy_len arr_dmmv_tq2_0_f16_f32_len[3];
 extern const lazy_data arr_dmmv_tq2_0_f32_f32_data[3];
