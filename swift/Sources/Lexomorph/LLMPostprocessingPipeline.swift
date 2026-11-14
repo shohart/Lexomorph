@@ -192,10 +192,19 @@ actor LLMPostprocessingCoordinator {
         guard failure == .network else { return false }
         // The connection drops a moment before the process is reaped.
         for _ in 0..<10 {
-            if !(await host.isRunning) { return true }
+            if !(await host.isRunning) {
+                return Self.droppedRequestIsGPUFault(hostStoppedOnRequest: await host.stoppedOnRequest)
+            }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         return false
+    }
+
+    /// A request that died together with its host is a GPU fault only when
+    /// the host died on its own; one the app stopped (stage switched off
+    /// mid-request) just passes the text through.
+    static func droppedRequestIsGPUFault(hostStoppedOnRequest: Bool) -> Bool {
+        !hostStoppedOnRequest
     }
 
     /// One tiny request to a host freshly started on the GPU, which also

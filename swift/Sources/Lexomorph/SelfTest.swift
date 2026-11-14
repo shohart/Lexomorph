@@ -3083,6 +3083,10 @@ enum LexomorphSelfTest {
         try expect(LLMPostprocessingCoordinator.isCrashDuringStartup(.processExitedDuringStartup(SIGSEGV)), equals: true, "SIGSEGV at start")
         try expect(LLMPostprocessingCoordinator.isCrashDuringStartup(.processExitedDuringStartup(1)), equals: false, "exit 1 at start")
         try expect(LLMPostprocessingCoordinator.isCrashDuringStartup(.processExitedDuringStartup(SIGTERM)), equals: false, "SIGTERM at start")
+        // A request that died with its host: a GPU fault only if the app
+        // did not stop that host itself (a stage switched off mid-request).
+        try expect(LLMPostprocessingCoordinator.droppedRequestIsGPUFault(hostStoppedOnRequest: false), equals: true, "host died on its own")
+        try expect(LLMPostprocessingCoordinator.droppedRequestIsGPUFault(hostStoppedOnRequest: true), equals: false, "host stopped by the app")
         // editDistance primitive.
         try expect(LLMCorrectionGuardrail.editDistance("гитхаб", "гитхуб"), equals: 1,
                    "single substitution should have distance 1")
@@ -3908,6 +3912,29 @@ enum LexomorphSelfTest {
         }
         let totalSeconds = ProcessInfo.processInfo.systemUptime - totalStarted
         print("LLM REWRITE: 3 styles total \(String(format: "%.2f", totalSeconds))s (first request includes model load)")
+
+        // Switching rewrite off while a rewrite is still generating stops
+        // its host under the request. That dropped connection is the app's
+        // own doing, not a GPU fault: it must not move the models to the
+        // CPU for the rest of the session (seen on the MI50 2026-11-13).
+        if settings.llmUseGPU {
+            settings.setRewriteStyleSelection(.builtin(.polish))
+            let longInput = String(repeating: "ну значит я сегодня созвонился с клиентом по делу о банкротстве и он сказал что документы из налоговой придут на следующей неделе ", count: 4)
+            let (passed, stoppedMidRequest, faulted) = try runParakeetEngineSynchronously { () -> (String, Bool, Bool) in
+                let inFlight = Task { await coordinator.finalizedText(longInput, settings: settings) }
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                settings.rewriteEnabled = false
+                let started = ProcessInfo.processInfo.systemUptime
+                await coordinator.unloadHostsNoLongerNeeded(settings: settings)
+                let result = await inFlight.value
+                let stoppedMidRequest = ProcessInfo.processInfo.systemUptime - started < 5
+                return (result, stoppedMidRequest, await coordinator.isGPUFaultedForTest)
+            }
+            print("LLM REWRITE: rewrite switched off mid-request: stopped mid-request=\(stoppedMidRequest), GPU fault=\(faulted), out=\"\(passed.prefix(60))…\"")
+            try expect(passed.isEmpty, equals: false, "a rewrite cut off by switching it off must pass the text through")
+            try expect(faulted, equals: false, "stopping a host on purpose mid-request is not a GPU fault")
+            settings.rewriteEnabled = true
+        }
 
         try runParakeetEngineSynchronously { await coordinator.stop() }
     }

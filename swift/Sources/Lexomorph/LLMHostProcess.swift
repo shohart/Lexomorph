@@ -59,6 +59,13 @@ actor LLMHostProcess {
 
     var isRunning: Bool { process?.isRunning ?? false }
 
+    /// True from a `stop()` until the next launch: the app itself ended
+    /// this host (a stage switched off, a model swapped). A request that
+    /// was in flight then fails with a dropped connection, and that is not
+    /// a GPU fault: before this, switching rewrite off mid-request moved
+    /// every model to the CPU for the rest of the session.
+    private(set) var stoppedOnRequest = false
+
     var baseURL: URL? {
         guard isRunning, port > 0 else { return nil }
         return URL(string: "http://\(host):\(port)")
@@ -125,6 +132,7 @@ actor LLMHostProcess {
         guard let chosenPort = Self.pickFreeLoopbackPort() else {
             return .failure(.launchFailed("could not allocate a free loopback port"))
         }
+        stoppedOnRequest = false
 
         let proc = Process()
         proc.executableURL = binaryURL
@@ -185,6 +193,7 @@ actor LLMHostProcess {
 
     func stop() {
         guard let proc = process else { return }
+        stoppedOnRequest = true
         if proc.isRunning {
             proc.terminate()
         }
