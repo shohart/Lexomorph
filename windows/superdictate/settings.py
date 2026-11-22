@@ -304,7 +304,14 @@ _DEFAULTS: dict[str, Any] = {
     "dictation_language": "auto",
     "remove_filler_words": False,
     "filler_words": list(DEFAULT_FILLER_WORDS),
+    "filler_custom_words_v1": [],
+    "filler_sync_stamps_v1": {},
+    "filler_sync_tombstones_v1": [],
     "numbers_as_digits": True,
+    "remove_final_period": False,
+    "auto_learn_vocabulary": True,
+    "synced_pref_stamps_v1": {},
+    "system_prompt_sync_v1": {},
     "stop_on_silence": False,
     "silence_stop_seconds": 2.5,
     "start_at_login": False,
@@ -400,6 +407,12 @@ _RUNTIME_KEYS = frozenset({
     "rewrite_system_prompt_structured_task_v1",
     "rewrite_system_prompt_official_v1",
     "rewrite_system_prompt_sync_v1",
+    "correction_system_prompt_v1",
+    "system_prompt_sync_v1",
+    "filler_custom_words_v1",
+    "filler_sync_stamps_v1",
+    "filler_sync_tombstones_v1",
+    "synced_pref_stamps_v1",
 })
 
 
@@ -773,6 +786,19 @@ class Settings:
     def set_rewrite_style(self, style) -> None:
         self._set("rewrite_style_v1", getattr(style, "value", str(style)))
         self.save()
+
+    def set_punctuation_enabled(self, enabled: bool) -> None:
+        self._set("punctuation_restoration_enabled_v1", bool(enabled))
+        self.save()
+
+    @property
+    def remove_final_period(self) -> bool:
+        return bool(self._get("remove_final_period"))
+
+    @property
+    def auto_learn_vocabulary(self) -> bool:
+        val = self._get("auto_learn_vocabulary")
+        return True if val is None else bool(val)
 
     @property
     def rewrite_enabled(self) -> bool:

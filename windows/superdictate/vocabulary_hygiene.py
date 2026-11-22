@@ -504,3 +504,132 @@ def cleanup_plan(records: Sequence) -> CleanupPlan:
         elif reasons:
             plan.rewrites.append(CleanupRewrite(record, source, replacement, tuple(reasons)))
     return plan
+
+
+# -- interactive extended audit (definite delete / definite fix / review) --
+
+AUDIT_DEFINITE_DELETE = "definite_delete"
+AUDIT_DEFINITE_FIX = "definite_fix"
+AUDIT_REVIEW = "review"
+
+
+@dataclass(frozen=True)
+class AuditItem:
+    record: object
+    category: str
+    reason_key: str
+    default_selected: bool
+    fixed_source: Optional[str] = None
+    fixed_replacement: Optional[str] = None
+    rewrite_reasons: tuple[str, ...] = ()
+
+    @property
+    def record_id(self) -> int:
+        return int(self.record.id)
+
+
+@dataclass
+class ExtendedAudit:
+    items: list[AuditItem] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.items
+
+    def by_category(self, category: str) -> list[AuditItem]:
+        return [item for item in self.items if item.category == category]
+
+
+def extended_audit(records: Sequence) -> ExtendedAudit:
+    """Comprehensive interactive audit over ALL entries (learned + manual).
+
+    * Learned entries failing hygiene rules -> ``AUDIT_DEFINITE_DELETE`` (checked)
+    * Learned entries needing trim/chain/case fixes -> ``AUDIT_DEFINITE_FIX`` (checked)
+    * Suspicious manual entries (no-op, punctuation-only, no letters,
+      edge-punctuation trim, long phrase, duplicate key) -> ``AUDIT_REVIEW`` (unchecked)
+    """
+    base = cleanup_plan(records)
+    items: list[AuditItem] = []
+    seen_ids: set[int] = set()
+
+    for deletion in base.deletions:
+        rid = int(deletion.record.id)
+        seen_ids.add(rid)
+        items.append(AuditItem(
+            record=deletion.record,
+            category=AUDIT_DEFINITE_DELETE,
+            reason_key=deletion.reason,
+            default_selected=True,
+        ))
+
+    for rewrite in base.rewrites:
+        rid = int(rewrite.record.id)
+        seen_ids.add(rid)
+        items.append(AuditItem(
+            record=rewrite.record,
+            category=AUDIT_DEFINITE_FIX,
+            reason_key=rewrite.reasons[0] if rewrite.reasons else REWRITE_TRIM,
+            default_selected=True,
+            fixed_source=rewrite.source,
+            fixed_replacement=rewrite.replacement,
+            rewrite_reasons=rewrite.reasons,
+        ))
+
+    # Inspect manual entries for optional user review (never checked by default).
+    manual = [r for r in records if _is_manual(r)]
+    seen_manual_keys: dict[str, object] = {}
+    for record in sorted(manual, key=lambda r: (str(r.updated_at), int(r.id)), reverse=True):
+        rid = int(record.id)
+        if rid in seen_ids:
+            continue
+        source = trim_edges(record.source)
+        replacement = trim_edges(record.replacement)
+        key = _store_key(source)
+
+        if key in seen_manual_keys:
+            items.append(AuditItem(record, AUDIT_REVIEW, REJECT_DUPLICATE, False))
+            continue
+        seen_manual_keys[key] = record
+
+        if not source or source == replacement:
+            items.append(AuditItem(record, AUDIT_REVIEW, REJECT_NOOP, False))
+            continue
+        if len(replacement) < 2 or not any(ch.isalpha() for ch in replacement):
+            items.append(AuditItem(record, AUDIT_REVIEW, REJECT_NO_LETTERS, False))
+            continue
+        if (source, replacement) != (record.source, record.replacement):
+            items.append(AuditItem(
+                record, AUDIT_REVIEW, REWRITE_TRIM, False,
+                fixed_source=source, fixed_replacement=replacement,
+                rewrite_reasons=(REWRITE_TRIM,),
+            ))
+            continue
+        if _letters_key(source) == _letters_key(replacement) and not is_term_like(replacement):
+            items.append(AuditItem(record, AUDIT_REVIEW, REJECT_PUNCTUATION, False))
+            continue
+        if len(source.split()) >= 5 or len(replacement.split()) >= 5:
+            items.append(AuditItem(record, AUDIT_REVIEW, REJECT_REWRITE, False))
+            continue
+
+    return ExtendedAudit(items=items)
+
+
+def cleanup_plan_from_audit(audit: ExtendedAudit, selected_ids: set[int]) -> CleanupPlan:
+    """Turn the user's checked AuditItems into a standard CleanupPlan."""
+    plan = CleanupPlan()
+    for item in audit.items:
+        if item.record_id not in selected_ids:
+            continue
+        if item.fixed_source is not None and item.fixed_replacement is not None:
+            plan.rewrites.append(CleanupRewrite(
+                record=item.record,
+                source=item.fixed_source,
+                replacement=item.fixed_replacement,
+                reasons=item.rewrite_reasons or (item.reason_key,),
+            ))
+        else:
+            plan.deletions.append(CleanupDeletion(
+                record=item.record,
+                reason=item.reason_key,
+            ))
+    return plan

@@ -345,6 +345,25 @@ class UsageStats:
         with self._lock:
             return bool(self._remote)
 
+    def local_days(self) -> list[DailyUsage]:
+        with self._lock:
+            return sorted(self._days.values(), key=lambda d: d.day, reverse=True)
+
+    def remote_device_count(self) -> int:
+        with self._lock:
+            return len({owner for (_, owner) in self._remote.keys()})
+
+    def remote_totals(self) -> DailyUsage:
+        total = DailyUsage("remote")
+        with self._lock:
+            for usage in self._remote.values():
+                total.dictations += usage.dictations
+                total.audio_seconds += usage.audio_seconds
+                total.characters += usage.characters
+                total.words += usage.words
+                total.asr_seconds += usage.asr_seconds
+        return total
+
     # -- the sum over all devices ---------------------------------------
 
     def all_days(self) -> list[DailyUsage]:

@@ -239,14 +239,18 @@ class VocabularySync:
     def __init__(self, store, settings, *, tokens=None,
                  on_status: Optional[Callable[[SyncStatus], None]] = None,
                  platform: str = "windows", version: str = VERSION,
-                 styles=None, usage=None, prompts=None) -> None:
+                 styles=None, usage=None, prompts=None,
+                 fillers=None, prefs=None) -> None:
         self._store = store
         #: rewrite_styles.StyleStore / history.UsageStats, both optional:
         #: without them the pass is the vocabulary's alone.
         self._styles = styles
         self._usage = usage
-        #: prompt_overrides.PromptOverrides (the built-in styles' prompts)
+        #: prompt_overrides.PromptOverrides (the built-in styles' prompts + correction prompt)
         self._prompts = prompts
+        #: synced_settings.FillerSync / PrefSync
+        self._fillers = fillers
+        self._prefs = prefs
         self._settings = settings
         self._tokens = tokens if tokens is not None else DpapiTokenStore()
         self._on_status = on_status
@@ -263,6 +267,10 @@ class VocabularySync:
             styles.add_listener(self._on_store_change)
         if prompts is not None:
             prompts.add_listener(self._on_store_change)
+        if fillers is not None:
+            fillers.add_listener(self._on_store_change)
+        if prefs is not None:
+            prefs.add_listener(self._on_store_change)
 
     # -- status ----------------------------------------------------------
 
@@ -447,12 +455,23 @@ class VocabularySync:
         styles = self._styles.changes_since(stamp) if self._styles is not None else []
         usage = self._usage.own_rows_since(stamp) if self._usage is not None else []
         prompts = self._prompts.changes_since(stamp) if self._prompts is not None else []
+        system_prompts = (
+            self._prompts.system_changes_since(stamp)
+            if self._prompts is not None and hasattr(self._prompts, "system_changes_since")
+            else []
+        )
+        fillers = [f for f in (self._fillers.changes_since(stamp) if self._fillers is not None else [])
+                   if _sendable(f.get("word", ""))]
+        prefs = self._prefs.changes_since(stamp) if self._prefs is not None else []
 
         applied = 0
         hotwords_dropped = False
         styles_dropped = False
         usage_dropped = False
         prompts_dropped = False
+        system_prompts_dropped = False
+        fillers_dropped = False
+        prefs_dropped = False
         start = 0
         while True:
             batch = changes[start:start + BATCH_SIZE]
@@ -460,6 +479,9 @@ class VocabularySync:
             style_batch = styles[start:start + BATCH_SIZE]
             usage_batch = usage[start:start + BATCH_SIZE]
             prompt_batch = prompts[start:start + BATCH_SIZE]
+            sys_prompt_batch = system_prompts[start:start + BATCH_SIZE]
+            filler_batch = fillers[start:start + BATCH_SIZE]
+            pref_batch = prefs[start:start + BATCH_SIZE]
             body = {"since": since, "changes": batch, "hotwords": hotword_batch,
                     "client": self._client}
             # Only sent when there is something: a server that predates
@@ -471,6 +493,12 @@ class VocabularySync:
                 body["usage"] = usage_batch
             if prompt_batch:
                 body["prompts"] = prompt_batch
+            if sys_prompt_batch:
+                body["system_prompts"] = sys_prompt_batch
+            if filler_batch:
+                body["fillers"] = filler_batch
+            if pref_batch:
+                body["prefs"] = pref_batch
             response = self._request("POST", "/v1/vocabulary", body, token=token)
             entries = response.get("entries")
             applied += self._store.apply_remote(entries if isinstance(entries, list) else [])
@@ -501,6 +529,24 @@ class VocabularySync:
                     applied += self._prompts.apply_remote(remote_prompts)
             elif prompt_batch:
                 prompts_dropped = True
+            remote_sys_prompts = response.get("system_prompts")
+            if isinstance(remote_sys_prompts, list):
+                if self._prompts is not None and hasattr(self._prompts, "apply_remote_system"):
+                    applied += self._prompts.apply_remote_system(remote_sys_prompts)
+            elif sys_prompt_batch:
+                system_prompts_dropped = True
+            remote_fillers = response.get("fillers")
+            if isinstance(remote_fillers, list):
+                if self._fillers is not None:
+                    applied += self._fillers.apply_remote(remote_fillers)
+            elif filler_batch:
+                fillers_dropped = True
+            remote_prefs = response.get("prefs")
+            if isinstance(remote_prefs, list):
+                if self._prefs is not None:
+                    applied += self._prefs.apply_remote(remote_prefs)
+            elif pref_batch:
+                prefs_dropped = True
             try:
                 since = max(since, int(response.get("revision", since)))
             except (TypeError, ValueError):
@@ -509,20 +555,24 @@ class VocabularySync:
             start += BATCH_SIZE
             if (start >= len(changes) and start >= len(hotwords)
                     and start >= len(styles) and start >= len(usage)
-                    and start >= len(prompts)):
+                    and start >= len(prompts) and start >= len(system_prompts)
+                    and start >= len(fillers) and start >= len(prefs)):
                 break
-        if hotwords_dropped or styles_dropped or usage_dropped or prompts_dropped:
+        if (hotwords_dropped or styles_dropped or usage_dropped or prompts_dropped
+                or system_prompts_dropped or fillers_dropped or prefs_dropped):
             # The cursor stays, so the dropped collections go out again once
             # the server is upgraded (the vocabulary is re-sent with them,
             # which is idempotent).
             log.info("Vocabulary sync: the server does not store %s yet; will push again",
                      ", ".join(name for name, dropped in (
                          ("hotwords", hotwords_dropped), ("styles", styles_dropped),
-                         ("usage", usage_dropped),
-                         ("prompts", prompts_dropped)) if dropped))
+                         ("usage", usage_dropped), ("prompts", prompts_dropped),
+                         ("system_prompts", system_prompts_dropped),
+                         ("fillers", fillers_dropped), ("prefs", prefs_dropped)) if dropped))
         else:
             self._settings.update_runtime({"vocabulary_sync_last_pushed_local_stamp": started})
-        return applied, len(changes) + len(hotwords) + len(styles) + len(usage) + len(prompts)
+        return applied, (len(changes) + len(hotwords) + len(styles) + len(usage)
+                         + len(prompts) + len(system_prompts) + len(fillers) + len(prefs))
 
     # -- triggers ------------------------------------------------------------
 

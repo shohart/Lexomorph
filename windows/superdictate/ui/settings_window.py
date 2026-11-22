@@ -24,7 +24,7 @@ import time
 from typing import Any, Optional
 
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -48,8 +48,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import asr, asr_hotwords, audio, i18n, vocabulary_hygiene
-from ..prompt_overrides import STYLES as PROMPT_STYLES, prompt_key
+from .. import asr, asr_hotwords, audio, hardware, i18n, vocabulary_hygiene
+from ..prompt_overrides import STYLES as PROMPT_STYLES, prompt_key, system_prompt_key
 from ..vocabulary import DraftEntry
 from ..hotkeys import HotkeyChoice, TriggerMode
 from ..keynames import hotkey_name
@@ -69,6 +69,7 @@ from ..textproc import PRESET_FILLERS
 from ..updater import PeriodicChecker
 from . import icons
 from .recorder import ShortcutRecorderDialog
+from .stats import StatsPanel
 from .style_editor import CustomStylesBlock
 from .rows import (HINT_NONE, HINT_OFF, HINT_ON, HINT_ROLE, PRIMARY_ROLE, SECONDARY_ROLE,
                    CorrectionRowDelegate)
@@ -316,14 +317,14 @@ class SettingsWindow(QDialog):
     # (kind, detail), kind "ok" | "created" | "error".
     _sync_done = Signal(str, str)
 
-    def __init__(self, settings: Settings, corrections, controller, parent=None) -> None:
+    def __init__(self, settings: Settings, corrections, controller, parent=None,
+                 initial_tab: str | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(i18n.tr("settings_title"))
-        # Wide enough for all five tabs. Narrower and Qt hides the last one
-        # behind scroll arrows, which is how a settings dialog loses a tab
-        # nobody ever finds.
-        self.setMinimumSize(720, 620)
-        self.resize(760, 700)
+        # Wide enough for all seven tabs without hiding the last one behind
+        # scroll arrows.
+        self.setMinimumSize(820, 640)
+        self.resize(860, 720)
 
         self._settings = settings
         self._corrections = corrections
@@ -335,6 +336,8 @@ class SettingsWindow(QDialog):
         # handed to PromptOverrides on save (see _save).
         self._prompt_baseline = {style: str(self._draft.get(prompt_key(style)) or "")
                                  for style in PROMPT_STYLES}
+        self._correction_prompt_baseline = str(
+            self._draft.get(system_prompt_key("correction")) or "")
         self._palette = palette()
         self.setStyleSheet(stylesheet(self._palette))
 
@@ -348,17 +351,22 @@ class SettingsWindow(QDialog):
         self._tabs.tabBar().setExpanding(False)
         muted = self._palette.text_muted
         tabs = (
-            ("keyboard", "settings_tab_hotkeys", self._build_shortcuts_tab),
-            ("mic", "settings_tab_dictation", self._build_dictation_tab),
-            ("palette", "settings_tab_appearance", self._build_appearance_tab),
-            ("replace", "settings_tab_corrections", self._build_corrections_tab),
-            ("sparkles", "settings_tab_postprocessing",
+            ("hotkeys", "keyboard", "settings_tab_hotkeys", self._build_shortcuts_tab),
+            ("dictation", "mic", "settings_tab_dictation", self._build_dictation_tab),
+            ("appearance", "palette", "settings_tab_appearance", self._build_appearance_tab),
+            ("corrections", "replace", "settings_tab_corrections", self._build_corrections_tab),
+            ("postprocessing", "sparkles", "settings_tab_postprocessing",
              self._build_postprocessing_tab),
-            ("sliders", "settings_tab_advanced", self._build_advanced_tab),
+            ("advanced", "sliders", "settings_tab_advanced", self._build_advanced_tab),
+            ("statistics", "chart", "settings_tab_statistics", self._build_statistics_tab),
         )
-        for icon_name, label_key, builder in tabs:
-            self._tabs.addTab(builder(), icons.icon(icon_name, muted, 16),
-                              i18n.tr(label_key))
+        self._tab_indices: dict[str, int] = {}
+        for tab_key, icon_name, label_key, builder in tabs:
+            idx = self._tabs.addTab(builder(), icons.icon(icon_name, muted, 16),
+                                    i18n.tr(label_key))
+            self._tab_indices[tab_key] = idx
+        if initial_tab and initial_tab in self._tab_indices:
+            self._tabs.setCurrentIndex(self._tab_indices[initial_tab])
         layout.addWidget(self._tabs)
 
         buttons = QDialogButtonBox(
@@ -458,6 +466,9 @@ class SettingsWindow(QDialog):
         self._digits = self._checkbox(
             recognition, "settings_numbers_as_digits", "numbers_as_digits",
             i18n.tr("settings_numbers_as_digits_hint"))
+        self._remove_final_period = self._checkbox(
+            recognition, "settings_remove_final_period", "remove_final_period",
+            i18n.tr("settings_remove_final_period_hint"))
 
         capture = Section(i18n.tr("settings_section_capture"))
         devices = [("", i18n.tr("settings_device_default"))]
@@ -550,6 +561,10 @@ class SettingsWindow(QDialog):
     def _build_corrections_tab(self) -> QWidget:
         section = Section(i18n.tr("settings_tab_corrections"),
                           i18n.tr("corrections_note"))
+
+        self._auto_learn = self._checkbox(
+            section, "settings_auto_learn_vocabulary", "auto_learn_vocabulary",
+            i18n.tr("settings_auto_learn_vocabulary_hint"))
 
         column = QLabel(i18n.tr("corrections_hint_column"))
         column.setObjectName("Caption")
@@ -789,11 +804,15 @@ class SettingsWindow(QDialog):
                 return
             self._corrections.apply_edits(self._corrections_baseline, self._current_entries())
             self._load_corrections()
-        plan = self._corrections.cleanup_plan()
-        if plan.is_empty:
+        audit = vocabulary_hygiene.extended_audit(self._corrections.all())
+        if audit.is_empty:
             self._warn(i18n.tr("corrections_cleanup_nothing"))
             return
-        if CleanupPreviewDialog(plan, self._palette, self).exec() != QDialog.DialogCode.Accepted:
+        dialog = CleanupPreviewDialog(audit, self._palette, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        plan = vocabulary_hygiene.cleanup_plan_from_audit(audit, dialog.selected_ids)
+        if plan.is_empty:
             return
         self._corrections.apply_cleanup(plan)
         self._load_corrections()
@@ -1052,6 +1071,8 @@ class SettingsWindow(QDialog):
         from ..llm.models import CORRECTION_MODELS, PROFILES, REWRITE_MODELS
 
         bundled = bundled_host_available()
+        hw = hardware.current()
+        lang = i18n.language()
         engines = [("bundledLocal", i18n.tr("settings_llm_engine_bundled")),
                    ("customEndpoint", i18n.tr("settings_llm_engine_custom"))]
 
@@ -1069,6 +1090,10 @@ class SettingsWindow(QDialog):
                 [(model.value, i18n.tr(f"llm_model_{model.value}"))
                  for model in CORRECTION_MODELS],
             )
+            corr_compat_box = self._model_compat_banner_host(
+                correction, self._correction_model, hw, lang)
+            self._correction_model.currentIndexChanged.connect(corr_compat_box)
+            corr_compat_box()
         self._endpoint_fields(correction, "llm_custom")
         self._correction_prompt = self._prompt_editor(
             correction, "settings_correction_prompt", "correction_system_prompt_v1")
@@ -1096,13 +1121,17 @@ class SettingsWindow(QDialog):
                 [(model.value, i18n.tr(f"llm_model_{model.value}"))
                  for model in REWRITE_MODELS],
             )
+            rw_compat_box = self._model_compat_banner_host(
+                rewrite, self._rewrite_model, hw, lang)
+            self._rewrite_model.currentIndexChanged.connect(rw_compat_box)
+            rw_compat_box()
         self._endpoint_fields(rewrite, "rewrite_custom")
         for style in RewriteStyle:
             self._prompt_editor(
                 rewrite, f"rewrite_style_{style.value}",
                 f"rewrite_system_prompt_{style.value}_v1")
 
-        punctuation = self._punctuation_section()
+        punctuation = self._punctuation_section(hw)
 
         network = Section(i18n.tr("settings_llm_network"),
                           i18n.tr("settings_llm_network_hint"))
@@ -1120,6 +1149,22 @@ class SettingsWindow(QDialog):
             [("cpu", i18n.tr("settings_llm_backend_cpu")),
              ("gpu", i18n.tr("settings_llm_backend_gpu"))],
         )
+        gpu_status = hw.vulkan_gpu_status(lang)
+        if not gpu_status.available:
+            gpu_idx = self._llm_backend.findData("gpu")
+            if gpu_idx >= 0:
+                combo_model = self._llm_backend.model()
+                if isinstance(combo_model, QStandardItemModel):
+                    item = combo_model.item(gpu_idx)
+                    if item is not None:
+                        item.setEnabled(False)
+            if self._llm_backend.currentData() == "gpu":
+                cpu_idx = self._llm_backend.findData("cpu")
+                if cpu_idx >= 0:
+                    self._llm_backend.setCurrentIndex(cpu_idx)
+            device.add_row(None, self._compat_banner(
+                "warning", self._palette.warning,
+                i18n.tr("hw_banner_gpu_unavailable"), gpu_status.message))
 
         models = Section(i18n.tr("settings_llm_models"),
                          i18n.tr("settings_llm_models_hint"))
@@ -1131,7 +1176,7 @@ class SettingsWindow(QDialog):
             if pin.local_path in files:
                 continue
             files.add(pin.local_path)
-            self._model_rows[model] = self._model_row(models, model, PROFILES[model])
+            self._model_rows[model] = self._model_row(models, model, PROFILES[model], hw)
 
         return _page(correction, rewrite, punctuation, network, device, models)
 
@@ -1212,7 +1257,73 @@ class SettingsWindow(QDialog):
         section.add_row(i18n.tr(label_key), editor)
         return editor
 
-    def _model_row(self, section: "Section", model, model_profile) -> QWidget:
+    def _compat_banner(self, icon_name: str, color: str, title: str, detail: str) -> QWidget:
+        banner = QWidget()
+        banner.setStyleSheet(
+            f"QWidget {{ background: {self._palette.field}; "
+            f"border: 1px solid {color}; border-radius: 8px; }}"
+        )
+        outer = QHBoxLayout(banner)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(8)
+        glyph = QLabel()
+        glyph.setPixmap(icons.pixmap(icon_name, color, 16))
+        glyph.setStyleSheet("border: none; background: transparent;")
+        outer.addWidget(glyph, 0, Qt.AlignmentFlag.AlignTop)
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(2)
+        t_lbl = QLabel(title)
+        t_lbl.setWordWrap(True)
+        t_lbl.setStyleSheet(
+            f"color: {color}; font-weight: 600; font-size: 12px; border: none; background: transparent;")
+        d_lbl = QLabel(detail)
+        d_lbl.setWordWrap(True)
+        d_lbl.setStyleSheet(
+            f"color: {self._palette.text_muted}; font-size: 11px; border: none; background: transparent;")
+        col.addWidget(t_lbl)
+        col.addWidget(d_lbl)
+        outer.addLayout(col, 1)
+        return banner
+
+    def _model_compat_banner_host(self, section: "Section", combo: QComboBox,
+                                  hw: hardware.HardwareProfile, lang: str):
+        host = QWidget()
+        host.setObjectName("Plain")
+        box = QVBoxLayout(host)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        host.setVisible(False)
+        section.add_row(None, host)
+
+        def refresh(*_args) -> None:
+            while box.count():
+                item = box.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
+            model_id = str(combo.currentData() or "")
+            if not model_id:
+                host.setVisible(False)
+                return
+            compat = hw.model_compatibility(model_id, lang, combo.currentText())
+            if compat.status == "unsupported":
+                box.addWidget(self._compat_banner(
+                    "warning", self._palette.warning,
+                    i18n.tr("hw_banner_model_unsupported"), compat.reason))
+                host.setVisible(True)
+            elif compat.status == "cpu_only":
+                box.addWidget(self._compat_banner(
+                    "info", self._palette.busy,
+                    i18n.tr("hw_banner_cpu_warning"), compat.reason))
+                host.setVisible(True)
+            else:
+                host.setVisible(False)
+
+        return refresh
+
+    def _model_row(self, section: "Section", model, model_profile,
+                   hw: Optional[hardware.HardwareProfile] = None) -> QWidget:
         """One model's presence, size and download button."""
         from PySide6.QtWidgets import QProgressBar
 
@@ -1225,6 +1336,7 @@ class SettingsWindow(QDialog):
         layout.setSpacing(8)
 
         status = QLabel()
+        status.setWordWrap(True)
         progress = QProgressBar()
         progress.setRange(0, 100)
         progress.setVisible(False)
@@ -1233,9 +1345,22 @@ class SettingsWindow(QDialog):
 
         size_mb = model_profile.pin.size_bytes // (1 << 20)
         present = is_present(model_profile.pin)
-        status.setText(i18n.tr("settings_model_present" if present
-                               else "settings_model_absent", size=size_mb))
-        button.setEnabled(not present)
+        compat = (hw.model_compatibility(model.value, i18n.language(),
+                                         i18n.tr(f"llm_model_{model.value}"))
+                  if hw is not None else hardware.ModelCompatibility("recommended"))
+        if not present and compat.status == "unsupported":
+            status.setText(f"{i18n.tr('settings_model_absent', size=size_mb)} · "
+                           f"{i18n.tr('hw_status_limited')}")
+            status.setStyleSheet(f"color: {self._palette.warning}; background: transparent;")
+            status.setToolTip(compat.reason)
+            button.setEnabled(False)
+            button.setToolTip(compat.reason)
+        else:
+            status.setText(i18n.tr("settings_model_present" if present
+                                   else "settings_model_absent", size=size_mb))
+            if compat.status == "cpu_only":
+                status.setToolTip(compat.reason)
+            button.setEnabled(not present)
         button.clicked.connect(
             lambda _=False, m=model, p=model_profile.pin, st=status,
             pb=progress, bt=button: self._start_download(m, p, st, pb, bt))
@@ -1246,16 +1371,25 @@ class SettingsWindow(QDialog):
         section.add_row(i18n.tr(f"llm_model_{model.value}"), row)
         return row
 
-    def _punctuation_section(self) -> "Section":
+    def _punctuation_section(self, hw: Optional[hardware.HardwareProfile] = None) -> "Section":
         """The last text stage: on/off, Small or Base, and its download."""
         from PySide6.QtWidgets import QProgressBar
 
         from .. import punctuation
 
+        hw = hw or hardware.current()
+        punct_status = hw.punctuation_status(i18n.language())
+
         section = Section(i18n.tr("settings_punctuation"),
                           i18n.tr("settings_punctuation_hint"))
         self._punctuation_enabled = self._checkbox(
             section, "settings_punctuation_enabled", "punctuation_restoration_enabled_v1")
+        if not punct_status.available and not self._punctuation_enabled.isChecked():
+            self._punctuation_enabled.setEnabled(False)
+        if not punct_status.available:
+            section.add_row(None, self._compat_banner(
+                "warning", self._palette.warning,
+                i18n.tr("hw_banner_punct_unavailable"), punct_status.message))
         self._punctuation_model = self._combo(
             section, "settings_punctuation_model", "punctuation_model_v1",
             [("base", i18n.tr("settings_punctuation_base")),
@@ -1285,7 +1419,7 @@ class SettingsWindow(QDialog):
             present = punctuation.is_installed(model)
             status.setText(i18n.tr("settings_model_present" if present
                                    else "settings_model_absent", size=size_mb))
-            button.setEnabled(not present and not progress.isVisible())
+            button.setEnabled(punct_status.available and not present and not progress.isVisible())
 
         self._punctuation_model.currentIndexChanged.connect(refresh)
         button.clicked.connect(lambda _=False: self._start_punctuation_download(
@@ -1420,7 +1554,60 @@ class SettingsWindow(QDialog):
                  (asr.BACKEND_NPU, npu_label)],
                 hint=i18n.tr("settings_speech_backend_hint"),
             )
-        return _page(system, engine)
+
+        hw = hardware.current()
+        lang = i18n.language()
+        hw_section = Section(i18n.tr("hw_card_title"))
+        ram_unit = "ГБ ОЗУ" if lang == "ru" else "GB RAM"
+        cores_unit = "ядер" if lang == "ru" else "cores"
+        cpu_val = QLabel(f"{hw.cpu_model} ({hw.cpu_cores} {cores_unit}) · {hw.ram_gb} {ram_unit}")
+        cpu_val.setObjectName("Value")
+        cpu_val.setWordWrap(True)
+        hw_section.add_row(i18n.tr("hw_cpu_ram"), cpu_val)
+
+        gpu_st = hw.vulkan_gpu_status(lang)
+        gpu_lbl = QLabel(
+            f"{i18n.tr('hw_status_available')} · {gpu_st.message}" if gpu_st.available
+            else f"{i18n.tr('hw_status_cpu_only')} — {gpu_st.message}"
+        )
+        gpu_lbl.setWordWrap(True)
+        gpu_lbl.setStyleSheet(
+            f"color: {self._palette.ok if gpu_st.available else self._palette.warning}; "
+            "background: transparent;"
+        )
+        hw_section.add_row(i18n.tr("hw_gpu_vulkan"), gpu_lbl)
+
+        ai_st = hw.local_llm_status(lang)
+        ai_lbl = QLabel(
+            f"{i18n.tr('hw_status_compatible')} · {ai_st.message}" if ai_st.available
+            else f"{i18n.tr('hw_status_limited')} — {ai_st.message}"
+        )
+        ai_lbl.setWordWrap(True)
+        ai_lbl.setStyleSheet(
+            f"color: {self._palette.ok if ai_st.available else self._palette.warning}; "
+            "background: transparent;"
+        )
+        hw_section.add_row(i18n.tr("hw_local_ai"), ai_lbl)
+
+        if hw.npu_name:
+            npu_lbl = QLabel(f"{i18n.tr('hw_status_available')} · {hw.npu_name}")
+            npu_lbl.setWordWrap(True)
+            npu_lbl.setStyleSheet(f"color: {self._palette.ok}; background: transparent;")
+            hw_section.add_row(i18n.tr("hw_npu"), npu_lbl)
+
+        return _page(system, engine, hw_section)
+
+    def _build_statistics_tab(self) -> QWidget:
+        usage = getattr(self._controller, "usage", None)
+        if usage is None:
+            empty = Section(i18n.tr("settings_tab_statistics"))
+            empty.add_row(None, self._muted_label(i18n.tr("history_empty")))
+            return _page(empty)
+        self._stats_panel = StatsPanel(
+            usage,
+            lambda: self._settings.vocabulary_sync_enabled,
+        )
+        return _page(self._stats_panel)
 
     def _text_style_changed(self) -> None:
         value = str(self._text_style.currentData())
@@ -1602,8 +1789,17 @@ class SettingsWindow(QDialog):
         stored = [str(word) for word in self._draft.get("filler_words") or []]
         self._filler_enabled = {word.lower() for word in stored}
         known = {word for word, _ in PRESET_FILLERS}
-        self._filler_custom = [word for word in stored
-                               if word.lower() not in known]
+        stored_custom = [str(word) for word in self._draft.get("filler_custom_words_v1") or []
+                         if str(word).strip()]
+        seen_custom: set[str] = set()
+        self._filler_custom: list[str] = []
+        for word in stored_custom + [w for w in stored if w.lower() not in known]:
+            low = word.lower()
+            if low not in known and low not in seen_custom:
+                self._filler_custom.append(word)
+                seen_custom.add(low)
+        self._filler_before_enabled = list(stored)
+        self._filler_before_custom = list(self._filler_custom)
         self._rebuild_filler_grid()
         self._update_filler_toggle()
 
@@ -1709,8 +1905,10 @@ class SettingsWindow(QDialog):
     def _store_filler_words(self) -> None:
         """Saved in list order, presets first, so the file stays readable."""
         words = [word for word, _ in PRESET_FILLERS] + self._filler_custom
-        self._draft.update(filler_words=[
-            word for word in words if word.lower() in self._filler_enabled])
+        self._draft.update(
+            filler_words=[word for word in words if word.lower() in self._filler_enabled],
+            filler_custom_words_v1=list(self._filler_custom),
+        )
 
     def _add_correction_item(self, correction: DraftEntry) -> None:
         item = QListWidgetItem()
@@ -1760,6 +1958,32 @@ class SettingsWindow(QDialog):
                 else:
                     self._settings.update_runtime({prompt_key(style): wanted})
 
+        corr_key = system_prompt_key("correction")
+        wanted_corr = str(self._draft.get(corr_key) or "").strip()
+        if wanted_corr != self._correction_prompt_baseline:
+            if prompts is not None:
+                prompts.set_local_system("correction", wanted_corr)
+            else:
+                self._settings.update_runtime({corr_key: wanted_corr})
+
+        filler_sync = getattr(self._controller, "filler_sync", None)
+        if hasattr(self, "_filler_before_enabled"):
+            if filler_sync is not None:
+                filler_sync.record_local_change(
+                    self._filler_before_enabled,
+                    self._draft.get("filler_words") or [],
+                    self._filler_before_custom,
+                    self._filler_custom,
+                )
+            else:
+                self._settings.update_runtime({
+                    "filler_custom_words_v1": list(self._filler_custom),
+                })
+
+        pref_sync = getattr(self._controller, "pref_sync", None)
+        if pref_sync is not None:
+            pref_sync.record_local_diff(previous, self._draft)
+
         # Only the difference from what the list was loaded from: a rule
         # the sync or a learn changed meanwhile is not rolled back.
         self._corrections.apply_edits(self._corrections_baseline, self._current_entries())
@@ -1774,12 +1998,17 @@ class SettingsWindow(QDialog):
 
 
 class CleanupPreviewDialog(QDialog):
-    """What «Почистить словарь…» would do (hygiene spec §3), for a yes/no."""
+    """Interactive vocabulary cleanup preview with grouped checkboxes.
 
-    def __init__(self, plan, palette: Palette, parent=None) -> None:
+    Supports :class:`vocabulary_hygiene.ExtendedAudit` (definite deletions,
+    fixes, and unchecked manual review items) as well as legacy
+    :class:`vocabulary_hygiene.CleanupPlan` inputs.
+    """
+
+    def __init__(self, audit_or_plan, palette: Palette, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(i18n.tr("corrections_cleanup_title"))
-        self.resize(620, 520)
+        self.resize(660, 560)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 14)
         layout.setSpacing(10)
@@ -1787,47 +2016,119 @@ class CleanupPreviewDialog(QDialog):
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        listing = QListWidget()
-        listing.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        if isinstance(audit_or_plan, vocabulary_hygiene.ExtendedAudit):
+            audit = audit_or_plan
+        else:
+            # Legacy CleanupPlan wrapper
+            items = [
+                vocabulary_hygiene.AuditItem(
+                    record=d.record,
+                    category=vocabulary_hygiene.AUDIT_DEFINITE_DELETE,
+                    reason_key=d.reason,
+                    default_selected=True,
+                )
+                for d in audit_or_plan.deletions
+            ] + [
+                vocabulary_hygiene.AuditItem(
+                    record=r.record,
+                    category=vocabulary_hygiene.AUDIT_DEFINITE_FIX,
+                    reason_key=r.reasons[0] if r.reasons else vocabulary_hygiene.REWRITE_TRIM,
+                    default_selected=True,
+                    fixed_source=r.source,
+                    fixed_replacement=r.replacement,
+                    rewrite_reasons=r.reasons,
+                )
+                for r in audit_or_plan.rewrites
+            ]
+            audit = vocabulary_hygiene.ExtendedAudit(items=items)
 
-        def header(text: str) -> None:
-            item = QListWidgetItem(text)
-            font = item.font()
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        select_all_btn = QPushButton(i18n.tr("cleanup_select_all"))
+        deselect_all_btn = QPushButton(i18n.tr("cleanup_deselect_all"))
+        toolbar.addWidget(select_all_btn)
+        toolbar.addWidget(deselect_all_btn)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
+
+        self._listing = QListWidget()
+        self._listing.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self._check_items: list[QListWidgetItem] = []
+
+        def add_header(text: str) -> None:
+            hdr = QListWidgetItem(text)
+            font = hdr.font()
             font.setBold(True)
-            item.setFont(font)
-            item.setFlags(Qt.ItemFlag.NoItemFlags | Qt.ItemFlag.ItemIsEnabled)
-            listing.addItem(item)
+            hdr.setFont(font)
+            hdr.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self._listing.addItem(hdr)
 
-        def reason(key: str) -> str:
+        def reason_text(key: str) -> str:
             return i18n.tr(f"cleanup_reason_{key}")
 
-        others = [d for d in plan.deletions if d.reason != "duplicate"]
-        duplicates = plan.duplicates
-        if others or duplicates:
-            header(i18n.tr("corrections_cleanup_deletions", count=len(plan.deletions)))
-            for deletion in others:
-                listing.addItem(f"   {deletion.record.source} → {deletion.record.replacement}"
-                                f"   — {reason(deletion.reason)}")
-            if duplicates:
-                header(i18n.tr("corrections_cleanup_duplicates", count=len(duplicates)))
-                for deletion in duplicates:
-                    listing.addItem(f"   {deletion.record.source} → {deletion.record.replacement}")
-        if plan.rewrites:
-            header(i18n.tr("corrections_cleanup_rewrites", count=len(plan.rewrites)))
-            for rewrite in plan.rewrites:
-                listing.addItem(
-                    f"   {rewrite.record.source} → {rewrite.record.replacement}   ⇒   "
-                    f"{rewrite.source} → {rewrite.replacement}   — "
-                    + ", ".join(reason(r) for r in rewrite.reasons))
-        layout.addWidget(listing, 1)
+        def add_audit_item(audit_item: vocabulary_hygiene.AuditItem) -> None:
+            rec = audit_item.record
+            if audit_item.fixed_source is not None and audit_item.fixed_replacement is not None:
+                reasons = ", ".join(reason_text(r) for r in (audit_item.rewrite_reasons or (audit_item.reason_key,)))
+                label = (f"{rec.source} → {rec.replacement}   ⇒   "
+                         f"{audit_item.fixed_source} → {audit_item.fixed_replacement}   — {reasons}")
+            else:
+                label = f"{rec.source} → {rec.replacement}   — {reason_text(audit_item.reason_key)}"
+            row_item = QListWidgetItem(label)
+            row_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            row_item.setCheckState(
+                Qt.CheckState.Checked if audit_item.default_selected else Qt.CheckState.Unchecked
+            )
+            row_item.setData(Qt.ItemDataRole.UserRole, audit_item.record_id)
+            self._listing.addItem(row_item)
+            self._check_items.append(row_item)
+
+        for cat, title_key in (
+            (vocabulary_hygiene.AUDIT_DEFINITE_DELETE, "cleanup_group_delete"),
+            (vocabulary_hygiene.AUDIT_DEFINITE_FIX, "cleanup_group_fix"),
+            (vocabulary_hygiene.AUDIT_REVIEW, "cleanup_group_review"),
+        ):
+            group = audit.by_category(cat)
+            if not group:
+                continue
+            add_header(i18n.tr(title_key, count=len(group)))
+            for audit_item in group:
+                add_audit_item(audit_item)
+
+        layout.addWidget(self._listing, 1)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
-        ok.setText(i18n.tr("corrections_cleanup_apply"))
-        ok.setObjectName("Primary")
+        self._ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self._ok_button.setObjectName("Primary")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(i18n.tr("settings_cancel"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        select_all_btn.clicked.connect(lambda: self._set_all_checked(True))
+        deselect_all_btn.clicked.connect(lambda: self._set_all_checked(False))
+        self._listing.itemChanged.connect(lambda _item: self._update_apply_label())
+        self._update_apply_label()
         self.setStyleSheet(stylesheet(palette))
+
+    def _set_all_checked(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self._listing.blockSignals(True)
+        for item in self._check_items:
+            item.setCheckState(state)
+        self._listing.blockSignals(False)
+        self._update_apply_label()
+
+    def _update_apply_label(self) -> None:
+        count = len(self.selected_ids)
+        self._ok_button.setText(i18n.tr("cleanup_apply_selected", count=count))
+        self._ok_button.setEnabled(count > 0)
+
+    @property
+    def selected_ids(self) -> set[int]:
+        return {
+            int(item.data(Qt.ItemDataRole.UserRole))
+            for item in self._check_items
+            if item.checkState() == Qt.CheckState.Checked
+        }

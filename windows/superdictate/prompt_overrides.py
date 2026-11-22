@@ -35,12 +35,20 @@ from .rewrite_styles import CHANGE_LOCAL, CHANGE_SYNC, EPOCH, _later, utc_now
 log = get_logger("prompt_overrides")
 
 STYLES = ("polish", "structured_task", "official")
+SYSTEM_PROMPT_KEYS = ("correction",)
 MAX_PROMPT = 16000
 STAMPS_KEY = "rewrite_system_prompt_sync_v1"
+SYSTEM_STAMPS_KEY = "system_prompt_sync_v1"
 
 
 def prompt_key(style: str) -> str:
     return f"rewrite_system_prompt_{style}_v1"
+
+
+def system_prompt_key(key: str) -> str:
+    if key == "correction":
+        return "correction_system_prompt_v1"
+    raise KeyError(key)
 
 
 class PromptOverrides:
@@ -181,6 +189,109 @@ class PromptOverrides:
                     stamps[style] = {"updated_at": stamp, "deleted": dead}
             if texts or stamps != self._stamps():
                 self._save(stamps, texts)
+        if applied:
+            self._notify(CHANGE_SYNC)
+        return applied
+
+    # -- non-rewrite system prompts (`system_prompts`: correction) ---------
+
+    def get_system(self, key: str) -> str:
+        return str(self._settings._get(system_prompt_key(key)) or "")
+
+    def _system_stamps(self) -> dict[str, dict]:
+        raw = self._settings._get(SYSTEM_STAMPS_KEY)
+        result: dict[str, dict] = {}
+        if isinstance(raw, dict):
+            for key in SYSTEM_PROMPT_KEYS:
+                item = raw.get(key)
+                if isinstance(item, dict) and item.get("updated_at"):
+                    result[key] = {"updated_at": str(item["updated_at"]),
+                                   "deleted": bool(item.get("deleted"))}
+        return result
+
+    def _save_system(self, stamps: dict[str, dict], texts: dict[str, str]) -> None:
+        changes: dict = {SYSTEM_STAMPS_KEY: stamps}
+        for key, text in texts.items():
+            changes[system_prompt_key(key)] = text
+        self._settings.update_runtime(changes)
+
+    def set_local_system(self, key: str, text: str) -> bool:
+        if key not in SYSTEM_PROMPT_KEYS:
+            raise KeyError(key)
+        text = str(text).strip()
+        with self._lock:
+            current = self.get_system(key)
+            if text == current:
+                return False
+            stamps = self._system_stamps()
+            previous = stamps.get(key, {}).get("updated_at", EPOCH)
+            if text:
+                stamps[key] = {"updated_at": _later(previous), "deleted": False}
+            elif current:
+                stamps[key] = {"updated_at": _later(previous), "deleted": True}
+            self._save_system(stamps, {key: text})
+        self._notify(CHANGE_LOCAL)
+        return True
+
+    def _stamp_unstamped_system(self) -> None:
+        with self._lock:
+            stamps = self._system_stamps()
+            changed = False
+            for key in SYSTEM_PROMPT_KEYS:
+                if self.get_system(key) and key not in stamps:
+                    stamps[key] = {"updated_at": utc_now(), "deleted": False}
+                    changed = True
+            if changed:
+                self._settings.update_runtime({SYSTEM_STAMPS_KEY: stamps})
+
+    def system_changes_since(self, stamp: str) -> list[dict]:
+        self._stamp_unstamped_system()
+        rows = []
+        stamps = self._system_stamps()
+        for key in SYSTEM_PROMPT_KEYS:
+            item = stamps.get(key)
+            if item is None or item["updated_at"] < stamp:
+                continue
+            if item["deleted"] or not self.get_system(key):
+                rows.append({"key": key, "prompt": "", "deleted": True,
+                             "updated_at": item["updated_at"]})
+                continue
+            text = self.get_system(key)
+            if len(text) > MAX_PROMPT:
+                continue
+            rows.append({"key": key, "prompt": text, "deleted": False,
+                         "updated_at": item["updated_at"]})
+        return rows
+
+    def apply_remote_system(self, entries: Iterable[dict]) -> int:
+        applied = 0
+        with self._lock:
+            stamps = self._system_stamps()
+            texts: dict[str, str] = {}
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                key = str(entry.get("key") or "")
+                stamp = str(entry.get("updated_at") or "")
+                if key not in SYSTEM_PROMPT_KEYS or not stamp:
+                    continue
+                known = stamps.get(key, {}).get("updated_at", EPOCH)
+                if stamp < known:
+                    continue
+                before = texts.get(key, self.get_system(key))
+                if entry.get("deleted"):
+                    text, dead = "", True
+                else:
+                    text, dead = str(entry.get("prompt") or "").strip(), False
+                    if not text or len(text) > MAX_PROMPT:
+                        continue
+                if text != before or stamps.get(key) != {"updated_at": stamp, "deleted": dead}:
+                    if text != before:
+                        applied += 1
+                    texts[key] = text
+                    stamps[key] = {"updated_at": stamp, "deleted": dead}
+            if texts or stamps != self._system_stamps():
+                self._save_system(stamps, texts)
         if applied:
             self._notify(CHANGE_SYNC)
         return applied

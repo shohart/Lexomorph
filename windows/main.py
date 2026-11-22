@@ -288,12 +288,13 @@ class _Windows:
         self._panel.raise_()
         self._panel.activateWindow()
 
-    def show_settings(self) -> None:
+    def show_settings(self, initial_tab: str | None = None) -> None:
         window = SettingsWindow(
             self._controller.settings,
             self._controller.corrections,
             self._controller,
             self._panel,
+            initial_tab=initial_tab,
         )
         window.exec()
         if self._panel is not None:

@@ -31,7 +31,7 @@ from typing import Optional
 import numpy as np
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
-from . import (asr, audio, dictation_trace, edit_watch, focus_target, i18n, incremental, inject, system,
+from . import (asr, audio, dictation_trace, edit_watch, focus_target, hardware, i18n, incremental, inject, system,
                recording_flow,
                textproc, transcription, vocabulary_hygiene)
 from .history import History, HistoryEntry, UsageStats
@@ -41,6 +41,7 @@ from .punctuation import PunctuationRestorer
 from .vocabulary import LearnCandidate, VocabularyStore, migrate_json_if_needed
 from .prompt_overrides import PromptOverrides
 from .rewrite_styles import StyleStore
+from .synced_settings import CHANGE_SYNC, FillerSync, PrefSync
 from .vocabulary_sync import VocabularySync
 from .logging_setup import get as get_logger
 from .settings import CompletionBehavior, Settings
@@ -171,9 +172,14 @@ class DictationController(QObject):
         self.styles.add_listener(self.custom_styles_changed.emit)
         self.custom_styles_changed.connect(self._on_custom_styles_changed)
         self.prompts = PromptOverrides(settings)
+        self.filler_sync = FillerSync(settings)
+        self.pref_sync = PrefSync(settings)
+        for store in (self.prompts, self.filler_sync, self.pref_sync):
+            store.add_listener(self._on_synced_setting_changed)
         self.vocabulary_sync = VocabularySync(
             self.corrections, settings, on_status=self.vocabulary_sync_status.emit,
-            styles=self.styles, usage=self.usage, prompts=self.prompts)
+            styles=self.styles, usage=self.usage, prompts=self.prompts,
+            fillers=self.filler_sync, prefs=self.pref_sync)
         # Post-processing hosts are started lazily, on the first dictation
         # that actually needs one — a multi-GB model must not be loaded at
         # launch for a feature the user may never turn on.
@@ -303,6 +309,9 @@ class DictationController(QObject):
         # offer; asking takes a helper process a second or two, so it is
         # asked now, long before anybody opens them.
         asr.probe_npu_async()
+        # Probe CPU, RAM, Vulkan GPU, and bundled helpers asynchronously so
+        # settings immediately know which local AI features are supported.
+        hardware.warm_up_async()
         # Pushes and pulls the dictionary when signed in (a no-op otherwise).
         self.vocabulary_sync.start()
         # Silero VAD places the seams of long dictations; its 885 KB model
@@ -521,6 +530,17 @@ class DictationController(QObject):
     # still-enabled stage needs (the shared 8B, with rewrite left on) keeps
     # running.
 
+    def _on_synced_setting_changed(self, kind: str) -> None:
+        if kind == CHANGE_SYNC:
+            self.settings_applied.emit()
+
+    def toggle_punctuation(self) -> None:
+        enabled = not self.settings.punctuation_enabled
+        self.settings.set_punctuation_enabled(enabled)
+        log.info("punctuation restoration: %s", "enabled" if enabled else "disabled")
+        self._warm_up_punctuation()
+        self.settings_applied.emit()
+
     def toggle_correction(self) -> None:
         enabled = not self.settings.correction_enabled
         self.settings.set_correction_enabled(enabled)
@@ -530,6 +550,7 @@ class DictationController(QObject):
         self.state_toast_requested.emit(
             i18n.tr("toast_correction_on" if enabled else "toast_correction_off"),
             "on" if enabled else "off")
+        self.settings_applied.emit()
 
     def toggle_rewrite(self) -> None:
         enabled = not self.settings.rewrite_enabled
@@ -551,6 +572,7 @@ class DictationController(QObject):
                     config.style.value)
         else:
             self.state_toast_requested.emit(i18n.tr("toast_rewrite_off"), "off")
+        self.settings_applied.emit()
 
     def cycle_rewrite_style(self) -> None:
         """Step to the next style, turning rewrite on if it was off.
@@ -858,6 +880,7 @@ class DictationController(QObject):
                 filler_words=self.settings.filler_words,
                 digits=self.settings.numbers_as_digits,
                 style=self.settings.text_style,
+                remove_final_period=self.settings.remove_final_period,
             )
             if text and self.recorder.elapsed > PREVIEW_WINDOW_SECONDS:
                 text = "… " + text
@@ -903,6 +926,7 @@ class DictationController(QObject):
             filler_words=self.settings.filler_words,
             digits=self.settings.numbers_as_digits,
             style=self.settings.text_style,
+            remove_final_period=self.settings.remove_final_period,
         )
         log.info(
             "Transcribed %.1fs of audio in %.2fs (RTF %.2f, %d segment(s)%s%s, "
@@ -949,7 +973,7 @@ class DictationController(QObject):
             press_enter=job.behavior.presses_enter,
             enter_delay_ms=self.settings.enter_delay_milliseconds,
         )
-        if not job.behavior.presses_enter:
+        if not job.behavior.presses_enter and self.settings.auto_learn_vocabulary:
             # A message already sent with Enter is not there to be fixed.
             self.edit_watch.begin(payload)
 

@@ -1938,6 +1938,185 @@ def test_prompt_overrides_window() -> None:
         store.close()
 
 
+def test_hardware_capabilities() -> None:
+    """Startup hardware probe parsing and compatibility rules (1.0.3)."""
+    from .hardware import HardwareProfile, parse_llm_gpu_device_list
+
+    parsed = parse_llm_gpu_device_list(
+        "noise\nDEVICE Vulkan0\tAMD Radeon RX 7800 XT\nDEVICE Vulkan1\tIntel Iris Xe\n")
+    _check("hw: parses --list-devices", parsed, ["AMD Radeon RX 7800 XT", "Intel Iris Xe"])
+    _check("hw: empty output", parse_llm_gpu_device_list(""), [])
+
+    no_gpu = HardwareProfile(
+        cpu_model="Xeon", cpu_cores=8, architecture="AMD64", ram_gb=16,
+        vulkan_devices=(), llm_host_available=True, vulkan_shaders_available=True,
+    )
+    _check("hw: no vulkan GPU disables GPU", no_gpu.vulkan_gpu_available, False)
+    _check("hw: small model recommended on 16GB CPU",
+           no_gpu.model_compatibility("voicescribe", "ru").status, "recommended")
+    _check("hw: large 9B model warns cpu_only without GPU",
+           no_gpu.model_compatibility("qwen35_9b", "ru").status, "cpu_only")
+
+    low_ram = HardwareProfile(
+        cpu_model="Celeron", cpu_cores=4, architecture="AMD64", ram_gb=4,
+        vulkan_devices=("RTX 3060",), llm_host_available=True, vulkan_shaders_available=True,
+    )
+    _check("hw: 4GB RAM blocks local LLM", low_ram.local_llm_available, False)
+    _check("hw: 4GB RAM marks voicescribe unsupported",
+           low_ram.model_compatibility("voicescribe", "en").status, "unsupported")
+    _check("hw: 4GB RAM blocks punctuation", low_ram.punctuation_status("en").available, False)
+
+    mid_ram = HardwareProfile(
+        cpu_model="i5", cpu_cores=8, architecture="AMD64", ram_gb=8,
+        vulkan_devices=("RTX 4060",), llm_host_available=True, vulkan_shaders_available=True,
+    )
+    _check("hw: 8GB + Vulkan GPU enables GPU", mid_ram.vulkan_gpu_available, True)
+    _check("hw: 8GB supports 4B model",
+           mid_ram.model_compatibility("qwen35_4b", "ru").status, "recommended")
+    _check("hw: 8GB rejects 9B model",
+           mid_ram.model_compatibility("qwen35_9b", "ru").status, "unsupported")
+    _check("hw: 8GB supports punctuation", mid_ram.punctuation_status("ru").available, True)
+
+    no_shaders = HardwareProfile(
+        cpu_model="i7", cpu_cores=16, architecture="AMD64", ram_gb=32,
+        vulkan_devices=("RTX 4090",), llm_host_available=True, vulkan_shaders_available=False,
+    )
+    _check("hw: missing shaders disables Vulkan GPU", no_shaders.vulkan_gpu_available, False)
+
+
+def test_extended_vocabulary_audit() -> None:
+    """Interactive cleanup audit: learned auto-checked, manual review unchecked."""
+    from . import vocabulary_hygiene as h
+
+    records = [
+        _Rec(1, "оплатил", "оплатил.", "learned"),
+        _Rec(2, "Гетхаб.", "Github", "learned"),
+        _Rec(3, "тест", "тест", "manual"),
+        _Rec(4, "  Договор, ", "Договор РФ.", "manual"),
+        _Rec(5, "гитхаб", "GitHub", "manual"),
+    ]
+    # Legacy cleanup_plan must still never touch manual entries.
+    legacy = h.cleanup_plan(records)
+    _check("audit: legacy plan touches learned only",
+           ([d.record.id for d in legacy.deletions], [r.record.id for r in legacy.rewrites]),
+           ([1], [2]))
+
+    audit = h.extended_audit(records)
+    by_id = {item.record_id: item for item in audit.items}
+    _check("audit: learned junk is definite_delete checked",
+           (by_id[1].category, by_id[1].default_selected), (h.AUDIT_DEFINITE_DELETE, True))
+    _check("audit: learned trim is definite_fix checked",
+           (by_id[2].category, by_id[2].default_selected, by_id[2].fixed_source),
+           (h.AUDIT_DEFINITE_FIX, True, "Гетхаб"))
+    _check("audit: manual no-op is review unchecked",
+           (by_id[3].category, by_id[3].default_selected), (h.AUDIT_REVIEW, False))
+    _check("audit: manual edge trim is review unchecked",
+           (by_id[4].category, by_id[4].default_selected, by_id[4].fixed_source),
+           (h.AUDIT_REVIEW, False, "Договор"))
+    _check("audit: clean manual entry not flagged", 5 in by_id, False)
+
+    # Selecting only {1, 3} builds a CleanupPlan deleting 1 and 3, leaving 2 and 4 alone.
+    selected_plan = h.cleanup_plan_from_audit(audit, {1, 3})
+    _check("audit: cleanup_plan_from_audit honours selection",
+           (sorted(d.record.id for d in selected_plan.deletions),
+            [r.record.id for r in selected_plan.rewrites]),
+           ([1, 3], []))
+
+
+def test_extended_account_sync() -> None:
+    """1.0.3 sync stores: correction system prompt, FillerSync, PrefSync, remove_final_period."""
+    from .prompt_overrides import PromptOverrides
+    from .synced_settings import FillerSync, PrefSync
+    from .textproc import process_transcript
+
+    # remove_final_period in textproc
+    t1, _, _ = process_transcript("Привет мир.", remove_final_period=True)
+    t2, _, _ = process_transcript("Ну...", remove_final_period=True)
+    t3, _, _ = process_transcript("Как дела?", remove_final_period=True)
+    _check("textproc: remove_final_period drops single period only", (t1, t2, t3),
+           ("Привет мир", "Ну...", "Как дела?"))
+
+    work = Path(tempfile.mkdtemp(prefix="sd-ext-sync-selftest-"))
+    s_a = _style_settings(work, "a")
+    s_b = _style_settings(work, "b")
+
+    # 1. System prompt ("correction")
+    p_a, p_b = PromptOverrides(s_a), PromptOverrides(s_b)
+    _check("sysprompt: fresh device pushes nothing", p_b.system_changes_since(""), [])
+    p_a.set_local_system("correction", "Сохраняй термины дословно.")
+    pushed_sys = p_a.system_changes_since("")
+    _check("sysprompt: local edit emits change",
+           [(r["key"], r["prompt"], r["deleted"]) for r in pushed_sys],
+           [("correction", "Сохраняй термины дословно.", False)])
+    events_b: list[str] = []
+    p_b.add_listener(events_b.append)
+    _check("sysprompt: remote apply updates B", p_b.apply_remote_system(pushed_sys), 1)
+    _check("sysprompt: remote apply notifies sync (no loop)", events_b, ["sync"])
+    _check("sysprompt: B reads synced correction prompt", p_b.get_system("correction"),
+           "Сохраняй термины дословно.")
+    p_b.set_local_system("correction", "")
+    _check("sysprompt: clearing emits tombstone",
+           [(r["key"], r["deleted"]) for r in p_b.system_changes_since("")],
+           [("correction", True)])
+    p_a.apply_remote_system(p_b.system_changes_since(""))
+    _check("sysprompt: tombstone clears A", p_a.get_system("correction"), "")
+
+    # 2. FillerSync (presets + custom + tombstones + fresh-device safety)
+    f_a, f_b = FillerSync(s_a), FillerSync(s_b)
+    _check("fillers: fresh device pushes nothing", f_b.changes_since(""), [])
+    before_en = list(s_a.filler_words)
+    after_en = [w for w in before_en if w != "э"] + ["типа того"]
+    s_a.apply({"filler_words": after_en})
+    f_a.record_local_change(before_en, after_en, [], ["типа того"])
+    f_changes = f_a.changes_since("")
+    by_word = {r["word"]: (r["enabled"], r["deleted"]) for r in f_changes}
+    _check("fillers: toggled preset + added custom pushed",
+           (by_word.get("э"), by_word.get("типа того")), ((False, False), (True, False)))
+    f_events: list[str] = []
+    f_b.add_listener(f_events.append)
+    _check("fillers: remote apply updates B", f_b.apply_remote(f_changes) >= 2, True)
+    _check("fillers: remote apply notifies sync", f_events, ["sync"])
+    _check("fillers: B has disabled preset & enabled custom",
+           ("э" not in s_b.filler_words, "типа того" in s_b.filler_words), (True, True))
+    # Delete custom filler on B -> tombstone propagates to A
+    b_before = list(s_b.filler_words)
+    b_after = [w for w in b_before if w != "типа того"]
+    s_b.apply({"filler_words": b_after})
+    f_b.record_local_change(b_before, b_after, ["типа того"], [])
+    f_a.apply_remote(f_b.changes_since(""))
+    _check("fillers: tombstone removes custom word on A",
+           "типа того" not in s_a.filler_words, True)
+
+    # 3. PrefSync (all 9 keys, numbers_as_digits <-> normalize_numbers, fresh-device safety)
+    pr_a, pr_b = PrefSync(s_a), PrefSync(s_b)
+    _check("prefs: fresh device pushes nothing", pr_b.changes_since(""), [])
+    snap_before = s_a.snapshot()
+    s_a.apply({
+        "numbers_as_digits": False,
+        "remove_final_period": True,
+        "paste_suffix": "none",
+        "auto_learn_vocabulary": False,
+        "asr_hotwords_strength": "strong",
+        "dictation_language": "ru",
+    })
+    pr_a.record_local_diff(snap_before, s_a.snapshot())
+    pref_rows = pr_a.changes_since("")
+    pref_map = {r["key"]: r["value"] for r in pref_rows}
+    _check("prefs: maps local keys to wire keys",
+           (pref_map.get("normalize_numbers"), pref_map.get("remove_final_period"),
+            pref_map.get("paste_suffix"), pref_map.get("auto_learn_vocabulary"),
+            pref_map.get("asr_hotwords_strength"), pref_map.get("dictation_language")),
+           ("false", "true", "none", "false", "strong", "ru"))
+    pr_events: list[str] = []
+    pr_b.add_listener(pr_events.append)
+    _check("prefs: remote apply updates B", pr_b.apply_remote(pref_rows), 6)
+    _check("prefs: remote apply notifies sync", pr_events, ["sync"])
+    _check("prefs: B settings updated",
+           (s_b.numbers_as_digits, s_b.remove_final_period, s_b.paste_suffix.value,
+            s_b.auto_learn_vocabulary, s_b.asr_hotwords_strength, s_b.dictation_language),
+           (False, True, "none", False, "strong", "ru"))
+
+
 TESTS = [
     test_custom_hotwords_store,
     test_custom_hotwords_window,
@@ -1960,6 +2139,9 @@ TESTS = [
     test_prompt_overrides_window,
     test_style_hotkeys_state_machine,
     test_rewrite_style_activation,
+    test_hardware_capabilities,
+    test_extended_vocabulary_audit,
+    test_extended_account_sync,
 ]
 
 

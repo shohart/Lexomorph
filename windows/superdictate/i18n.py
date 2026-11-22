@@ -697,6 +697,94 @@ _STRINGS: dict[str, tuple[str, str]] = {
     ),
     "error_too_short": ("Слишком короткая запись", "Recording too short"),
     "error_no_speech": ("Речь не распознана", "No speech recognized"),
+
+    # -- 1.0.3 tray / overview / statistics / cleanup / hardware -----------
+    "tray_correction": ("Коррекция текста", "Text Correction"),
+    "tray_rewrite": ("Рерайт текста", "Text Rewriting"),
+    "tray_rewrite_style": ("Стиль рерайта", "Rewrite Style"),
+    "tray_punctuation": ("Пунктуация", "Punctuation"),
+    "tray_about": ("О Lexomorph", "About Lexomorph"),
+    "about_text": (
+        "Lexomorph {version}\nГолосовая диктовка с локальным распознаванием речи, AI-коррекцией, рерайтом и синхронизацией аккаунта.",
+        "Lexomorph {version}\nVoice dictation with local speech recognition, AI correction, rewriting, and account sync.",
+    ),
+    "panel_quick_modes": ("Быстрые режимы", "Quick Modes"),
+    "panel_account_sync": ("Аккаунт и синхронизация", "Account & Sync"),
+    "panel_sync_scope": (
+        "Синхронизируются: словарь, ASR-термины, режимы рерайта, промпты, слова-паразиты, правила текста и статистика.",
+        "Syncs: vocabulary, ASR terms, rewrite modes, prompts, filler words, text rules, and usage stats.",
+    ),
+    "panel_open_stats": ("Подробная статистика →", "Full Statistics →"),
+    "panel_today_summary": ("Сегодня: {dicts} дикт. · {chars} симв.", "Today: {dicts} dict. · {chars} chars"),
+    "panel_week_summary": ("За 7 дней: {dicts} дикт. · {chars} симв.", "Last 7 days: {dicts} dict. · {chars} chars"),
+
+    "settings_tab_statistics": ("Статистика", "Statistics"),
+    "settings_remove_final_period": ("Убирать финальную точку", "Remove final period"),
+    "settings_remove_final_period_hint": (
+        "Удалять точку в конце продиктованного текста (многоточия сохраняются).",
+        "Drop the trailing period from dictated text (ellipses are preserved).",
+    ),
+    "settings_auto_learn_vocabulary": (
+        "Автоматически учить словарь по правкам",
+        "Automatically learn vocabulary from edits",
+    ),
+    "settings_auto_learn_vocabulary_hint": (
+        "Запоминать регулярные исправления, которые вы вносите сразу после вставки.",
+        "Remember recurring corrections you make right after dictation is inserted.",
+    ),
+
+    "stats_period_today": ("Сегодня", "Today"),
+    "stats_period_7d": ("7 дней", "7 days"),
+    "stats_period_30d": ("30 дней", "30 days"),
+    "stats_period_all": ("Всё время", "All time"),
+    "stats_metric_dictations": ("Диктовки", "Dictations"),
+    "stats_metric_volume": ("Надиктовано", "Volume"),
+    "stats_metric_speech": ("Наговорено", "Speech time"),
+    "stats_metric_saved": ("Экономия", "Time saved"),
+    "stats_chart_chars": ("Символы", "Chars"),
+    "stats_chart_dicts": ("Диктовки", "Dictations"),
+    "stats_activity_summary": ("Активность и сводка", "Activity & Summary"),
+    "stats_less": ("Меньше", "Less"),
+    "stats_more": ("Больше", "More"),
+    "stats_active_days": ("Активных дней", "Active days"),
+    "stats_streak": ("Серия дней", "Streak"),
+    "stats_peak_day": ("Рекордный день", "Peak day"),
+    "stats_avg_dictation": ("Средн. диктовка", "Avg dictation"),
+    "stats_this_pc": ("Этот ПК", "This PC"),
+    "stats_other_devices": ("Другие ({count})", "Others ({count})"),
+
+    "cleanup_group_delete": ("Точно на удаление ({count})", "Definite deletions ({count})"),
+    "cleanup_group_fix": ("Исправления ({count})", "Fixes ({count})"),
+    "cleanup_group_review": ("На проверку — ручные записи ({count})", "Review — manual entries ({count})"),
+    "cleanup_select_all": ("Выбрать всё", "Select All"),
+    "cleanup_deselect_all": ("Снять выбор", "Deselect All"),
+    "cleanup_apply_selected": ("Применить выбранное ({count})", "Apply Selected ({count})"),
+
+    "hw_card_title": ("Оборудование и совместимость", "Hardware & Compatibility"),
+    "hw_cpu_ram": ("Процессор и память", "CPU & Memory"),
+    "hw_gpu_vulkan": ("Ускорение LLM на GPU (Vulkan)", "LLM GPU Acceleration (Vulkan)"),
+    "hw_local_ai": ("Локальные AI-модели и пунктуация", "Local AI Models & Punctuation"),
+    "hw_npu": ("Нейропроцессор (Intel NPU)", "Neural Processor (Intel NPU)"),
+    "hw_status_available": ("Доступно", "Available"),
+    "hw_status_cpu_only": ("Только CPU", "CPU only"),
+    "hw_status_compatible": ("Совместимо", "Compatible"),
+    "hw_status_limited": ("Ограничено", "Limited"),
+    "hw_banner_gpu_unavailable": (
+        "GPU-ускорение Vulkan недоступно на этом ПК",
+        "Vulkan GPU acceleration is unavailable on this PC",
+    ),
+    "hw_banner_model_unsupported": (
+        "Оборудование не соответствует требованиям модели",
+        "Hardware does not meet model requirements",
+    ),
+    "hw_banner_cpu_warning": (
+        "Работа без ускорения GPU (на CPU)",
+        "Running without GPU acceleration (CPU)",
+    ),
+    "hw_banner_punct_unavailable": (
+        "Недостаточно ресурсов для локальной пунктуации",
+        "Insufficient hardware for local punctuation",
+    ),
 }
 
 

@@ -540,6 +540,7 @@ def process_transcript(
     filler_words: Sequence[str] | None = None,
     digits: bool = False,
     style: TextStyle = TextStyle.FORMAL,
+    remove_final_period: bool = False,
 ) -> tuple[str, int, int]:
     """Returns (text, corrections applied, fillers removed)."""
     text = repair_model_text(raw.strip(), language=language)
@@ -555,6 +556,10 @@ def process_transcript(
     # Style last: it works on the finished sentence, so filler removal
     # cannot re-expose a full stop that this pass already took off.
     text = apply_text_style(text.strip(), style)
+    if remove_final_period:
+        stripped = text.rstrip()
+        if stripped.endswith(".") and not stripped.endswith(".."):
+            text = stripped[:-1].rstrip()
     return text.strip(), applied, removed
 
 
