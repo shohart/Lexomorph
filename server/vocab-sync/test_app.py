@@ -99,7 +99,16 @@ def test_events_log_every_accepted_change():
 def test_index_page():
     r = client.get("/")
     assert r.status_code == 200
-    assert "SuperDictate" in r.text
+    assert "Lexomorph" in r.text
+
+
+def test_healthz_reports_capabilities():
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    for cap in ("entries", "hotwords", "styles", "prompts", "system_prompts", "fillers", "prefs", "usage"):
+        assert cap in body["capabilities"]
 
 
 def _hw(phrase, stamp, enabled=True, deleted=False):
@@ -477,3 +486,154 @@ def test_migration_adds_prompt_table_to_existing_db():
     h = bearer(auth("mig2@example.com").json()["token"])
     assert len(_push(h, prompts=[_pr("polish", "2026-11-10T10:00:00Z")])["prompts"]) == 1
     service.init_db()  # idempotent
+
+
+
+# --- system_prompts, fillers, prefs ------------------------------------------
+
+def _sp(key, stamp, prompt="Исправляй опечатки.\n", deleted=False):
+    return {"key": key, "prompt": prompt, "deleted": deleted, "updated_at": stamp}
+
+
+def _fl(word, stamp, enabled=True, deleted=False):
+    return {"word": word, "enabled": enabled, "deleted": deleted, "updated_at": stamp}
+
+
+def _pf(key, value, stamp, deleted=False):
+    return {"key": key, "value": value, "deleted": deleted, "updated_at": stamp}
+
+
+def test_system_prompts_roundtrip_lww_tombstone_and_validation():
+    h = bearer(auth("sp1@example.com").json()["token"])
+    text = "  Rule 1\n\tRule 2  \n"
+    body = _push(h, system_prompts=[_sp("correction", "2026-11-22T10:00:00Z", text)])
+    assert body["revision"] == 1
+    assert body["system_prompts"] == [
+        {"key": "correction", "prompt": text, "deleted": False,
+         "updated_at": "2026-11-22T10:00:00Z", "revision": 1}]
+    # Tie and older lose.
+    for stamp in ("2026-11-22T10:00:00Z", "2026-11-22T09:00:00Z"):
+        body = _push(h, since=1, system_prompts=[_sp("correction", stamp, "other")])
+        assert body["revision"] == 1 and body["system_prompts"] == []
+    # Newer wins.
+    body = _push(h, since=1, system_prompts=[_sp("correction", "2026-11-22T11:00:00Z", "v2")])
+    assert body["revision"] == 2 and body["system_prompts"][0]["prompt"] == "v2"
+    # Tombstone resets.
+    body = _push(h, since=2, system_prompts=[_sp("correction", "2026-11-22T12:00:00Z", "", deleted=True)])
+    assert body["revision"] == 3 and body["system_prompts"][0]["deleted"] is True
+    # Stale update cannot resurrect.
+    body = _push(h, since=3, system_prompts=[_sp("correction", "2026-11-22T11:30:00Z", "stale")])
+    assert body["revision"] == 3 and body["system_prompts"] == []
+    # Validation rejects unknown keys, empty non-deleted, NUL, and > 16000 chars.
+    bad = [
+        _sp("polish", "2026-11-22T13:00:00Z", "x"),
+        _sp("", "2026-11-22T13:00:00Z", "x"),
+        _sp("correction", "2026-11-22T13:00:00Z", ""),
+        _sp("correction", "2026-11-22T13:00:00Z", "a\x00b"),
+        _sp("correction", "2026-11-22T13:00:00Z", "x" * 16001),
+    ]
+    for item in bad:
+        assert client.post("/v1/vocabulary", headers=h, json={"system_prompts": [item]}).status_code == 422
+
+
+def test_fillers_roundtrip_lww_tombstone_and_cap(monkeypatch):
+    h = bearer(auth("fl1@example.com").json()["token"])
+    body = _push(h, fillers=[_fl("короче", "2026-11-22T10:00:00Z", enabled=True)])
+    assert body["revision"] == 1
+    assert [(f["word"], f["enabled"], f["deleted"], f["revision"]) for f in body["fillers"]] == [
+        ("короче", True, False, 1)]
+    # Case/whitespace variant maps to the same normalized key.
+    body = _push(h, since=1, fillers=[_fl("  КОРОЧЕ  ", "2026-11-22T11:00:00Z", enabled=False)])
+    assert body["revision"] == 2 and body["fillers"][0]["enabled"] is False
+    # Older and equal stamps lose.
+    for stamp in ("2026-11-22T10:30:00Z", "2026-11-22T11:00:00Z"):
+        body = _push(h, since=2, fillers=[_fl("короче", stamp, enabled=True)])
+        assert body["revision"] == 2 and body["fillers"] == []
+    # Tombstone + resurrection.
+    body = _push(h, since=2, fillers=[_fl("короче", "2026-11-22T12:00:00Z", deleted=True)])
+    assert body["revision"] == 3 and body["fillers"][0]["deleted"] is True
+    body = _push(h, since=3, fillers=[_fl("короче", "2026-11-22T13:00:00Z", enabled=True)])
+    assert body["revision"] == 4 and body["fillers"][0]["deleted"] is False
+    # Validation and cap.
+    assert client.post("/v1/vocabulary", headers=h, json={"fillers": [
+        _fl("   ", "2026-11-22T14:00:00Z")]}).status_code == 422
+    monkeypatch.setattr(service, "MAX_FILLER_ENTRIES", 2)
+    h2 = bearer(auth("fl2@example.com").json()["token"])
+    body = _push(h2, fillers=[
+        _fl("типа", "2026-11-22T10:00:00Z"),
+        _fl("ну", "2026-11-22T10:00:00Z"),
+        _fl("блин", "2026-11-22T10:00:00Z"),
+    ])
+    assert sorted(f["word"] for f in body["fillers"]) == ["ну", "типа"]
+    body = _push(h2, since=2, fillers=[
+        _fl("ну", "2026-11-22T11:00:00Z", deleted=True),
+        _fl("блин", "2026-11-22T11:00:00Z"),
+    ])
+    assert sorted((f["word"], f["deleted"]) for f in body["fillers"]) == [("блин", False), ("ну", True)]
+
+
+def test_prefs_roundtrip_lww_validation_and_isolation():
+    h1 = bearer(auth("pf1@example.com").json()["token"])
+    h2 = bearer(auth("pf2@example.com").json()["token"])
+    body = _push(h1, prefs=[
+        _pf("remove_filler_words", "true", "2026-11-22T10:00:00Z"),
+        _pf("normalize_numbers", "false", "2026-11-22T10:00:00Z"),
+        _pf("remove_final_period", "true", "2026-11-22T10:00:00Z"),
+        _pf("paste_suffix", "newline", "2026-11-22T10:00:00Z"),
+        _pf("dictation_language", "ru", "2026-11-22T10:00:00Z"),
+        _pf("auto_learn_vocabulary", "true", "2026-11-22T10:00:00Z"),
+        _pf("asr_hotwords_enabled", "true", "2026-11-22T10:00:00Z"),
+        _pf("asr_hotwords_strength", "strong", "2026-11-22T10:00:00Z"),
+        _pf("interface_language", "ru", "2026-11-22T10:00:00Z"),
+    ])
+    assert body["revision"] == 9 and len(body["prefs"]) == 9
+    assert client.get("/v1/vocabulary", headers=h2).json()["prefs"] == []
+    # Independent LWW per key.
+    body = _push(h1, since=9, prefs=[
+        _pf("paste_suffix", "none", "2026-11-22T09:00:00Z"),
+        _pf("paste_suffix", "space", "2026-11-22T11:00:00Z"),
+    ])
+    assert body["revision"] == 10 and body["prefs"] == [
+        {"key": "paste_suffix", "value": "space", "deleted": False,
+         "updated_at": "2026-11-22T11:00:00Z", "revision": 10}]
+    # Tombstone resets.
+    body = _push(h1, since=10, prefs=[_pf("paste_suffix", "", "2026-11-22T12:00:00Z", deleted=True)])
+    assert body["revision"] == 11 and body["prefs"][0]["deleted"] is True and body["prefs"][0]["value"] == ""
+    # Validation rejects unknown keys and bad values.
+    bad = [
+        _pf("unknown_key", "true", "2026-11-22T13:00:00Z"),
+        _pf("remove_filler_words", "yes", "2026-11-22T13:00:00Z"),
+        _pf("paste_suffix", "tab", "2026-11-22T13:00:00Z"),
+        _pf("asr_hotwords_strength", "mega", "2026-11-22T13:00:00Z"),
+        _pf("dictation_language", "Russian", "2026-11-22T13:00:00Z"),
+        _pf("interface_language", "fr", "2026-11-22T13:00:00Z"),
+    ]
+    for item in bad:
+        assert client.post("/v1/vocabulary", headers=h1, json={"prefs": [item]}).status_code == 422, item
+
+
+def test_new_collections_skip_events_and_migrate_cleanly():
+    h = bearer(auth("newcol@example.com").json()["token"])
+    body = _push(
+        h,
+        system_prompts=[_sp("correction", "2026-11-22T10:00:00Z", "СекретныйКорректор")],
+        fillers=[_fl("СекретныйПаразит", "2026-11-22T10:00:00Z")],
+        prefs=[_pf("remove_final_period", "true", "2026-11-22T10:00:00Z")],
+    )
+    assert body["revision"] == 3
+    with service.db() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM events WHERE account_id = (SELECT id FROM accounts WHERE email = 'newcol@example.com')"
+        ).fetchone()[0] == 0
+    # Drop new tables and verify init_db() recreates them idempotently.
+    with service.db() as conn:
+        conn.execute("DROP TABLE system_prompt_entries")
+        conn.execute("DROP TABLE filler_entries")
+        conn.execute("DROP TABLE pref_entries")
+    service.init_db()
+    service.init_db()
+    h2 = bearer(auth("newcol2@example.com").json()["token"])
+    body = _push(h2, system_prompts=[_sp("correction", "2026-11-22T10:00:00Z", "ok")],
+                 fillers=[_fl("блин", "2026-11-22T10:00:00Z")],
+                 prefs=[_pf("normalize_numbers", "true", "2026-11-22T10:00:00Z")])
+    assert len(body["system_prompts"]) == 1 and len(body["fillers"]) == 1 and len(body["prefs"]) == 1

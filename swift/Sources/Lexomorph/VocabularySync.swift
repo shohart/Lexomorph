@@ -182,6 +182,65 @@ struct VocabularySyncPromptEntry: Codable, Equatable, Sendable {
     }
 }
 
+/// A non-rewrite system prompt override on the wire (`system_prompts`
+/// collection, e.g. `correction`). Separate from `prompts` so un-upgraded
+/// servers ignore it cleanly instead of returning HTTP 422.
+struct VocabularySyncSystemPromptEntry: Codable, Equatable, Sendable {
+    let key: String
+    let prompt: String
+    let deleted: Bool
+    let updatedAt: String
+    let revision: Int?
+
+    init(key: String, prompt: String, deleted: Bool, updatedAt: String, revision: Int? = nil) {
+        self.key = key
+        self.prompt = prompt
+        self.deleted = deleted
+        self.updatedAt = updatedAt
+        self.revision = revision
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case key, prompt, deleted, revision
+        case updatedAt = "updated_at"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(key, forKey: .key)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encode(deleted, forKey: .deleted)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(revision, forKey: .revision)
+    }
+}
+
+/// A filler word state (preset toggle or custom word) on the wire (`fillers`).
+struct VocabularySyncFillerEntry: Codable, Equatable, Sendable {
+    let word: String
+    let enabled: Bool
+    let deleted: Bool
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case word, enabled, deleted
+        case updatedAt = "updated_at"
+    }
+}
+
+/// A cross-platform preference key/value on the wire (`prefs`).
+struct VocabularySyncPrefEntry: Codable, Equatable, Sendable {
+    let key: String
+    let value: String
+    let deleted: Bool
+    let updatedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case key, value, deleted
+        case updatedAt = "updated_at"
+    }
+}
+
 /// One (day, device) usage row on the wire (`usage` collection; spec §3.2).
 /// `words` and `asr_seconds` are optional: the other platform may not count them.
 struct VocabularySyncUsageEntry: Codable, Equatable, Sendable {
@@ -210,6 +269,9 @@ struct VocabularySyncResponse: Codable, Sendable {
     let styles: [VocabularySyncStyleEntry]
     let usage: [VocabularySyncUsageEntry]
     let prompts: [VocabularySyncPromptEntry]
+    let systemPrompts: [VocabularySyncSystemPromptEntry]
+    let fillers: [VocabularySyncFillerEntry]
+    let prefs: [VocabularySyncPrefEntry]
     /// False when the answer has no `hotwords` field: that server dropped
     /// the hotwords it was sent, so they must be pushed again later.
     let serverStoresHotwords: Bool
@@ -218,17 +280,30 @@ struct VocabularySyncResponse: Codable, Sendable {
     let serverStoresUsage: Bool
     /// Same for `prompts` (servers before the built-in prompt sync).
     let serverStoresPrompts: Bool
+    /// Same for `system_prompts`, `fillers`, and `prefs`.
+    let serverStoresSystemPrompts: Bool
+    let serverStoresFillers: Bool
+    let serverStoresPrefs: Bool
 
     init(revision: Int, entries: [VocabularySyncWireEntry], hotwords: [VocabularySyncHotwordEntry] = [],
          styles: [VocabularySyncStyleEntry] = [], usage: [VocabularySyncUsageEntry] = [],
-         prompts: [VocabularySyncPromptEntry] = []) {
+         prompts: [VocabularySyncPromptEntry] = [],
+         systemPrompts: [VocabularySyncSystemPromptEntry] = [],
+         fillers: [VocabularySyncFillerEntry] = [],
+         prefs: [VocabularySyncPrefEntry] = []) {
         self.revision = revision
         self.entries = entries
         self.hotwords = hotwords
         self.styles = styles
         self.usage = usage
         self.prompts = prompts
+        self.systemPrompts = systemPrompts
+        self.fillers = fillers
+        self.prefs = prefs
         serverStoresPrompts = true
+        serverStoresSystemPrompts = true
+        serverStoresFillers = true
+        serverStoresPrefs = true
         serverStoresHotwords = true
         serverStoresStyles = true
         serverStoresUsage = true
@@ -250,9 +325,21 @@ struct VocabularySyncResponse: Codable, Sendable {
         let decodedPrompts = try container.decodeIfPresent([VocabularySyncPromptEntry].self, forKey: .prompts)
         prompts = decodedPrompts ?? []
         serverStoresPrompts = decodedPrompts != nil
+        let decodedSystemPrompts = try container.decodeIfPresent([VocabularySyncSystemPromptEntry].self, forKey: .systemPrompts)
+        systemPrompts = decodedSystemPrompts ?? []
+        serverStoresSystemPrompts = decodedSystemPrompts != nil
+        let decodedFillers = try container.decodeIfPresent([VocabularySyncFillerEntry].self, forKey: .fillers)
+        fillers = decodedFillers ?? []
+        serverStoresFillers = decodedFillers != nil
+        let decodedPrefs = try container.decodeIfPresent([VocabularySyncPrefEntry].self, forKey: .prefs)
+        prefs = decodedPrefs ?? []
+        serverStoresPrefs = decodedPrefs != nil
     }
 
-    enum CodingKeys: String, CodingKey { case revision, entries, hotwords, styles, usage, prompts }
+    enum CodingKeys: String, CodingKey {
+        case revision, entries, hotwords, styles, usage, prompts, fillers, prefs
+        case systemPrompts = "system_prompts"
+    }
 }
 
 struct VocabularySyncAuthResult: Codable, Sendable {
@@ -274,7 +361,15 @@ struct VocabularySyncClient: Sendable {
         let styles: [VocabularySyncStyleEntry]
         let usage: [VocabularySyncUsageEntry]
         let prompts: [VocabularySyncPromptEntry]
+        let systemPrompts: [VocabularySyncSystemPromptEntry]
+        let fillers: [VocabularySyncFillerEntry]
+        let prefs: [VocabularySyncPrefEntry]
         let client: ClientInfo
+
+        enum CodingKeys: String, CodingKey {
+            case since, changes, hotwords, styles, usage, prompts, fillers, prefs, client
+            case systemPrompts = "system_prompts"
+        }
     }
 
     private static var clientInfo: ClientInfo { ClientInfo(platform: "macos", version: currentBundleVersion()) }
@@ -360,9 +455,13 @@ struct VocabularySyncClient: Sendable {
               hotwords: [VocabularySyncHotwordEntry] = [],
               styles: [VocabularySyncStyleEntry] = [],
               usage: [VocabularySyncUsageEntry] = [],
-              prompts: [VocabularySyncPromptEntry] = []) async throws -> VocabularySyncResponse {
+              prompts: [VocabularySyncPromptEntry] = [],
+              systemPrompts: [VocabularySyncSystemPromptEntry] = [],
+              fillers: [VocabularySyncFillerEntry] = [],
+              prefs: [VocabularySyncPrefEntry] = []) async throws -> VocabularySyncResponse {
         let body = try JSONEncoder().encode(PushRequest(since: since, changes: changes, hotwords: hotwords,
                                                         styles: styles, usage: usage, prompts: prompts,
+                                                        systemPrompts: systemPrompts, fillers: fillers, prefs: prefs,
                                                         client: Self.clientInfo))
         return try decodeSync(try await send(jsonRequest("v1/vocabulary", method: "POST", token: token, body: body)))
     }
@@ -626,6 +725,44 @@ actor VocabularySyncEngine {
             newestPushed = max(newestPushed, record.updatedAt)
         }
 
+        // Non-rewrite system prompt overrides (e.g. correction) share the cursor stamp.
+        var systemPromptChanges: [VocabularySyncSystemPromptEntry] = []
+        for record in settings.systemPromptSyncChanges(since: cursorStamp) {
+            if !record.deleted {
+                guard !record.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      record.prompt.unicodeScalars.count <= Settings.maxRewritePromptLength else {
+                    if reportedOversizedPrompts.insert("sys:\(record.key)").inserted {
+                        log("vocabulary sync: system prompt \(record.key) not pushed (blank or longer than \(Settings.maxRewritePromptLength) characters)")
+                    }
+                    continue
+                }
+            }
+            systemPromptChanges.append(VocabularySyncSystemPromptEntry(
+                key: record.key, prompt: record.prompt, deleted: record.deleted, updatedAt: record.updatedAt
+            ))
+            newestPushed = max(newestPushed, record.updatedAt)
+        }
+
+        // Filler words (preset toggles & custom words) share the cursor stamp.
+        var fillerChanges: [VocabularySyncFillerEntry] = []
+        for record in settings.fillerSyncChanges(since: cursorStamp) {
+            guard let word = Self.wireField(record.word), !record.updatedAt.isEmpty else { continue }
+            fillerChanges.append(VocabularySyncFillerEntry(
+                word: word, enabled: record.enabled, deleted: record.deleted, updatedAt: record.updatedAt
+            ))
+            newestPushed = max(newestPushed, record.updatedAt)
+        }
+
+        // Cross-platform text/vocabulary preferences share the cursor stamp.
+        var prefChanges: [VocabularySyncPrefEntry] = []
+        for record in settings.prefSyncChanges(since: cursorStamp) {
+            guard !record.updatedAt.isEmpty else { continue }
+            prefChanges.append(VocabularySyncPrefEntry(
+                key: record.key, value: record.value, deleted: record.deleted, updatedAt: record.updatedAt
+            ))
+            newestPushed = max(newestPushed, record.updatedAt)
+        }
+
         // Usage: this device's rows as absolute per-day values. Only days that
         // differ from what the server last confirmed are sent; the cursor is
         // not involved (idempotent, no conflicts between devices).
@@ -637,7 +774,8 @@ actor VocabularySyncEngine {
         var summary = VocabularySyncPassSummary()
         var since = settings.vocabularySyncLastServerRevision
         if changes.isEmpty && hotwordChanges.isEmpty && styleChanges.isEmpty
-            && promptChanges.isEmpty && usageChanges.isEmpty {
+            && promptChanges.isEmpty && systemPromptChanges.isEmpty
+            && fillerChanges.isEmpty && prefChanges.isEmpty && usageChanges.isEmpty {
             let response = try await client.pull(token: token, since: since)
             summary.applied += try apply(response)
             since = response.revision
@@ -648,13 +786,20 @@ actor VocabularySyncEngine {
             var styleStart = 0
             var usageStart = 0
             var promptStart = 0
+            var systemPromptStart = 0
+            var fillerStart = 0
+            var prefStart = 0
             var promptsDropped = false
+            var systemPromptsDropped = false
+            var fillersDropped = false
+            var prefsDropped = false
             var hotwordsDropped = false
             var stylesDropped = false
             var usageDropped = false
             while start < changes.count || hotwordStart < hotwordChanges.count
                     || styleStart < styleChanges.count || usageStart < usageChanges.count
-                    || promptStart < promptChanges.count {
+                    || promptStart < promptChanges.count || systemPromptStart < systemPromptChanges.count
+                    || fillerStart < fillerChanges.count || prefStart < prefChanges.count {
                 let batch = Array(changes[start..<min(start + Self.maxChangesPerPush, changes.count)])
                 let hotwordBatch = Array(hotwordChanges[hotwordStart..<min(hotwordStart + Self.maxChangesPerPush,
                                                                            hotwordChanges.count)])
@@ -664,16 +809,26 @@ actor VocabularySyncEngine {
                                                                      usageChanges.count)])
                 let promptBatch = Array(promptChanges[promptStart..<min(promptStart + Self.maxChangesPerPush,
                                                                         promptChanges.count)])
+                let sysPromptBatch = Array(systemPromptChanges[systemPromptStart..<min(systemPromptStart + Self.maxChangesPerPush,
+                                                                                       systemPromptChanges.count)])
+                let fillerBatch = Array(fillerChanges[fillerStart..<min(fillerStart + Self.maxChangesPerPush,
+                                                                        fillerChanges.count)])
+                let prefBatch = Array(prefChanges[prefStart..<min(prefStart + Self.maxChangesPerPush,
+                                                                  prefChanges.count)])
                 let response = try await client.push(token: token, since: since, changes: batch,
                                                      hotwords: hotwordBatch, styles: styleBatch, usage: usageBatch,
-                                                     prompts: promptBatch)
+                                                     prompts: promptBatch, systemPrompts: sysPromptBatch,
+                                                     fillers: fillerBatch, prefs: prefBatch)
                 summary.applied += try apply(response)
                 summary.pushed += batch.count + hotwordBatch.count + styleBatch.count + usageBatch.count
-                    + promptBatch.count
+                    + promptBatch.count + sysPromptBatch.count + fillerBatch.count + prefBatch.count
                 if !hotwordBatch.isEmpty && !response.serverStoresHotwords { hotwordsDropped = true }
                 if !styleBatch.isEmpty && !response.serverStoresStyles { stylesDropped = true }
                 if !usageBatch.isEmpty && !response.serverStoresUsage { usageDropped = true }
                 if !promptBatch.isEmpty && !response.serverStoresPrompts { promptsDropped = true }
+                if !sysPromptBatch.isEmpty && !response.serverStoresSystemPrompts { systemPromptsDropped = true }
+                if !fillerBatch.isEmpty && !response.serverStoresFillers { fillersDropped = true }
+                if !prefBatch.isEmpty && !response.serverStoresPrefs { prefsDropped = true }
                 since = response.revision
                 settings.vocabularySyncLastServerRevision = since
                 start += batch.count
@@ -681,14 +836,18 @@ actor VocabularySyncEngine {
                 styleStart += styleBatch.count
                 usageStart += usageBatch.count
                 promptStart += promptBatch.count
+                systemPromptStart += sysPromptBatch.count
+                fillerStart += fillerBatch.count
+                prefStart += prefBatch.count
             }
             // Never ahead of this device's own clock: a remote stamp from a
             // device whose clock runs fast must not hide later local edits.
-            // An old server ignored the hotwords or styles: keep the cursor so
+            // An old server ignored the newer collections: keep the cursor so
             // they go out again once it is upgraded (re-pushed corrections
             // tie and change nothing there).
-            if hotwordsDropped || stylesDropped || promptsDropped {
-                log("vocabulary sync: the server does not store hotwords, styles or prompts yet; will push them again")
+            if hotwordsDropped || stylesDropped || promptsDropped
+                || systemPromptsDropped || fillersDropped || prefsDropped {
+                log("vocabulary sync: the server does not store all collections yet; will push them again")
             } else {
                 settings.vocabularySyncLastPushedLocalStamp = min(newestPushed, passStart)
             }
@@ -720,6 +879,18 @@ actor VocabularySyncEngine {
             RewritePromptRemoteEntry(style: entry.style, prompt: entry.prompt, deleted: entry.deleted,
                                      updatedAt: entry.updatedAt)
         }
+        let systemPrompts = response.systemPrompts.map { entry in
+            SystemPromptRemoteEntry(key: entry.key, prompt: entry.prompt, deleted: entry.deleted,
+                                    updatedAt: entry.updatedAt)
+        }
+        let fillers = response.fillers.map { entry in
+            FillerRemoteEntry(word: entry.word, enabled: entry.enabled, deleted: entry.deleted,
+                              updatedAt: entry.updatedAt)
+        }
+        let prefs = response.prefs.map { entry in
+            PrefRemoteEntry(key: entry.key, value: entry.value, deleted: entry.deleted,
+                            updatedAt: entry.updatedAt)
+        }
         let usage = response.usage.map { entry in
             DeviceDictationUsage(day: entry.day, device: entry.device, dictationCount: max(0, entry.dictations),
                                  characterCount: max(0, entry.characters), wordCount: max(0, entry.words ?? 0),
@@ -730,6 +901,9 @@ actor VocabularySyncEngine {
         do {
             return try store.applyRemote(entries) + store.applyRemoteHotwords(hotwords)
                 + settings.applyRemoteCustomStyles(styles) + settings.applyRemoteRewritePrompts(prompts)
+                + settings.applyRemoteSystemPrompts(systemPrompts)
+                + settings.applyRemoteFillers(fillers)
+                + settings.applyRemotePrefs(prefs)
                 + settings.applyRemoteUsage(usage)
         } catch {
             log("vocabulary sync: applying server entries failed: \(error)")
@@ -886,6 +1060,8 @@ final class VocabularySyncCoordinator {
                     VOCABULARY_CHANGED_NOTIFICATION, object: nil,
                     userInfo: ["pid": Int(ProcessInfo.processInfo.processIdentifier), "reason": "sync"],
                     deliverImmediately: true)
+                DistributedNotificationCenter.default().postNotificationName(
+                    SETTINGS_LIVE_CHANGED_NOTIFICATION, object: nil, userInfo: nil, deliverImmediately: true)
             }
             log("vocabulary sync: \(trigger) pass ok")
             return nil

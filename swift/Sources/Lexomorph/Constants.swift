@@ -55,6 +55,7 @@ let HOMEBREW_CASK_TOKEN = "shlgd/superdictate/superdictate"
 let HOMEBREW_CASK_INSTALLED_TOKEN = "parakey"
 let INSTALLED_APP_BUNDLE_PATH = "/Applications/Lexomorph.app"
 let AGENT_ARGUMENT = "--agent"
+let OPEN_SETTINGS_ARGUMENT = "--settings"
 let PRODUCTION_BUNDLE_IDENTIFIER = "com.local.lexomorph"
 // A side-by-side test bundle (scripts/build-test-app.sh, e.g.
 // com.local.lexomorph.test) gets its own LaunchAgent label, plist, state
@@ -121,6 +122,16 @@ let HOTKEY_CAPTURE_END_NOTIFICATION = Notification.Name("com.local.lexomorph.hot
 // (LLM model/stage choices apply live), so the agent re-reads its settings
 // and stops LLM hosts the new choices no longer use.
 let SETTINGS_LIVE_CHANGED_NOTIFICATION = Notification.Name("com.local.lexomorph.settings-live-changed")
+// Posted by the menu-bar agent when the user clicks "Settings…" while the
+// Control Panel process is already running, so it opens/focuses the Settings
+// window directly instead of only raising the compact Control Panel window.
+let OPEN_SETTINGS_WINDOW_NOTIFICATION = Notification.Name("com.local.lexomorph.open-settings-window")
+// Posted when the Control Panel should raise its main compact window even if
+// it was launched directly into Settings earlier.
+let OPEN_CONTROL_PANEL_NOTIFICATION = Notification.Name("com.local.lexomorph.open-control-panel")
+// Posted by the agent when correction, rewrite, or rewrite style changes via
+// the menu bar or a global hotkey, so an open Settings window stays in sync.
+let AGENT_TOGGLED_MODE_NOTIFICATION = Notification.Name("com.local.lexomorph.agent-toggled-mode")
 // Posted (distributed, between the agent and the Control Panel) after the
 // vocabulary store changed: userInfo["reason"] is "local" for an edit made
 // on this Mac (the agent schedules a sync push) or "sync" after a sync pass

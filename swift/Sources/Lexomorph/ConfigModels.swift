@@ -865,6 +865,60 @@ struct RewritePromptRemoteEntry: Equatable, Sendable {
     let updatedAt: String
 }
 
+/// A non-rewrite system prompt override (e.g. `correction`) or reset tombstone.
+struct SystemPromptSyncRecord: Equatable, Sendable {
+    let key: String
+    let prompt: String
+    let deleted: Bool
+    let updatedAt: String
+}
+
+/// A server system prompt row applied by `Settings.applyRemoteSystemPrompts`.
+struct SystemPromptRemoteEntry: Equatable, Sendable {
+    let key: String
+    let prompt: String
+    let deleted: Bool
+    let updatedAt: String
+}
+
+/// A locally deleted custom filler word kept so the deletion reaches the server.
+struct FillerWordTombstone: Codable, Equatable, Sendable {
+    let word: String
+    let deletedAt: String
+}
+
+/// A filler word state (preset toggle or custom word) or deletion tombstone.
+struct FillerSyncRecord: Equatable, Sendable {
+    let word: String
+    let enabled: Bool
+    let deleted: Bool
+    let updatedAt: String
+}
+
+/// A server filler row applied by `Settings.applyRemoteFillers`.
+struct FillerRemoteEntry: Equatable, Sendable {
+    let word: String
+    let enabled: Bool
+    let deleted: Bool
+    let updatedAt: String
+}
+
+/// A cross-platform preference key/value pair to push.
+struct PrefSyncRecord: Equatable, Sendable {
+    let key: String
+    let value: String
+    let deleted: Bool
+    let updatedAt: String
+}
+
+/// A server preference row applied by `Settings.applyRemotePrefs`.
+struct PrefRemoteEntry: Equatable, Sendable {
+    let key: String
+    let value: String
+    let deleted: Bool
+    let updatedAt: String
+}
+
 /// One (day, device) usage row of the account (modes-and-usage-sync spec
 /// §3.2), as stored for devices other than this one.
 struct DeviceDictationUsage: Codable, Equatable, Sendable {

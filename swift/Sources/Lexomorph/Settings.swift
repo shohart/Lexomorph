@@ -132,6 +132,10 @@ final class Settings: @unchecked Sendable {
     private static let keyCustomRewriteStyles = "rewrite_custom_styles_v1"
     private static let keyCustomRewriteStyleTombstones = "rewrite_custom_style_tombstones_v1"
     private static let keyRewritePromptStamps = "rewrite_system_prompt_stamps_v1"
+    private static let keySystemPromptStamps = "system_prompt_stamps_v1"
+    private static let keyFillerSyncStamps = "filler_sync_stamps_v1"
+    private static let keyFillerSyncTombstones = "filler_sync_tombstones_v1"
+    private static let keySyncedPrefStamps = "synced_pref_stamps_v1"
     private static let keyUsageDeviceID = "usage_sync_device_id_v1"
     private static let keyUsageSyncLastSent = "usage_sync_last_sent_v1"
     private static let keyRemoteDailyUsage = "remote_daily_usage_v1"
@@ -469,7 +473,11 @@ final class Settings: @unchecked Sendable {
             }
             return language
         }
-        set { defaults.set(newValue.rawValue, forKey: Self.keyInterfaceLanguage) }
+        set {
+            let previous = defaults.string(forKey: Self.keyInterfaceLanguage)
+            defaults.set(newValue.rawValue, forKey: Self.keyInterfaceLanguage)
+            if previous != newValue.rawValue { recordSyncedPrefLocalChange("interface_language") }
+        }
     }
 
     var triggerMode: TriggerMode {
@@ -497,7 +505,11 @@ final class Settings: @unchecked Sendable {
             }
             return .appendSpace
         }
-        set { defaults.set(newValue.rawValue, forKey: Self.keyPasteSuffix) }
+        set {
+            let previous = pasteSuffix
+            defaults.set(newValue.rawValue, forKey: Self.keyPasteSuffix)
+            if previous != newValue { recordSyncedPrefLocalChange("paste_suffix") }
+        }
     }
 
     var recentTranscriptLimit: RecentTranscriptLimit {
@@ -899,7 +911,11 @@ final class Settings: @unchecked Sendable {
         get {
             defaults.object(forKey: Self.keyAutoLearnVocabularyEnabled) as? Bool ?? true
         }
-        set { defaults.set(newValue, forKey: Self.keyAutoLearnVocabularyEnabled) }
+        set {
+            let previous = autoLearnVocabularyEnabled
+            defaults.set(newValue, forKey: Self.keyAutoLearnVocabularyEnabled)
+            if previous != newValue { recordSyncedPrefLocalChange("auto_learn_vocabulary") }
+        }
     }
 
     /// Bias the speech model toward vocabulary terms (spec asr-hotwords §8).
@@ -907,14 +923,22 @@ final class Settings: @unchecked Sendable {
         get {
             defaults.object(forKey: Self.keyAsrHotwordsEnabled) as? Bool ?? true
         }
-        set { defaults.set(newValue, forKey: Self.keyAsrHotwordsEnabled) }
+        set {
+            let previous = asrHotwordsEnabled
+            defaults.set(newValue, forKey: Self.keyAsrHotwordsEnabled)
+            if previous != newValue { recordSyncedPrefLocalChange("asr_hotwords_enabled") }
+        }
     }
 
     var asrHotwordsStrength: AsrHotwordsStrength {
         get {
             defaults.string(forKey: Self.keyAsrHotwordsStrength).flatMap(AsrHotwordsStrength.init(rawValue:)) ?? .normal
         }
-        set { defaults.set(newValue.rawValue, forKey: Self.keyAsrHotwordsStrength) }
+        set {
+            let previous = asrHotwordsStrength
+            defaults.set(newValue.rawValue, forKey: Self.keyAsrHotwordsStrength)
+            if previous != newValue { recordSyncedPrefLocalChange("asr_hotwords_strength") }
+        }
     }
 
     /// The list and weight for the next dictation: the store read is a
@@ -1039,7 +1063,11 @@ final class Settings: @unchecked Sendable {
             }
             return .auto
         }
-        set { defaults.set(newValue.rawValue, forKey: Self.keyDictationLanguage) }
+        set {
+            let previous = dictationLanguage
+            defaults.set(newValue.rawValue, forKey: Self.keyDictationLanguage)
+            if previous != newValue { recordSyncedPrefLocalChange("dictation_language") }
+        }
     }
 
     var speechModelProfile: SpeechModelProfile {
@@ -1069,12 +1097,20 @@ final class Settings: @unchecked Sendable {
 
     var removeFinalPeriod: Bool {
         get { defaults.bool(forKey: Self.keyRemoveFinalPeriod) }
-        set { defaults.set(newValue, forKey: Self.keyRemoveFinalPeriod) }
+        set {
+            let previous = removeFinalPeriod
+            defaults.set(newValue, forKey: Self.keyRemoveFinalPeriod)
+            if previous != newValue { recordSyncedPrefLocalChange("remove_final_period") }
+        }
     }
 
     var removeFillerWords: Bool {
         get { defaults.bool(forKey: Self.keyRemoveFillerWords) }
-        set { defaults.set(newValue, forKey: Self.keyRemoveFillerWords) }
+        set {
+            let previous = removeFillerWords
+            defaults.set(newValue, forKey: Self.keyRemoveFillerWords)
+            if previous != newValue { recordSyncedPrefLocalChange("remove_filler_words") }
+        }
     }
 
     var enabledFillerPresetKeys: Set<String> {
@@ -1084,12 +1120,51 @@ final class Settings: @unchecked Sendable {
             }
             return Set(stored)
         }
-        set { defaults.set(Array(newValue), forKey: Self.keyEnabledFillerPresetKeys) }
+        set {
+            let previous = enabledFillerPresetKeys
+            defaults.set(Array(newValue), forKey: Self.keyEnabledFillerPresetKeys)
+            let toggled = previous.symmetricDifference(newValue)
+            guard !toggled.isEmpty else { return }
+            let now = VocabularyStore.timestamp()
+            var stamps = fillerSyncStamps
+            var tombstones = fillerSyncTombstones
+            for key in toggled {
+                if let preset = FillerWordRemover.presets.first(where: { $0.key == key }) {
+                    let norm = Self.normalizedFillerKey(preset.displayText)
+                    stamps[norm] = now
+                    tombstones.removeAll { Self.normalizedFillerKey($0.word) == norm }
+                }
+            }
+            fillerSyncStamps = stamps
+            fillerSyncTombstones = tombstones
+            onCustomStylesLocalChange?()
+        }
     }
 
     var customFillerWords: [String] {
         get { (defaults.array(forKey: Self.keyCustomFillerWords) as? [String]) ?? [] }
-        set { defaults.set(newValue, forKey: Self.keyCustomFillerWords) }
+        set {
+            let previous = customFillerWords
+            defaults.set(newValue, forKey: Self.keyCustomFillerWords)
+            let oldByKey = Dictionary(previous.map { (Self.normalizedFillerKey($0), $0) }, uniquingKeysWith: { first, _ in first })
+            let newByKey = Dictionary(newValue.map { (Self.normalizedFillerKey($0), $0) }, uniquingKeysWith: { first, _ in first })
+            guard Set(oldByKey.keys) != Set(newByKey.keys) else { return }
+            let now = VocabularyStore.timestamp()
+            var stamps = fillerSyncStamps
+            var tombstones = fillerSyncTombstones
+            for (norm, _) in newByKey where oldByKey[norm] == nil {
+                stamps[norm] = now
+                tombstones.removeAll { Self.normalizedFillerKey($0.word) == norm }
+            }
+            for (norm, word) in oldByKey where newByKey[norm] == nil {
+                stamps.removeValue(forKey: norm)
+                tombstones.removeAll { Self.normalizedFillerKey($0.word) == norm }
+                tombstones.append(FillerWordTombstone(word: word, deletedAt: now))
+            }
+            fillerSyncStamps = stamps
+            fillerSyncTombstones = tombstones
+            onCustomStylesLocalChange?()
+        }
     }
 
     /// Custom words the user switched off in the checklist but kept on the
@@ -1097,7 +1172,21 @@ final class Settings: @unchecked Sendable {
     /// unticked, instead of forcing delete-or-always-on).
     var disabledCustomFillerWords: Set<String> {
         get { Set((defaults.array(forKey: Self.keyDisabledCustomFillerWords) as? [String]) ?? []) }
-        set { defaults.set(Array(newValue), forKey: Self.keyDisabledCustomFillerWords) }
+        set {
+            let previous = disabledCustomFillerWords
+            defaults.set(Array(newValue), forKey: Self.keyDisabledCustomFillerWords)
+            let toggled = previous.symmetricDifference(newValue)
+            let liveKeys = Set(customFillerWords.map { Self.normalizedFillerKey($0) })
+            let affected = toggled.filter { liveKeys.contains(Self.normalizedFillerKey($0)) }
+            guard !affected.isEmpty else { return }
+            let now = VocabularyStore.timestamp()
+            var stamps = fillerSyncStamps
+            for word in affected {
+                stamps[Self.normalizedFillerKey(word)] = now
+            }
+            fillerSyncStamps = stamps
+            onCustomStylesLocalChange?()
+        }
     }
 
     /// The custom-word list the transcription pipeline should actually
@@ -1109,7 +1198,11 @@ final class Settings: @unchecked Sendable {
 
     var normalizeNumbersToDigits: Bool {
         get { defaults.bool(forKey: Self.keyNormalizeNumbersToDigits) }
-        set { defaults.set(newValue, forKey: Self.keyNormalizeNumbersToDigits) }
+        set {
+            let previous = normalizeNumbersToDigits
+            defaults.set(newValue, forKey: Self.keyNormalizeNumbersToDigits)
+            if previous != newValue { recordSyncedPrefLocalChange("normalize_numbers") }
+        }
     }
 
     // Opt-in Vulkan GPU backend for Parakeet (parakeet.cpp). Not implemented
@@ -1224,7 +1317,15 @@ final class Settings: @unchecked Sendable {
     /// == false, i.e. Loqira) — the pipeline enforces that, not the store.
     var correctionSystemPromptOverride: String {
         get { defaults.string(forKey: Self.keyCorrectionSystemPrompt) ?? "" }
-        set { defaults.set(newValue, forKey: Self.keyCorrectionSystemPrompt) }
+        set {
+            let previous = defaults.string(forKey: Self.keyCorrectionSystemPrompt) ?? ""
+            defaults.set(newValue, forKey: Self.keyCorrectionSystemPrompt)
+            guard previous != newValue else { return }
+            var stamps = systemPromptStamps
+            stamps["correction"] = VocabularyStore.timestamp()
+            systemPromptStamps = stamps
+            onCustomStylesLocalChange?()
+        }
     }
 
     /// User-edited SYSTEM prompt for ONE rewrite style. Empty string = use
@@ -1594,6 +1695,371 @@ final class Settings: @unchecked Sendable {
     }
 
     static let maxRewritePromptLength = 16000
+
+    // MARK: System Prompts Sync (`correction`)
+
+    static let syncedSystemPromptKeys: [String] = ["correction"]
+
+    private var systemPromptStamps: [String: String] {
+        get {
+            guard let data = defaults.data(forKey: Self.keySystemPromptStamps) else { return [:] }
+            return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        }
+        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.keySystemPromptStamps) }
+    }
+
+    /// Non-rewrite system prompt overrides (and reset tombstones) edited at or
+    /// after `stamp` (empty = all). Legacy unstamped non-empty overrides are
+    /// stamped once so they upload on first sync.
+    func systemPromptSyncChanges(since stamp: String) -> [SystemPromptSyncRecord] {
+        var stamps = systemPromptStamps
+        var result: [SystemPromptSyncRecord] = []
+        var stampsChanged = false
+        for key in Self.syncedSystemPromptKeys {
+            let prompt: String = (key == "correction") ? correctionSystemPromptOverride : ""
+            var at = stamps[key]
+            if at == nil {
+                guard !prompt.isEmpty else { continue }
+                at = VocabularyStore.timestamp()
+                stamps[key] = at
+                stampsChanged = true
+            }
+            guard let at, at >= stamp else { continue }
+            result.append(SystemPromptSyncRecord(key: key, prompt: prompt, deleted: prompt.isEmpty, updatedAt: at))
+        }
+        if stampsChanged { systemPromptStamps = stamps }
+        return result
+    }
+
+    @discardableResult
+    func applyRemoteSystemPrompts(_ entries: [SystemPromptRemoteEntry]) -> Int {
+        guard !entries.isEmpty else { return 0 }
+        var stamps = systemPromptStamps
+        var changed = 0
+        for entry in entries where !entry.updatedAt.isEmpty {
+            guard entry.key == "correction" else { continue }
+            let current = defaults.string(forKey: Self.keyCorrectionSystemPrompt) ?? ""
+            let localStamp = stamps[entry.key] ?? (current.isEmpty ? "" : Self.epochStamp)
+            guard entry.updatedAt >= localStamp else { continue }
+            let next: String
+            if entry.deleted {
+                next = ""
+            } else {
+                guard !entry.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      entry.prompt.unicodeScalars.count <= Self.maxRewritePromptLength else { continue }
+                next = entry.prompt
+            }
+            if next != current {
+                defaults.set(next, forKey: Self.keyCorrectionSystemPrompt)
+                changed += 1
+            }
+            stamps[entry.key] = entry.updatedAt
+        }
+        systemPromptStamps = stamps
+        return changed
+    }
+
+    // MARK: Fillers Sync (presets + custom words)
+
+    static func normalizedFillerKey(_ word: String) -> String {
+        word.precomposedStringWithCanonicalMapping
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private var fillerSyncStamps: [String: String] {
+        get {
+            guard let data = defaults.data(forKey: Self.keyFillerSyncStamps) else { return [:] }
+            return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        }
+        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.keyFillerSyncStamps) }
+    }
+
+    private var fillerSyncTombstones: [FillerWordTombstone] {
+        get {
+            guard let data = defaults.data(forKey: Self.keyFillerSyncTombstones) else { return [] }
+            return (try? JSONDecoder().decode([FillerWordTombstone].self, from: data)) ?? []
+        }
+        set {
+            let capped = Array(newValue.sorted { $0.deletedAt < $1.deletedAt }.suffix(1000))
+            defaults.set(try? JSONEncoder().encode(capped), forKey: Self.keyFillerSyncTombstones)
+        }
+    }
+
+    func fillerSyncChanges(since stamp: String) -> [FillerSyncRecord] {
+        var stamps = fillerSyncStamps
+        var stampsChanged = false
+        let enabledPresets = enabledFillerPresetKeys
+        let customWords = customFillerWords
+        let disabledCustom = disabledCustomFillerWords
+
+        // Stamp legacy custom filler words created before sync existed so they upload once.
+        for word in customWords {
+            let norm = Self.normalizedFillerKey(word)
+            guard !norm.isEmpty else { continue }
+            if stamps[norm] == nil {
+                stamps[norm] = VocabularyStore.timestamp()
+                stampsChanged = true
+            }
+        }
+        if stampsChanged { fillerSyncStamps = stamps }
+
+        let presetsByNorm = Dictionary(
+            FillerWordRemover.presets.map { (Self.normalizedFillerKey($0.displayText), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let customByNorm = Dictionary(
+            customWords.map { (Self.normalizedFillerKey($0), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        var result: [FillerSyncRecord] = []
+        for (norm, at) in stamps where at >= stamp {
+            if let preset = presetsByNorm[norm] {
+                result.append(FillerSyncRecord(
+                    word: preset.displayText,
+                    enabled: enabledPresets.contains(preset.key),
+                    deleted: false,
+                    updatedAt: at
+                ))
+            } else if let word = customByNorm[norm] {
+                result.append(FillerSyncRecord(
+                    word: word,
+                    enabled: !disabledCustom.contains(word),
+                    deleted: false,
+                    updatedAt: at
+                ))
+            }
+        }
+        for tomb in fillerSyncTombstones where tomb.deletedAt >= stamp {
+            result.append(FillerSyncRecord(word: tomb.word, enabled: false, deleted: true, updatedAt: tomb.deletedAt))
+        }
+        return result
+    }
+
+    @discardableResult
+    func applyRemoteFillers(_ entries: [FillerRemoteEntry]) -> Int {
+        guard !entries.isEmpty else { return 0 }
+        var stamps = fillerSyncStamps
+        var tombstones = fillerSyncTombstones
+        var enabledPresets = enabledFillerPresetKeys
+        var customWords = customFillerWords
+        var disabledCustom = disabledCustomFillerWords
+        var presetsChanged = false
+        var customChanged = false
+        var disabledChanged = false
+        var changed = 0
+
+        let presetsByNorm = Dictionary(
+            FillerWordRemover.presets.map { (Self.normalizedFillerKey($0.displayText), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        for entry in entries where !entry.updatedAt.isEmpty {
+            let cleaned = entry.word.precomposedStringWithCanonicalMapping
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+            let norm = Self.normalizedFillerKey(cleaned)
+            guard !norm.isEmpty else { continue }
+
+            let liveStamp = stamps[norm] ?? ""
+            let tombStamp = tombstones.first(where: { Self.normalizedFillerKey($0.word) == norm })?.deletedAt ?? ""
+            let localStamp = max(liveStamp, tombStamp)
+            guard entry.updatedAt >= localStamp else { continue }
+
+            if let preset = presetsByNorm[norm] {
+                let wantOn = !entry.deleted && entry.enabled
+                let wasOn = enabledPresets.contains(preset.key)
+                if wantOn != wasOn {
+                    if wantOn { enabledPresets.insert(preset.key) } else { enabledPresets.remove(preset.key) }
+                    presetsChanged = true
+                    changed += 1
+                }
+                stamps[norm] = entry.updatedAt
+                tombstones.removeAll { Self.normalizedFillerKey($0.word) == norm }
+            } else if entry.deleted {
+                if let idx = customWords.firstIndex(where: { Self.normalizedFillerKey($0) == norm }) {
+                    let existing = customWords.remove(at: idx)
+                    customChanged = true
+                    if disabledCustom.remove(existing) != nil { disabledChanged = true }
+                    changed += 1
+                }
+                stamps.removeValue(forKey: norm)
+                tombstones.removeAll { Self.normalizedFillerKey($0.word) == norm }
+                tombstones.append(FillerWordTombstone(word: cleaned, deletedAt: entry.updatedAt))
+            } else {
+                let targetWord: String
+                if let existing = customWords.first(where: { Self.normalizedFillerKey($0) == norm }) {
+                    targetWord = existing
+                } else {
+                    targetWord = cleaned
+                    customWords.append(cleaned)
+                    customChanged = true
+                    changed += 1
+                }
+                let wasDisabled = disabledCustom.contains(targetWord)
+                let wantDisabled = !entry.enabled
+                if wasDisabled != wantDisabled {
+                    if wantDisabled { disabledCustom.insert(targetWord) } else { disabledCustom.remove(targetWord) }
+                    disabledChanged = true
+                    changed += 1
+                }
+                stamps[norm] = entry.updatedAt
+                tombstones.removeAll { Self.normalizedFillerKey($0.word) == norm }
+            }
+        }
+
+        if presetsChanged { defaults.set(Array(enabledPresets), forKey: Self.keyEnabledFillerPresetKeys) }
+        if customChanged { defaults.set(customWords, forKey: Self.keyCustomFillerWords) }
+        if disabledChanged { defaults.set(Array(disabledCustom), forKey: Self.keyDisabledCustomFillerWords) }
+        fillerSyncStamps = stamps
+        fillerSyncTombstones = tombstones
+        return changed
+    }
+
+    // MARK: Cross-Platform Preferences Sync
+
+    private var syncedPrefStamps: [String: String] {
+        get {
+            guard let data = defaults.data(forKey: Self.keySyncedPrefStamps) else { return [:] }
+            return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+        }
+        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: Self.keySyncedPrefStamps) }
+    }
+
+    private func recordSyncedPrefLocalChange(_ key: String) {
+        var stamps = syncedPrefStamps
+        stamps[key] = VocabularyStore.timestamp()
+        syncedPrefStamps = stamps
+        onCustomStylesLocalChange?()
+    }
+
+    private func currentSyncedPrefValue(for key: String) -> String? {
+        switch key {
+        case "remove_filler_words": return removeFillerWords ? "true" : "false"
+        case "normalize_numbers": return normalizeNumbersToDigits ? "true" : "false"
+        case "remove_final_period": return removeFinalPeriod ? "true" : "false"
+        case "paste_suffix": return pasteSuffix.rawValue
+        case "dictation_language": return dictationLanguage.rawValue
+        case "auto_learn_vocabulary": return autoLearnVocabularyEnabled ? "true" : "false"
+        case "asr_hotwords_enabled": return asrHotwordsEnabled ? "true" : "false"
+        case "asr_hotwords_strength": return asrHotwordsStrength.rawValue
+        case "interface_language": return defaults.string(forKey: Self.keyInterfaceLanguage) ?? interfaceLanguage.rawValue
+        default: return nil
+        }
+    }
+
+    /// Only preferences explicitly touched locally (stamped) are pushed, so a
+    /// freshly installed device signing into an existing account never clobbers
+    /// saved server preferences with factory defaults.
+    func prefSyncChanges(since stamp: String) -> [PrefSyncRecord] {
+        var result: [PrefSyncRecord] = []
+        for (key, at) in syncedPrefStamps where at >= stamp {
+            guard let value = currentSyncedPrefValue(for: key) else { continue }
+            result.append(PrefSyncRecord(key: key, value: value, deleted: false, updatedAt: at))
+        }
+        return result
+    }
+
+    @discardableResult
+    func applyRemotePrefs(_ entries: [PrefRemoteEntry]) -> Int {
+        guard !entries.isEmpty else { return 0 }
+        var stamps = syncedPrefStamps
+        var changed = 0
+        for entry in entries where !entry.updatedAt.isEmpty {
+            let localStamp = stamps[entry.key] ?? ""
+            guard entry.updatedAt >= localStamp else { continue }
+
+            func parseBool(_ s: String) -> Bool? {
+                if s == "true" { return true }
+                if s == "false" { return false }
+                return nil
+            }
+
+            switch entry.key {
+            case "remove_filler_words":
+                if entry.deleted {
+                    if defaults.object(forKey: Self.keyRemoveFillerWords) != nil {
+                        defaults.removeObject(forKey: Self.keyRemoveFillerWords); changed += 1
+                    }
+                } else if let b = parseBool(entry.value) {
+                    if removeFillerWords != b { defaults.set(b, forKey: Self.keyRemoveFillerWords); changed += 1 }
+                } else { continue }
+            case "normalize_numbers":
+                if entry.deleted {
+                    if defaults.object(forKey: Self.keyNormalizeNumbersToDigits) != nil {
+                        defaults.removeObject(forKey: Self.keyNormalizeNumbersToDigits); changed += 1
+                    }
+                } else if let b = parseBool(entry.value) {
+                    if normalizeNumbersToDigits != b { defaults.set(b, forKey: Self.keyNormalizeNumbersToDigits); changed += 1 }
+                } else { continue }
+            case "remove_final_period":
+                if entry.deleted {
+                    if defaults.object(forKey: Self.keyRemoveFinalPeriod) != nil {
+                        defaults.removeObject(forKey: Self.keyRemoveFinalPeriod); changed += 1
+                    }
+                } else if let b = parseBool(entry.value) {
+                    if removeFinalPeriod != b { defaults.set(b, forKey: Self.keyRemoveFinalPeriod); changed += 1 }
+                } else { continue }
+            case "paste_suffix":
+                if entry.deleted {
+                    if defaults.object(forKey: Self.keyPasteSuffix) != nil {
+                        defaults.removeObject(forKey: Self.keyPasteSuffix); changed += 1
+                    }
+                } else if let s = PasteSuffix(rawValue: entry.value) {
+                    if pasteSuffix != s { defaults.set(s.rawValue, forKey: Self.keyPasteSuffix); changed += 1 }
+                } else { continue }
+            case "dictation_language":
+                if entry.deleted {
+                    if defaults.object(forKey: Self.keyDictationLanguage) != nil {
+                        defaults.removeObject(forKey: Self.keyDictationLanguage); changed += 1
+                    }
+                } else if let lang = DictationLanguage(rawValue: entry.value) {
+                    if dictationLanguage != lang { defaults.set(lang.rawValue, forKey: Self.keyDictationLanguage); changed += 1 }
+                } else { continue }
+            case "auto_learn_vocabulary":
+                if entry.deleted {
+                    if defaults.object(forKey: Self.keyAutoLearnVocabularyEnabled) != nil {
+                        defaults.removeObject(forKey: Self.keyAutoLearnVocabularyEnabled); changed += 1
+                    }
+                } else if let b = parseBool(entry.value) {
+                    if autoLearnVocabularyEnabled != b { defaults.set(b, forKey: Self.keyAutoLearnVocabularyEnabled); changed += 1 }
+                } else { continue }
+            case "asr_hotwords_enabled":
+                if entry.deleted {
+                    if defaults.object(forKey: Self.keyAsrHotwordsEnabled) != nil {
+                        defaults.removeObject(forKey: Self.keyAsrHotwordsEnabled); changed += 1
+                    }
+                } else if let b = parseBool(entry.value) {
+                    if asrHotwordsEnabled != b { defaults.set(b, forKey: Self.keyAsrHotwordsEnabled); changed += 1 }
+                } else { continue }
+            case "asr_hotwords_strength":
+                if entry.deleted {
+                    if defaults.object(forKey: Self.keyAsrHotwordsStrength) != nil {
+                        defaults.removeObject(forKey: Self.keyAsrHotwordsStrength); changed += 1
+                    }
+                } else if let strength = AsrHotwordsStrength(rawValue: entry.value) {
+                    if asrHotwordsStrength != strength { defaults.set(strength.rawValue, forKey: Self.keyAsrHotwordsStrength); changed += 1 }
+                } else { continue }
+            case "interface_language":
+                if entry.deleted || entry.value == "auto" {
+                    if defaults.object(forKey: Self.keyInterfaceLanguage) != nil {
+                        defaults.removeObject(forKey: Self.keyInterfaceLanguage); changed += 1
+                    }
+                } else if let lang = InterfaceLanguage(rawValue: entry.value) {
+                    if defaults.string(forKey: Self.keyInterfaceLanguage) != lang.rawValue {
+                        defaults.set(lang.rawValue, forKey: Self.keyInterfaceLanguage); changed += 1
+                    }
+                } else { continue }
+            default:
+                continue
+            }
+            stamps[entry.key] = entry.updatedAt
+        }
+        syncedPrefStamps = stamps
+        return changed
+    }
 
     /// Which bundled model the rewrite pass loads when
     /// rewriteEngineBackend is `.bundledLocal` — one of

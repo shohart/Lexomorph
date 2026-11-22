@@ -88,7 +88,8 @@ if let benchmarkResult = runASRBenchmarkDiagnostic(arguments: launchArguments) {
     app.run()
 } else {
     runLegacyMigrationAtLaunch()
-    let delegate = LexomorphControlPanelApp()
+    let openSettingsDirectly = launchArguments.contains(OPEN_SETTINGS_ARGUMENT)
+    let delegate = LexomorphControlPanelApp(openSettingsDirectly: openSettingsDirectly)
     app.delegate = delegate
     app.run()
 }

@@ -492,4 +492,219 @@ enum VocabularyHygiene {
         }
         return plan
     }
+
+    // MARK: - Extended Interactive Audit (for "Очистить словарь" UI)
+
+    enum AuditAction: Equatable, Sendable {
+        case delete
+        case rewrite(source: String, replacement: String)
+    }
+
+    enum AuditSeverity: Equatable, Sendable {
+        /// High-confidence junk or unambiguous edge-punctuation/chain/case fix.
+        /// Pre-selected by default in the cleanup UI.
+        case definite
+        /// Borderline / potentially accidental entry worth user review.
+        /// Unchecked by default so intentional terms are never deleted blindly.
+        case review
+    }
+
+    enum AuditReason: Equatable, Sendable {
+        case rejected(RejectReason)
+        case duplicate(keptSource: String)
+        case rewriteKinds([CleanupRewriteKind])
+        case identityMapping
+        case manualEdgePunctuation
+        case inverseConflict(otherSource: String)
+        case longPhrase(wordCount: Int)
+        case shortSourceRisk
+        case lowSimilarity(percent: Int)
+    }
+
+    struct AuditItem: Equatable, Sendable {
+        let record: VocabularyRecord
+        let action: AuditAction
+        let severity: AuditSeverity
+        let reason: AuditReason
+    }
+
+    struct ExtendedAudit: Equatable, Sendable {
+        let totalScanned: Int
+        let items: [AuditItem]
+
+        var isEmpty: Bool { items.isEmpty }
+        var definiteCount: Int { items.filter { $0.severity == .definite }.count }
+        var reviewCount: Int { items.filter { $0.severity == .review }.count }
+    }
+
+    /// Runs the standard hygiene `cleanupPlan` plus additional non-destructive
+    /// audit checks across both learned and manual entries (e.g. trailing
+    /// punctuation in manual rules like «LM. → LLM.», identity mappings,
+    /// inverse conflicts, overly long phrases, risky short Cyrillic triggers,
+    /// and low-similarity one-off learned entries) for interactive review.
+    static func extendedAudit(for records: [VocabularyRecord]) -> ExtendedAudit {
+        let basePlan = cleanupPlan(for: records)
+        var items: [AuditItem] = []
+        var coveredIDs = Set<Int64>()
+
+        let keptSourceByID: [Int64: String] = Dictionary(
+            basePlan.merges.map { ($0.keptId, $0.keptSource) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        for deletion in basePlan.deletions {
+            coveredIDs.insert(deletion.record.id)
+            let reason: AuditReason
+            switch deletion.reason {
+            case .rejected(let rejectReason):
+                reason = .rejected(rejectReason)
+            case .duplicate(let keptId):
+                let keptSource = keptSourceByID[keptId]
+                    ?? records.first(where: { $0.id == keptId })?.source
+                    ?? deletion.record.source
+                reason = .duplicate(keptSource: keptSource)
+            }
+            items.append(AuditItem(record: deletion.record, action: .delete, severity: .definite, reason: reason))
+        }
+
+        for rewrite in basePlan.rewrites {
+            coveredIDs.insert(rewrite.record.id)
+            items.append(AuditItem(
+                record: rewrite.record,
+                action: .rewrite(source: rewrite.source, replacement: rewrite.replacement),
+                severity: .definite,
+                reason: .rewriteKinds(rewrite.kinds)
+            ))
+        }
+
+        let existingKeys = Set(records.map { key($0.source) })
+
+        // Additional audit checks over entries not already covered by basePlan.
+        for record in records where !coveredIDs.contains(record.id) {
+            let trimmedSource = trimEdges(record.source)
+            let trimmedReplacement = trimEdges(record.replacement)
+
+            // 1. Empty / no-letter junk even on manual entries.
+            if trimmedSource.isEmpty || isJunkReplacement(trimmedReplacement) {
+                coveredIDs.insert(record.id)
+                items.append(AuditItem(record: record, action: .delete, severity: .definite, reason: .rejected(.noLetters)))
+                continue
+            }
+
+            // 2. Identity mapping (source == replacement literally, or same text without case/term benefit).
+            if trimmedSource == trimmedReplacement {
+                coveredIDs.insert(record.id)
+                items.append(AuditItem(record: record, action: .delete, severity: .definite, reason: .identityMapping))
+                continue
+            }
+
+            // 3. Trailing/leading punctuation baked into a manual rule (e.g. «LM.» → «LLM.»).
+            if record.origin == .manual,
+               (trimmedSource != record.source || trimmedReplacement != record.replacement) {
+                let targetKey = key(trimmedSource)
+                let collidesWithAnother = records.contains { $0.id != record.id && key($0.source) == targetKey }
+                coveredIDs.insert(record.id)
+                if collidesWithAnother {
+                    let kept = records.first(where: { $0.id != record.id && key($0.source) == targetKey })?.source ?? trimmedSource
+                    items.append(AuditItem(record: record, action: .delete, severity: .definite, reason: .duplicate(keptSource: kept)))
+                } else {
+                    items.append(AuditItem(
+                        record: record,
+                        action: .rewrite(source: trimmedSource, replacement: trimmedReplacement),
+                        severity: .definite,
+                        reason: .manualEdgePunctuation
+                    ))
+                }
+                continue
+            }
+
+            // 4. Inverse conflict: both A → B and B → A exist in the dictionary.
+            let srcKey = key(trimmedSource)
+            let repKey = key(trimmedReplacement)
+            if existingKeys.contains(repKey),
+               let inverse = records.first(where: { $0.id != record.id && key($0.source) == repKey && key($0.replacement) == srcKey }) {
+                coveredIDs.insert(record.id)
+                items.append(AuditItem(
+                    record: record,
+                    action: .delete,
+                    severity: .review,
+                    reason: .inverseConflict(otherSource: inverse.source)
+                ))
+                continue
+            }
+
+            // Review-only heuristics for learned entries.
+            guard record.origin == .learned else { continue }
+
+            // 5. Long phrase (4+ words) — often an accidental sentence correction.
+            let sourceWords = trimmedSource.split(whereSeparator: { $0.isWhitespace }).count
+            let replacementWords = trimmedReplacement.split(whereSeparator: { $0.isWhitespace }).count
+            let maxWords = max(sourceWords, replacementWords)
+            if maxWords >= 4 {
+                coveredIDs.insert(record.id)
+                items.append(AuditItem(
+                    record: record,
+                    action: .delete,
+                    severity: .review,
+                    reason: .longPhrase(wordCount: maxWords)
+                ))
+                continue
+            }
+
+            // 6. Very short Cyrillic trigger (<= 3 chars) — high risk of accidental matches in normal speech.
+            if isSingleCyrillicWord(trimmedSource), trimmedSource.count <= 3 {
+                coveredIDs.insert(record.id)
+                items.append(AuditItem(
+                    record: record,
+                    action: .delete,
+                    severity: .review,
+                    reason: .shortSourceRisk
+                ))
+                continue
+            }
+
+            // 7. Borderline phonetic similarity (0.30 ..< 0.48) — likely a one-off misrecognition or partial edit.
+            if !isExemptAcronym(trimmedReplacement) {
+                let sim = similarity(transliterated(trimmedSource), transliterated(trimmedReplacement))
+                if sim < 0.48 {
+                    coveredIDs.insert(record.id)
+                    items.append(AuditItem(
+                        record: record,
+                        action: .delete,
+                        severity: .review,
+                        reason: .lowSimilarity(percent: Int(round(sim * 100)))
+                    ))
+                }
+            }
+        }
+
+        return ExtendedAudit(totalScanned: records.count, items: items)
+    }
+
+    /// Converts the user's selected audit items into a `CleanupPlan` that
+    /// `VocabularyStore.applyCleanup(_:)` executes atomically with tombstones.
+    static func cleanupPlan(from selectedItems: [AuditItem]) -> CleanupPlan {
+        var plan = CleanupPlan()
+        for item in selectedItems {
+            switch item.action {
+            case .delete:
+                let reason: CleanupDeletionReason
+                switch item.reason {
+                case .rejected(let r): reason = .rejected(r)
+                case .duplicate: reason = .duplicate(keptId: -1)
+                default: reason = .rejected(.rewrite)
+                }
+                plan.deletions.append(CleanupDeletion(record: item.record, reason: reason))
+            case .rewrite(let source, let replacement):
+                let kinds: [CleanupRewriteKind]
+                if case .rewriteKinds(let k) = item.reason {
+                    kinds = k
+                } else {
+                    kinds = [.trimmed]
+                }
+                plan.rewrites.append(CleanupRewrite(record: item.record, source: source, replacement: replacement, kinds: kinds))
+            }
+        }
+        return plan
+    }
 }

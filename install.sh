@@ -3,11 +3,11 @@
 set -euo pipefail
 
 REPOSITORY="${LEXOMORPH_REPOSITORY:-shohart/Lexomorph}"
-RELEASE_VERSION="1.0.2"
+RELEASE_VERSION="1.0.3"
 # macOS releases are tagged mac-vX.Y.Z (Windows ones win-vX.Y.Z, same repo);
 # 0.7.0 and earlier carry the legacy vX.Y.Z tag.
-RELEASE_TAG="mac-v1.0.2"
-RELEASE_SHA256="e21ad7e58dbfcf724987ea93d4e657ce1d082f0e89938fedc026bc44fa235c73"
+RELEASE_TAG="mac-v1.0.3"
+RELEASE_SHA256="2c6c5d3317e144bcd66df895f0b1e2cd7dc40645ec1863eacd4463048516ec13"
 SOURCE_COMMIT="ff4e279c69479f5e696b6125788eb73caa0e8cf6"
 RELEASE_URL="${LEXOMORPH_RELEASE_URL:-https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/Lexomorph.zip}"
 EXPECTED_SHA256="${LEXOMORPH_RELEASE_SHA256:-$RELEASE_SHA256}"

@@ -4884,6 +4884,86 @@ enum LexomorphSelfTest {
                                                                      updatedAt: "2026-11-10T12:00:00Z"))) as? [String: Any]
             try expect(promptObject?["updated_at"] as? String, equals: "2026-11-10T12:00:00Z", "prompt uses snake_case updated_at")
             try expect(promptObject?["revision"] == nil, equals: true, "a pushed row carries no revision")
+
+            // Extended collections: system_prompts, fillers, prefs.
+            try expect(withPrompts.serverStoresSystemPrompts, equals: false, "old server without system_prompts detected")
+            try expect(withPrompts.serverStoresFillers, equals: false, "old server without fillers detected")
+            try expect(withPrompts.serverStoresPrefs, equals: false, "old server without prefs detected")
+
+            let extendedResponse = Data(#"""
+            {"revision":12,"entries":[],"hotwords":[],"styles":[],"usage":[],"prompts":[],
+             "system_prompts":[{"key":"correction","prompt":"Fix","deleted":false,"updated_at":"2026-11-22T12:00:00Z","revision":10}],
+             "fillers":[{"word":"короче","enabled":true,"deleted":false,"updated_at":"2026-11-22T12:00:01Z","revision":11}],
+             "prefs":[{"key":"remove_final_period","value":"true","deleted":false,"updated_at":"2026-11-22T12:00:02Z","revision":12}]}
+            """#.utf8)
+            let ext = try JSONDecoder().decode(VocabularySyncResponse.self, from: extendedResponse)
+            try expect(ext.serverStoresSystemPrompts && ext.serverStoresFillers && ext.serverStoresPrefs,
+                       equals: true, "extended collections detected")
+            try expect(ext.systemPrompts.first?.key, equals: "correction", "system_prompt decodes")
+            try expect(ext.fillers.first?.word, equals: "короче", "filler decodes")
+            try expect(ext.prefs.first?.value, equals: "true", "pref decodes")
+        }
+
+        // System prompts (`correction`), fillers (presets + custom), and cross-platform prefs sync.
+        do {
+            let (a, cleanA) = makeSettings()
+            let (b, cleanB) = makeSettings()
+            defer { cleanA(); cleanB() }
+            let notifiedB = LockedCounter()
+            b.onCustomStylesLocalChange = { notifiedB.increment() }
+
+            // Fresh device pushes no untouched prefs or presets.
+            try expect(b.prefSyncChanges(since: "").isEmpty, equals: true, "fresh device does not push factory default prefs")
+            try expect(b.fillerSyncChanges(since: "").isEmpty, equals: true, "fresh device does not push untouched filler presets")
+            try expect(b.systemPromptSyncChanges(since: "").isEmpty, equals: true, "fresh device does not push empty correction prompt")
+
+            // Local edits on A produce changes.
+            a.correctionSystemPromptOverride = "Правь только опечатки"
+            var presets = a.enabledFillerPresetKeys
+            presets.insert("ru_koroche")
+            a.enabledFillerPresetKeys = presets
+            a.customFillerWords = ["как говорится"]
+            a.removeFinalPeriod = true
+            a.pasteSuffix = .appendNewline
+            a.asrHotwordsStrength = .strong
+
+            let sysChanges = a.systemPromptSyncChanges(since: "")
+            let fillerChanges = a.fillerSyncChanges(since: "")
+            let prefChanges = a.prefSyncChanges(since: "")
+            try expect(sysChanges.map(\.key), equals: ["correction"], "correction prompt stamped")
+            try expect(Set(fillerChanges.map(\.word)), equals: Set(["короче", "как говорится"]), "preset toggle and custom filler stamped")
+            try expect(Set(prefChanges.map(\.key)), equals: Set(["remove_final_period", "paste_suffix", "asr_hotwords_strength"]), "changed prefs stamped")
+
+            // Apply on B without triggering local-change loop.
+            try expect(b.applyRemoteSystemPrompts(sysChanges.map {
+                SystemPromptRemoteEntry(key: $0.key, prompt: $0.prompt, deleted: $0.deleted, updatedAt: $0.updatedAt)
+            }), equals: 1, "correction prompt applies on B")
+            try expect(b.applyRemoteFillers(fillerChanges.map {
+                FillerRemoteEntry(word: $0.word, enabled: $0.enabled, deleted: $0.deleted, updatedAt: $0.updatedAt)
+            }), equals: 2, "fillers apply on B")
+            try expect(b.applyRemotePrefs(prefChanges.map {
+                PrefRemoteEntry(key: $0.key, value: $0.value, deleted: $0.deleted, updatedAt: $0.updatedAt)
+            }), equals: 3, "prefs apply on B")
+            try expect(notifiedB.value, equals: 0, "applying remote extended sync never triggers local-change loop")
+            try expect(b.correctionSystemPromptOverride, equals: "Правь только опечатки", "correction prompt matches")
+            try expect(b.enabledFillerPresetKeys.contains("ru_koroche"), equals: true, "preset enabled on B")
+            try expect(b.customFillerWords, equals: ["как говорится"], "custom filler added on B")
+            try expect(b.removeFinalPeriod, equals: true, "removeFinalPeriod synced")
+            try expect(b.pasteSuffix, equals: .appendNewline, "pasteSuffix synced")
+            try expect(b.asrHotwordsStrength, equals: .strong, "asrHotwordsStrength synced")
+
+            // Reset correction prompt and delete custom filler travel as tombstones.
+            a.correctionSystemPromptOverride = ""
+            a.customFillerWords = []
+            try expect(b.applyRemoteSystemPrompts([
+                SystemPromptRemoteEntry(key: "correction", prompt: "", deleted: true, updatedAt: "2099-01-01T00:00:00Z")
+            ]), equals: 1, "correction prompt tombstone resets B")
+            try expect(b.correctionSystemPromptOverride, equals: "", "correction prompt cleared on B")
+            try expect(b.applyRemoteFillers([
+                FillerRemoteEntry(word: "как говорится", enabled: false, deleted: true, updatedAt: "2099-01-01T00:00:00Z")
+            ]), equals: 1, "custom filler tombstone deletes on B")
+            try expect(b.customFillerWords.isEmpty, equals: true, "custom filler removed on B")
+            try expect(notifiedB.value, equals: 0, "tombstone application still triggers no local-change loop")
         }
     }
 
@@ -7366,6 +7446,64 @@ enum LexomorphSelfTest {
         try expect(parseLLMGPUDeviceList(""), equals: [], "no output means no GPU")
         let devices = LLMGPUProbe.shared.devices()
         print("llm-gpu-probe: \(devices.isEmpty ? "no Vulkan device (or helper not built)" : devices.joined(separator: ", "))")
+
+        // Hardware capability evaluation across representative machine profiles.
+        let noGPU16GB = HardwareProfile(
+            cpuModel: "Intel Core i5", cpuCores: 6, architecture: "x86_64",
+            physicalMemoryGB: 16, metalGPUs: [], vulkanDevices: [],
+            llmHelperAvailable: true, vulkanShadersAvailable: true, onnxHelperAvailable: true
+        )
+        try expect(noGPU16GB.vulkanGPUAvailable, equals: false, "no Vulkan devices -> GPU acceleration unavailable")
+        try expect(noGPU16GB.localLLMAvailable, equals: true, "16 GB RAM -> local LLM available on CPU")
+        try expect(noGPU16GB.modelCompatibility(for: .voiceScribe, language: .english), equals: .recommended,
+                   "small model recommended on 16 GB CPU-only Mac")
+        if case .cpuOnlyWarning = noGPU16GB.modelCompatibility(for: .yandexGPT, language: .english) {
+            // expected
+        } else {
+            throw NSError(domain: "SelfTest", code: 1, userInfo: [NSLocalizedDescriptionKey: "large model without Vulkan GPU must emit cpuOnlyWarning"])
+        }
+
+        let lowRAM4GB = HardwareProfile(
+            cpuModel: "Old Mac", cpuCores: 4, architecture: "x86_64",
+            physicalMemoryGB: 4, metalGPUs: [], vulkanDevices: [],
+            llmHelperAvailable: true, vulkanShadersAvailable: true, onnxHelperAvailable: true
+        )
+        try expect(lowRAM4GB.localLLMAvailable, equals: false, "4 GB RAM -> local LLM unavailable")
+        try expect(lowRAM4GB.punctuationStatus(language: .english).isAvailable, equals: false,
+                   "4 GB RAM -> local punctuation unavailable")
+        try expect(lowRAM4GB.modelCompatibility(for: .voiceScribe, language: .english).isSupported, equals: false,
+                   "4 GB RAM -> even small bundled LLM unsupported")
+
+        let ram8GBWithGPU = HardwareProfile(
+            cpuModel: "Apple M1", cpuCores: 8, architecture: "arm64",
+            physicalMemoryGB: 8,
+            metalGPUs: [HardwareGPUInfo(name: "Apple M1", isLowPower: false, hasUnifiedMemory: true, recommendedMemoryGB: 5.3)],
+            vulkanDevices: ["Apple M1"],
+            llmHelperAvailable: true, vulkanShadersAvailable: true, onnxHelperAvailable: true
+        )
+        try expect(ram8GBWithGPU.vulkanGPUAvailable, equals: true, "8 GB Mac with Vulkan GPU + shaders -> GPU available")
+        try expect(ram8GBWithGPU.modelCompatibility(for: .qwen35_4b, language: .english), equals: .recommended,
+                   "4B model fits in 8 GB RAM")
+        try expect(ram8GBWithGPU.modelCompatibility(for: .yandexGPT, language: .english).isSupported, equals: false,
+                   "8B/9B model requires >= 12 GB RAM")
+
+        let missingShaders = HardwareProfile(
+            cpuModel: "Mac Pro", cpuCores: 16, architecture: "x86_64",
+            physicalMemoryGB: 64,
+            metalGPUs: [HardwareGPUInfo(name: "AMD Radeon", isLowPower: false, hasUnifiedMemory: false, recommendedMemoryGB: 16)],
+            vulkanDevices: ["AMD Radeon"],
+            llmHelperAvailable: true, vulkanShadersAvailable: false, onnxHelperAvailable: true
+        )
+        try expect(missingShaders.vulkanGPUAvailable, equals: false, "missing Vulkan shaders disables GPU acceleration")
+
+        let lowVRAM = HardwareProfile(
+            cpuModel: "Old MacBook", cpuCores: 4, architecture: "x86_64",
+            physicalMemoryGB: 16,
+            metalGPUs: [HardwareGPUInfo(name: "Intel HD 4000", isLowPower: true, hasUnifiedMemory: true, recommendedMemoryGB: 1.5)],
+            vulkanDevices: ["Intel HD 4000"],
+            llmHelperAvailable: true, vulkanShadersAvailable: true, onnxHelperAvailable: true
+        )
+        try expect(lowVRAM.vulkanGPUAvailable, equals: false, "< 2 GB GPU memory disables Vulkan LLM acceleration")
     }
 
     // MARK: - Post-insertion anchor

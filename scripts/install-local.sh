@@ -65,7 +65,7 @@ if [[ -n "$installed_for_identity" && "${LEXOMORPH_ALLOW_SIGNER_CHANGE:-0}" != "
     installed_signer="$(signer_of "$installed_for_identity")"
     staged_signer="$(signer_of "$STAGED_APP")"
     [[ "$installed_signer" == "$staged_signer" ]] || {
-        printf 'Lexomorph: refusing to change the signing identity (installed: %s, new: %s). Set LEXOMORPH_ALLOW_SIGNER_CHANGE=1 only on the owner's decision.\n' \
+        printf 'Lexomorph: refusing to change the signing identity (installed: %s, new: %s). Set LEXOMORPH_ALLOW_SIGNER_CHANGE=1 only on the owner'\''s decision.\n' \
             "$installed_signer" "$staged_signer" >&2
         exit 1
     }

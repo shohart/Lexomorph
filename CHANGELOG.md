@@ -6,6 +6,24 @@ chronological order. This file covers the release history published on
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 1.0.3 (2026-11-22)
+
+### Added
+- **Unified macOS Control Panel & Settings window.** Merged the separate Control Panel and Settings windows into a single resizable macOS System Settings–style window with a persistent left sidebar, scroll/focus preservation, and automatic height fitting to the Overview page (preserving manual resizing).
+- **Overview ("Главная") first tab.** Brought quick live mode switches (Correction, Rewrite + Style with custom colors, Punctuation) and Account & Sync (with live category badges) directly to the opening screen.
+- **Redesigned Menu Bar dropdown (macOS).** Added a dedicated Text Processing section for mouse toggling of Correction and Rewrite (plus a conditional Rewrite Style submenu), SF Symbol icons, direct Settings launch, and removed overloaded cascading Settings/Support submenus.
+- **Interactive "Clean Up Vocabulary" ("Очистить словарь…").** Added an audit & checkbox review window (`VocabularyHygiene.extendedAudit`) separating definite deletions, definite fixes, and items for manual review — accessible from Text & Vocabulary and the Vocabulary Manager window.
+- **Dedicated Statistics ("Статистика") tab.** Added a full statistics view at the end of the sidebar with a period switcher (Today / 7 days / 30 days / All time), unambiguous units and time-saved estimate, a labeled 14-day bar chart (Characters / Dictations), and a side-by-side 15-week activity heatmap + Summary & Insights panel (streaks, peak day, averages, ASR speed, and synced device split).
+- **Startup hardware & compatibility check (macOS).** Probes CPU, RAM, Metal GPU memory, Vulkan LLM devices, helper binaries, and the Vulkan shader corpus asynchronously at launch. Automatically disables hardware-incompatible features (such as Vulkan GPU acceleration without a compatible GPU/VRAM or oversized local LLM models on low-RAM Macs) with clear inline banners explaining why, and adds a **Hardware & Compatibility** summary card under System.
+- **Extended account sync (server + macOS client).** Added three backward-compatible collections to `server/vocab-sync` and macOS `VocabularySync`: `system_prompts` (custom correction system prompt), `fillers` (filler preset toggles and custom words), and `prefs` (cross-platform text & vocabulary preferences). Updated the sync server info page to Lexomorph and added `capabilities` to `GET /healthz`.
+
+### Changed
+- **Instant-apply live settings (Option A).** Live toggles and preferences apply immediately without restarting the background agent; a contextual bottom bar (`Cancel` / `Save` / `Apply & Restart`) appears only when staged or restart-required settings are modified.
+
+### Fixed
+- **macOS Settings:** fixed `removeFinalPeriod` persistence and removed duplicate built-in rewrite style entries in the prompt style selector.
+- **Build tooling:** fixed an unescaped single quote in `scripts/install-local.sh`.
+
 ## 1.0.2 (2026-11-14)
 
 ### Changed

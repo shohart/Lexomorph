@@ -19,6 +19,9 @@ final class VocabularyManagerWindowController: NSObject, NSWindowDelegate, NSTab
     private var hotwordPhraseField: NSTextField?
     private var hotwords: [HotwordPhraseRecord] = []
     private var changeObserver: NSObjectProtocol?
+    private lazy var cleanupWindowController = VocabularyCleanupWindowController(store: store) { [weak self] in
+        self?.reload()
+    }
 
     init(store: VocabularyStore) {
         self.store = store
@@ -583,47 +586,7 @@ final class VocabularyManagerWindowController: NSObject, NSWindowDelegate, NSTab
     // MARK: - Cleanup (spec vocabulary-hygiene §3)
 
     @objc private func cleanupTapped() {
-        let plan = store.cleanupPlan()
-        guard !plan.isEmpty else {
-            let alert = NSAlert()
-            alert.messageText = t("Словарь в порядке", "The vocabulary is clean")
-            alert.informativeText = t("В выученных записях нечего удалять или исправлять.",
-                                      "Nothing to delete or fix in the learned entries.")
-            alert.runModal()
-            return
-        }
-
-        let alert = NSAlert()
-        alert.messageText = t("Почистить словарь?", "Clean up the vocabulary?")
-        let duplicateCount = plan.deletions.filter { if case .duplicate = $0.reason { return true } else { return false } }.count
-        alert.informativeText = t(
-            "Удалить: \(plan.deletions.count - duplicateCount), исправить: \(plan.rewrites.count), убрать дубликатов: \(duplicateCount). Ручные записи не меняются.",
-            "Delete: \(plan.deletions.count - duplicateCount), fix: \(plan.rewrites.count), remove duplicates: \(duplicateCount). Manual entries stay unchanged."
-        )
-        alert.addButton(withTitle: t("Почистить", "Clean Up"))
-        alert.addButton(withTitle: t("Отмена", "Cancel"))
-
-        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 320))
-        scrollView.hasVerticalScroller = true
-        scrollView.borderType = .bezelBorder
-        let textView = NSTextView(frame: scrollView.bounds)
-        textView.isEditable = false
-        textView.isRichText = false
-        textView.font = .systemFont(ofSize: 12)
-        textView.autoresizingMask = [.width]
-        textView.string = cleanupPreviewText(plan)
-        scrollView.documentView = textView
-        alert.accessoryView = scrollView
-
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            try store.applyCleanup(plan)
-            log("vocabulary: cleanup applied — \(plan.deletions.count) deleted, \(plan.rewrites.count) rewritten")
-        } catch {
-            presentError(t("Не удалось почистить словарь: \(error.localizedDescription)",
-                           "Could not clean up the vocabulary: \(error.localizedDescription)"))
-        }
-        reload()
+        cleanupWindowController.present(relativeTo: window)
     }
 
     private func cleanupPreviewText(_ plan: VocabularyHygiene.CleanupPlan) -> String {

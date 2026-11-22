@@ -37,7 +37,7 @@ import ServiceManagement
 import UniformTypeIdentifiers
 
 @MainActor
-final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     private struct CachedInsertionTarget {
         let target: FocusedInsertionTargetFrame
         let windowFrame: NSRect?
@@ -51,6 +51,9 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private var statusItem: NSStatusItem!
+    private var statusMenu: NSMenu!
+    private var lastKnownLLMUseGPU = false
+    private var lastKnownCheckForUpdates = false
     private var templateImage: NSImage?
     private var recordingImage: NSImage?
     private var errorImage: NSImage?
@@ -376,11 +379,18 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         refreshActivationPolicy()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusMenu = NSMenu()
+        statusMenu.autoenablesItems = false
+        statusMenu.delegate = self
+        statusItem.menu = statusMenu
+        lastKnownLLMUseGPU = settings.llmUseGPU
+        lastKnownCheckForUpdates = settings.checkForUpdates
         configureStatusItemImage()
         concealMenuBarIcon()
         setMenuBarState(.loading)
         startCorrectionSyncIfConfigured()
         vocabularySync.start()
+        HardwareCapabilities.shared.warmUpAsync()
         rebuildMenu()
 
         audio.onConfigurationChange = { [weak self] in
@@ -421,9 +431,15 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         closeStatisticsOverlay()
     }
 
-    private func openControlPanelFromAgent() {
+    private func openControlPanelFromAgent(openSettingsDirectly: Bool = false) {
         if LexomorphControlPanelRegistry.activateExistingPanelIfPresent() {
-            log("control panel activated from agent")
+            DistributedNotificationCenter.default().postNotificationName(
+                openSettingsDirectly ? OPEN_SETTINGS_WINDOW_NOTIFICATION : OPEN_CONTROL_PANEL_NOTIFICATION,
+                object: nil,
+                userInfo: nil,
+                deliverImmediately: true
+            )
+            log(openSettingsDirectly ? "settings activated from agent" : "control panel activated from agent")
             return
         }
         guard !controlPanelLaunchInProgress else {
@@ -436,7 +452,7 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = []
+        process.arguments = openSettingsDirectly ? [OPEN_SETTINGS_ARGUMENT] : []
         process.environment = systemToolProcessEnvironment()
         controlPanelLaunchInProgress = true
         controlPanelProcess = process
@@ -451,12 +467,16 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         do {
             try process.run()
-            log("control panel opened from agent")
+            log(openSettingsDirectly ? "settings opened from agent" : "control panel opened from agent")
         } catch {
             controlPanelProcess = nil
             controlPanelLaunchInProgress = false
             log("control panel open failed: \(error.localizedDescription)")
         }
+    }
+
+    private func openSettingsFromAgent() {
+        openControlPanelFromAgent(openSettingsDirectly: true)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -515,12 +535,39 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                            object: nil)
     }
 
-    /// The settings window saved LLM choices that apply without a restart:
-    /// free the VRAM of hosts the new choices no longer use right away and
-    /// load the ones they now need.
+    /// The settings window saved settings that apply without a restart:
+    /// pick up live preferences, free VRAM of unused hosts, reload the LLM
+    /// host if GPU usage toggled, and refresh the menu bar dropdown.
     @objc private func settingsDidChangeLive(_ notification: Notification) {
-        settings.refreshFromDisk()
+        let previousLLMUseGPU = lastKnownLLMUseGPU
+        let previousCheckForUpdates = lastKnownCheckForUpdates
+        _ = settings.refreshFromDisk()
+        lastKnownLLMUseGPU = settings.llmUseGPU
+        lastKnownCheckForUpdates = settings.checkForUpdates
+        hotkey.setTriggerMode(settings.triggerMode)
+        applyRecentTranscriptLimit()
+        if !settings.showRecordingWaveform {
+            hideRecordingHUD()
+        } else if let view = recordingHUDView {
+            configureRecordingHUDView(view)
+            view.needsDisplay = true
+        }
+        if settings.checkForUpdates != previousCheckForUpdates {
+            if settings.checkForUpdates {
+                Task { [weak self] in
+                    await self?.tickUpdateCheck(source: .settingsToggle)
+                }
+            } else {
+                pendingUpdate = nil
+                clearUpdateReminderPause()
+            }
+        }
+        rebuildMenu()
         Task { [llmPostprocessing, settings] in
+            if settings.llmUseGPU != previousLLMUseGPU {
+                await llmPostprocessing.stop()
+                log("LLM: stopped bundled host after LLM-GPU setting change (llmUseGPU=\(settings.llmUseGPU))")
+            }
             await llmPostprocessing.prewarmNeededHosts(settings: settings)
         }
     }
@@ -3119,10 +3166,21 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// is NOT flipped here; turning correction off immediately stops hosts
     /// no still-enabled function needs (e.g. a shared YandexGPT host stays
     /// loaded while rewrite remains on).
+    private func notifyAgentModeToggled() {
+        DistributedNotificationCenter.default().postNotificationName(
+            AGENT_TOGGLED_MODE_NOTIFICATION,
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
+    }
+
     private func toggleTextCorrectionMode() {
         let next: TextPostprocessingMode = settings.textPostprocessingMode == .correction ? .off : .correction
         settings.textPostprocessingMode = next
         log("text correction: \(next == .correction ? "enabled" : "disabled") via hotkey")
+        rebuildMenu()
+        notifyAgentModeToggled()
         showStateToast(
             text: next == .correction
                 ? t("Коррекция · вкл", "Correction · on")
@@ -3149,6 +3207,8 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let next = !settings.rewriteEnabled
         settings.rewriteEnabled = next
         log("text rewrite: \(next ? "enabled" : "disabled") via hotkey")
+        rebuildMenu()
+        notifyAgentModeToggled()
         if next {
             let selection = settings.rewriteStyleSelection()
             showStateToast(
@@ -3186,6 +3246,8 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             settings.rewriteEnabled = true
         }
         log("text rewrite style: \(next.id) via hotkey (rewrite on)")
+        rebuildMenu()
+        notifyAgentModeToggled()
         showStateToast(
             text: t("Режим · \(next.displayName)",
                     "Style · \(next.displayName)"),
@@ -3213,6 +3275,8 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             settings.rewriteEnabled = true
         }
         log("text rewrite style: \(id) via its own hotkey (rewrite on)")
+        rebuildMenu()
+        notifyAgentModeToggled()
         showStateToast(
             text: t("Режим · \(selection.displayName)",
                     "Style · \(selection.displayName)"),
@@ -3949,7 +4013,78 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func rebuildMenu() {
         publishAgentState()
-        statusItem.menu = buildMenu()
+        guard let statusMenu else { return }
+        populateMenu(statusMenu)
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === statusMenu else { return }
+        _ = settings.refreshFromDisk()
+        populateMenu(menu)
+    }
+
+    private func menuSymbol(_ name: String) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        image?.isTemplate = true
+        return image
+    }
+
+    private func colorDotImage(hex: String) -> NSImage {
+        let size = NSSize(width: 14, height: 14)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let dotRect = NSRect(x: 2.5, y: 2.5, width: 9, height: 9)
+            StateToastController.color(forColorHex: hex).setFill()
+            NSBezierPath(ovalIn: dotRect).fill()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
+
+    private func localizedRewriteStyleName(_ selection: RewriteStyleSelection) -> String {
+        switch selection {
+        case .builtin(let style):
+            return localizedBuiltinRewriteStyleName(style)
+        case .custom(let custom):
+            return custom.name
+        }
+    }
+
+    private func localizedBuiltinRewriteStyleName(_ style: RewriteStyle) -> String {
+        switch style {
+        case .polish:
+            return t("Причесать текст", "Polish text")
+        case .structuredTask:
+            return t("Структурировать в задачу", "Structure into a task")
+        case .official:
+            return t("Официальный стиль", "Official style")
+        }
+    }
+
+    private func builtinRewriteStyleSymbol(_ style: RewriteStyle) -> String {
+        switch style {
+        case .polish: return "sparkles"
+        case .structuredTask: return "checklist"
+        case .official: return "briefcase"
+        }
+    }
+
+    private func menuStatusSymbolName() -> String {
+        if isRecording { return "record.circle" }
+        if isBusy { return "waveform" }
+        if isReady { return "mic" }
+        if startupFailure != nil || !missingPermissions().isEmpty { return "exclamationmark.triangle" }
+        return "arrow.down.circle"
+    }
+
+    private func localizedPermissionName(_ permission: Permission) -> String {
+        switch permission {
+        case .microphone: return t("Микрофон", "Microphone")
+        case .accessibility: return t("Универсальный доступ", "Accessibility")
+        case .inputMonitoring: return t("Мониторинг ввода", "Input Monitoring")
+        }
     }
 
     private func publishAgentState(status explicitStatus: String? = nil,
@@ -3999,14 +4134,15 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return ("starting", "Starting dictation service.")
     }
 
-    private func buildMenu() -> NSMenu {
-        let menu = NSMenu()
+    private func populateMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
         menu.autoenablesItems = false
 
         // Status row.
         let statusTitle = menuStatusTitle()
         let status = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
         status.isEnabled = false
+        status.image = menuSymbol(menuStatusSymbolName())
         if let failure = startupFailure {
             status.toolTip = failure.detail
         }
@@ -4018,10 +4154,11 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(.separator())
 
         if isRecording {
-            let cancel = NSMenuItem(title: "Cancel Recording",
+            let cancel = NSMenuItem(title: t("Отменить запись", "Cancel Recording"),
                                     action: #selector(cancelRecordingClicked(_:)),
                                     keyEquivalent: "")
             cancel.target = self
+            cancel.image = menuSymbol("xmark.circle")
             menu.addItem(cancel)
             menu.addItem(.separator())
         }
@@ -4031,6 +4168,7 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                    action: #selector(retryStartupClicked(_:)),
                                    keyEquivalent: "")
             retry.target = self
+            retry.image = menuSymbol("arrow.clockwise")
             retry.toolTip = failure.detail
             retry.isEnabled = startupTask == nil
             menu.addItem(retry)
@@ -4051,14 +4189,19 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if addedPermRow { menu.addItem(.separator()) }
 
-        // History: keep one-click access to the last transcript, but
-        // hide transcript preview text inside the submenu so the menu
-        // stays stable even after long dictations.
+        // Dedicated text post-processing group: direct mouse toggles for
+        // Correction and Rewrite, plus Rewrite Style picker when Rewrite is on.
+        addTextProcessingSection(to: menu)
+        menu.addItem(.separator())
+
+        // History: keep one-click access to the last transcript, and
+        // recent transcripts inside a compact submenu.
         if let newest = visibleHistory.first {
-            let inline = NSMenuItem(title: "Copy Last Transcript",
+            let inline = NSMenuItem(title: t("Копировать последнюю диктовку", "Copy Last Transcript"),
                                     action: #selector(historyClicked(_:)),
                                     keyEquivalent: "")
             inline.target = self
+            inline.image = menuSymbol("doc.on.doc")
             inline.representedObject = newest.text
             inline.toolTip = newest.text
             menu.addItem(inline)
@@ -4068,10 +4211,22 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             menu.addItem(.separator())
         }
 
-        // Settings submenu.
-        menu.addItem(buildSettingsItem())
-        menu.addItem(buildSupportItem())
+        // Direct link to the main Settings window (no cascading submenus).
+        let settingsItem = NSMenuItem(title: t("Настройки…", "Settings…"),
+                                      action: #selector(openSettingsClicked(_:)),
+                                      keyEquivalent: ",")
+        settingsItem.target = self
+        settingsItem.image = menuSymbol("gearshape")
+        menu.addItem(settingsItem)
+
         menu.addItem(.separator())
+
+        let about = NSMenuItem(title: t("О программе Lexomorph", "About Lexomorph"),
+                               action: #selector(showAboutClicked(_:)),
+                               keyEquivalent: "")
+        about.target = self
+        about.image = menuSymbol("info.circle")
+        menu.addItem(about)
 
         // Route through our own selector rather than `NSApp.terminate(_:)`
         // directly. macOS auto-decorates items whose action is the
@@ -4080,16 +4235,155 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // in the menu that gets such an indicator — every other row
         // sits flush against the left edge. The wrapper produces the
         // identical behaviour with no auto-glyph.
-        let quit = NSMenuItem(title: "Quit Lexomorph",
+        let quit = NSMenuItem(title: t("Завершить Lexomorph", "Quit Lexomorph"),
                               action: #selector(quitClicked(_:)),
                               keyEquivalent: "q")
         quit.target = self
+        quit.image = menuSymbol("power")
         menu.addItem(quit)
-        return menu
+    }
+
+    private func addTextProcessingSection(to menu: NSMenu) {
+        menu.addItem(NSMenuItem.sectionHeader(title: t("Обработка текста", "Text Processing")))
+
+        let correctionEnabled = settings.textPostprocessingMode == .correction
+        let correctionItem = NSMenuItem(
+            title: t("Коррекция текста", "Text Correction"),
+            action: #selector(toggleCorrectionFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        correctionItem.target = self
+        correctionItem.state = correctionEnabled ? .on : .off
+        correctionItem.image = menuSymbol("text.badge.checkmark")
+        let correctionShortcut = localizedHotkeyName(settings.configuredCorrectionHotkey,
+                                                     language: settings.interfaceLanguage)
+        correctionItem.toolTip = t(
+            "Включить или выключить коррекцию текста (хоткей: \(correctionShortcut)).",
+            "Toggle text correction (shortcut: \(correctionShortcut))."
+        )
+        menu.addItem(correctionItem)
+
+        let rewriteEnabled = settings.rewriteEnabled
+        let rewriteItem = NSMenuItem(
+            title: t("Рерайт текста", "Text Rewrite"),
+            action: #selector(toggleRewriteFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        rewriteItem.target = self
+        rewriteItem.state = rewriteEnabled ? .on : .off
+        rewriteItem.image = menuSymbol("wand.and.stars")
+        let rewriteShortcut = localizedHotkeyName(settings.configuredRewriteToggleHotkey,
+                                                  language: settings.interfaceLanguage)
+        rewriteItem.toolTip = t(
+            "Включить или выключить рерайт текста (хоткей: \(rewriteShortcut)).",
+            "Toggle text rewrite (shortcut: \(rewriteShortcut))."
+        )
+        menu.addItem(rewriteItem)
+
+        if rewriteEnabled {
+            menu.addItem(buildRewriteStyleMenuItem())
+        }
+    }
+
+    private func buildRewriteStyleMenuItem() -> NSMenuItem {
+        let activeSelection = settings.rewriteStyleSelection()
+        let activeName = localizedRewriteStyleName(activeSelection)
+        let parent = NSMenuItem(
+            title: t("Стиль: \(activeName)", "Style: \(activeName)"),
+            action: nil,
+            keyEquivalent: ""
+        )
+        parent.image = menuSymbol("slider.horizontal.3")
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+
+        for style in RewriteStyle.allCases {
+            let item = NSMenuItem(
+                title: localizedBuiltinRewriteStyleName(style),
+                action: #selector(selectRewriteStyleFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = style.rawValue
+            item.state = (activeSelection.id == style.rawValue) ? .on : .off
+            item.image = menuSymbol(builtinRewriteStyleSymbol(style))
+            sub.addItem(item)
+        }
+
+        let customStyles = settings.customRewriteStyles
+        if !customStyles.isEmpty {
+            sub.addItem(.separator())
+            for custom in customStyles {
+                let item = NSMenuItem(
+                    title: custom.name,
+                    action: #selector(selectRewriteStyleFromMenu(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = custom.id
+                item.state = (activeSelection.id == custom.id) ? .on : .off
+                item.image = colorDotImage(hex: custom.colorHex)
+                sub.addItem(item)
+            }
+        }
+
+        parent.submenu = sub
+        return parent
+    }
+
+    @objc private func toggleCorrectionFromMenu(_ sender: NSMenuItem) {
+        let next: TextPostprocessingMode = settings.textPostprocessingMode == .correction ? .off : .correction
+        settings.textPostprocessingMode = next
+        log("text correction: \(next == .correction ? "enabled" : "disabled") via menu")
+        rebuildMenu()
+        notifyAgentModeToggled()
+        Task { [llmPostprocessing, settings] in
+            await llmPostprocessing.prewarmNeededHosts(settings: settings)
+        }
+    }
+
+    @objc private func toggleRewriteFromMenu(_ sender: NSMenuItem) {
+        let next = !settings.rewriteEnabled
+        settings.rewriteEnabled = next
+        log("text rewrite: \(next ? "enabled" : "disabled") via menu")
+        rebuildMenu()
+        notifyAgentModeToggled()
+        Task { [llmPostprocessing, settings] in
+            await llmPostprocessing.prewarmNeededHosts(settings: settings)
+        }
+    }
+
+    @objc private func selectRewriteStyleFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        let selection: RewriteStyleSelection
+        if let builtin = RewriteStyle(rawValue: id) {
+            selection = .builtin(builtin)
+        } else if let custom = settings.customRewriteStyles.first(where: { $0.id == id }) {
+            selection = .custom(custom)
+        } else {
+            return
+        }
+        settings.setRewriteStyleSelection(selection)
+        if !settings.rewriteEnabled {
+            settings.rewriteEnabled = true
+        }
+        log("text rewrite style: \(selection.id) via menu")
+        rebuildMenu()
+        notifyAgentModeToggled()
+        Task { [llmPostprocessing, settings] in
+            await llmPostprocessing.prewarmNeededHosts(settings: settings)
+        }
+    }
+
+    @objc private func openSettingsClicked(_ sender: NSMenuItem) {
+        openSettingsFromAgent()
     }
 
     private func buildRecentTranscriptsItem() -> NSMenuItem {
-        let parent = NSMenuItem(title: "Recent Transcripts", action: nil, keyEquivalent: "")
+        let parent = NSMenuItem(title: t("Недавние диктовки", "Recent Transcripts"),
+                                action: nil,
+                                keyEquivalent: "")
+        parent.image = menuSymbol("clock.arrow.circlepath")
         let sub = NSMenu()
         sub.autoenablesItems = false
 
@@ -4105,70 +4399,12 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         sub.addItem(.separator())
 
-        let clear = NSMenuItem(title: "Clear Recent Transcripts",
+        let clear = NSMenuItem(title: t("Очистить историю", "Clear Recent Transcripts"),
                                action: #selector(clearHistoryClicked(_:)),
                                keyEquivalent: "")
         clear.target = self
+        clear.image = menuSymbol("trash")
         sub.addItem(clear)
-
-        parent.submenu = sub
-        return parent
-    }
-
-    private func buildSupportItem() -> NSMenuItem {
-        let parent = NSMenuItem(title: "Support", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-
-        let setup = NSMenuItem(title: "Setup Checklist…",
-                               action: #selector(showSetupChecklistClicked(_:)),
-                               keyEquivalent: "")
-        setup.target = self
-        sub.addItem(setup)
-
-        sub.addItem(.separator())
-
-        let checkUpdates = NSMenuItem(title: isCheckingForUpdates ? "Checking for Updates…" : "Check for Updates…",
-                                      action: #selector(checkForUpdatesClicked(_:)),
-                                      keyEquivalent: "")
-        checkUpdates.target = self
-        checkUpdates.isEnabled = !isCheckingForUpdates && !isTerminating
-        sub.addItem(checkUpdates)
-
-        sub.addItem(.separator())
-
-        let about = NSMenuItem(title: "About Lexomorph",
-                               action: #selector(showAboutClicked(_:)),
-                               keyEquivalent: "")
-        about.target = self
-        sub.addItem(about)
-
-        sub.addItem(.separator())
-
-        let diagnostics = NSMenuItem(title: "Copy Diagnostics",
-                                     action: #selector(copyDiagnosticsClicked(_:)),
-                                     keyEquivalent: "")
-        diagnostics.target = self
-        sub.addItem(diagnostics)
-
-        let saveDiagnostics = NSMenuItem(title: "Save Diagnostics…",
-                                         action: #selector(saveDiagnosticsClicked(_:)),
-                                         keyEquivalent: "")
-        saveDiagnostics.target = self
-        sub.addItem(saveDiagnostics)
-
-        let resetModel = NSMenuItem(title: isResettingSpeechModelCache ? "Resetting Speech Model Cache…" : "Reset Speech Model Cache…",
-                                    action: #selector(resetSpeechModelCacheClicked(_:)),
-                                    keyEquivalent: "")
-        resetModel.target = self
-        resetModel.isEnabled = !isRecording
-            && !isBusy
-            && !isTerminating
-            && startupTask == nil
-            && !isResettingSpeechModelCache
-            && !isSwitchingSpeechModel
-        resetModel.toolTip = "Delete the speech model cache and download a fresh verified copy."
-        sub.addItem(resetModel)
 
         parent.submenu = sub
         return parent
@@ -4207,15 +4443,16 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func menuStatusTitle() -> String {
         if isRecording {
-            return "Recording..."
+            return t("Идёт запись…", "Recording…")
         }
         if isBusy {
-            return "Transcribing..."
+            return t("Распознавание…", "Transcribing…")
         }
         if isReady {
-            let hk = hotkey.hotkey.name
-            let verb = settings.triggerMode == .hold ? "Hold" : "Press"
-            return "\(verb) \(hk) to dictate"
+            let hk = localizedHotkeyName(hotkey.hotkey, language: settings.interfaceLanguage)
+            return settings.triggerMode == .hold
+                ? t("Удерживайте \(hk) для диктовки", "Hold \(hk) to dictate")
+                : t("Нажмите \(hk) для диктовки", "Press \(hk) to dictate")
         }
         if let failure = startupFailure {
             return failure.statusTitle
@@ -4224,12 +4461,12 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return startupStatusTitle
         }
         if !missingPermissions().isEmpty {
-            return "Grant permissions to finish setup"
+            return t("Выдайте разрешения для завершения настройки", "Grant permissions to finish setup")
         }
         if isCoreRuntimeReady {
-            return "Starting hotkey listener…"
+            return t("Запуск слушателя хоткеев…", "Starting hotkey listener…")
         }
-        return "Lexomorph is not ready"
+        return t("Lexomorph не готов", "Lexomorph is not ready")
     }
 
     private func diagnosticsText() -> String {
@@ -4699,16 +4936,18 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func buildPermissionItem(_ p: Permission) -> NSMenuItem {
         let clicks = permClickCount[p] ?? 0
+        let name = localizedPermissionName(p)
         let title: String
         if clicks >= 1 {
-            title = "⚠ Open \(p.rawValue) settings…"
+            title = t("Открыть настройки: \(name)…", "Open \(name) settings…")
         } else {
-            title = "⚠ Grant \(p.rawValue) permission…"
+            title = t("Выдать доступ: \(name)…", "Grant \(name) permission…")
         }
         let item = NSMenuItem(title: title,
                               action: #selector(grantPermissionClicked(_:)),
                               keyEquivalent: "")
         item.target = self
+        item.image = menuSymbol("exclamationmark.triangle")
         item.representedObject = p.rawValue
         return item
     }
@@ -4741,297 +4980,7 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
         rebuildMenu()
     }
 
-    // MARK: - Settings submenu
-
-    private func buildSettingsItem() -> NSMenuItem {
-        let parent = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-
-        sub.addItem(buildDictationSettingsItem())
-        sub.addItem(buildTextSettingsItem())
-        sub.addItem(buildBehaviorSettingsItem())
-
-        parent.submenu = sub
-        return parent
-    }
-
-    private func buildDictationSettingsItem() -> NSMenuItem {
-        let parent = NSMenuItem(title: "Dictation", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-
-        sub.addItem(buildHotkeySettingsItem())
-        sub.addItem(buildTriggerSettingsItem())
-        sub.addItem(buildDictationLanguageSettingsItem())
-        sub.addItem(buildInputDeviceItem())
-
-        parent.submenu = sub
-        return parent
-    }
-
-    private func buildTextSettingsItem() -> NSMenuItem {
-        let parent = NSMenuItem(title: "Text", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-
-        sub.addItem(buildPasteSuffixSettingsItem())
-        sub.addItem(buildRecentTranscriptLimitSettingsItem())
-        sub.addItem(buildCorrectionsItem())
-
-        parent.submenu = sub
-        return parent
-    }
-
-    private func buildBehaviorSettingsItem() -> NSMenuItem {
-        let parent = NSMenuItem(title: "Behavior", action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-
-        let waveform = NSMenuItem(title: "Show recording waveform",
-                                  action: #selector(toggleRecordingWaveform(_:)),
-                                  keyEquivalent: "")
-        waveform.target = self
-        waveform.state = settings.showRecordingWaveform ? .on : .off
-        sub.addItem(waveform)
-
-        let sounds = NSMenuItem(title: "Play feedback sounds",
-                                action: #selector(toggleFeedbackSounds(_:)),
-                                keyEquivalent: "")
-        sounds.target = self
-        sounds.state = settings.playFeedbackSounds ? .on : .off
-        sub.addItem(sounds)
-
-        let automaticUpdates = NSMenuItem(title: "Automatically check for updates",
-                                          action: #selector(toggleCheckForUpdates(_:)),
-                                          keyEquivalent: "")
-        automaticUpdates.target = self
-        automaticUpdates.state = settings.checkForUpdates ? .on : .off
-        automaticUpdates.toolTip = "Periodically checks GitHub for a newer release and only notifies you."
-        sub.addItem(automaticUpdates)
-
-        let dock = NSMenuItem(title: "Show Lexomorph in Dock",
-                              action: #selector(toggleDock(_:)),
-                              keyEquivalent: "")
-        dock.target = self
-        dock.state = settings.showInDock ? .on : .off
-        sub.addItem(dock)
-
-        let gpuLanguage = settings.interfaceLanguage
-        let llmGPUDevices = LLMGPUProbe.shared.devices()
-        let vulkanAvailable = !llmGPUDevices.isEmpty
-        let deviceDescription = llmGPUDevices.joined(separator: ", ")
-        let llmGPU = NSMenuItem(
-            title: localizedText("LLM на GPU (Vulkan)", "LLM on GPU (Vulkan)", language: gpuLanguage),
-            action: #selector(toggleLLMUseGPU(_:)),
-            keyEquivalent: ""
-        )
-        llmGPU.target = self
-        llmGPU.state = settings.llmUseGPU ? .on : .off
-        if vulkanAvailable {
-            llmGPU.isEnabled = true
-            llmGPU.toolTip = localizedText(
-                "Запускает Vulkan-бэкенд для модели коррекции/рерайтинга текста (обнаружено: \(deviceDescription)). Распознавание речи всегда идёт на CPU. Перезагружает LLM-модель.",
-                "Runs the Vulkan backend for the text-correction/rewrite model (detected: \(deviceDescription)). Speech recognition always runs on the CPU. Reloads the LLM model.",
-                language: gpuLanguage
-            )
-        } else {
-            llmGPU.isEnabled = false
-            llmGPU.state = .off
-            llmGPU.toolTip = localizedText(
-                "Vulkan GPU не обнаружен. Модель коррекции/рерайтинга будет использовать CPU.",
-                "Vulkan GPU was not detected. The correction/rewrite model will use CPU.",
-                language: gpuLanguage
-            )
-        }
-        sub.addItem(llmGPU)
-
-        let asrStatus = NSMenuItem(
-            title: localizedText("ASR-бэкенд: ", "ASR backend: ", language: gpuLanguage) + asrBackendDescription(language: gpuLanguage),
-            action: nil,
-            keyEquivalent: ""
-        )
-        asrStatus.isEnabled = false
-        sub.addItem(asrStatus)
-
-        parent.submenu = sub
-        return parent
-    }
-
-    private func buildHotkeySettingsItem() -> NSMenuItem {
-        let hkParent = NSMenuItem(title: "Hotkey", action: nil, keyEquivalent: "")
-        let hkSub = NSMenu()
-        hkSub.autoenablesItems = false
-        let current = hotkey.hotkey
-
-        if !HOTKEY_CHOICES.contains(current) {
-            let currentItem = NSMenuItem(title: current.name,
-                                         action: nil,
-                                         keyEquivalent: "")
-            currentItem.state = .on
-            currentItem.toolTip = "Recorded custom hotkey"
-            hkSub.addItem(currentItem)
-            hkSub.addItem(.separator())
-        }
-
-        for choice in HOTKEY_CHOICES {
-            let item = NSMenuItem(title: choice.name,
-                                  action: #selector(selectHotkey(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.state = (choice == current) ? .on : .off
-            item.representedObject = Int(choice.keycode)
-            hkSub.addItem(item)
-        }
-
-        hkSub.addItem(.separator())
-
-        let record = NSMenuItem(title: "Record Hotkey…",
-                                action: #selector(recordHotkeyClicked(_:)),
-                                keyEquivalent: "")
-        record.target = self
-        record.isEnabled = !isRecording && !isBusy && !isTerminating
-        hkSub.addItem(record)
-
-        let reset = NSMenuItem(title: "Reset Hotkey to Default",
-                               action: #selector(resetHotkeyClicked(_:)),
-                               keyEquivalent: "")
-        reset.target = self
-        reset.isEnabled = current != hotkeyChoice(forKeycode: DEFAULT_HOTKEY_KEYCODE)
-            && !isRecording
-            && !isBusy
-            && !isTerminating
-        reset.toolTip = "Use Right Command for dictation."
-        hkSub.addItem(reset)
-
-        hkParent.submenu = hkSub
-        return hkParent
-    }
-
-    private func buildTriggerSettingsItem() -> NSMenuItem {
-        let tmParent = NSMenuItem(title: "Trigger", action: nil, keyEquivalent: "")
-        let tmSub = NSMenu()
-        tmSub.autoenablesItems = false
-        for mode in [TriggerMode.hold, .toggle] {
-            let item = NSMenuItem(title: TRIGGER_DISPLAY[mode] ?? mode.rawValue,
-                                  action: #selector(selectTriggerMode(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.state = (mode == settings.triggerMode) ? .on : .off
-            item.representedObject = mode.rawValue
-            tmSub.addItem(item)
-        }
-        tmParent.submenu = tmSub
-        return tmParent
-    }
-
-    private func buildDictationLanguageSettingsItem() -> NSMenuItem {
-        let langParent = NSMenuItem(title: "Language Hint", action: nil, keyEquivalent: "")
-        let langSub = NSMenu()
-        langSub.autoenablesItems = false
-        for lang in DictationLanguage.allCases {
-            let item = NSMenuItem(title: DICTATION_LANGUAGE_DISPLAY[lang] ?? lang.rawValue,
-                                  action: #selector(selectDictationLanguage(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.state = (lang == settings.dictationLanguage) ? .on : .off
-            item.representedObject = lang.rawValue
-            langSub.addItem(item)
-            // Auto-detect is the right default for almost everyone; only
-            // pin a specific language if you see wrong-script bleed-through
-            // (e.g. Cyrillic letters in Polish output).
-            if lang == .auto {
-                langSub.addItem(.separator())
-            }
-        }
-        langParent.submenu = langSub
-        return langParent
-    }
-
-    private func buildPasteSuffixSettingsItem() -> NSMenuItem {
-        let pasteParent = NSMenuItem(title: "After Pasting", action: nil, keyEquivalent: "")
-        let pasteSub = NSMenu()
-        pasteSub.autoenablesItems = false
-        for suffix in [PasteSuffix.appendSpace, .none, .appendNewline] {
-            let item = NSMenuItem(title: PASTE_SUFFIX_DISPLAY[suffix] ?? suffix.rawValue,
-                                  action: #selector(selectPasteSuffix(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.state = (suffix == settings.pasteSuffix) ? .on : .off
-            item.representedObject = suffix.rawValue
-            pasteSub.addItem(item)
-        }
-        pasteParent.submenu = pasteSub
-        return pasteParent
-    }
-
-    private func buildRecentTranscriptLimitSettingsItem() -> NSMenuItem {
-        let recentParent = NSMenuItem(title: "Recent Transcripts", action: nil, keyEquivalent: "")
-        let recentSub = NSMenu()
-        recentSub.autoenablesItems = false
-        for limit in RecentTranscriptLimit.allCases {
-            let item = NSMenuItem(title: RECENT_TRANSCRIPT_LIMIT_DISPLAY[limit] ?? limit.rawValue,
-                                  action: #selector(selectRecentTranscriptLimit(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.state = (limit == settings.recentTranscriptLimit) ? .on : .off
-            item.representedObject = limit.rawValue
-            recentSub.addItem(item)
-        }
-        recentParent.submenu = recentSub
-        return recentParent
-    }
-
-    private func buildInputDeviceItem() -> NSMenuItem {
-        let devices = availableAudioInputDevices()
-        let rawSavedPreference = settings.inputDevice.trimmingCharacters(in: .whitespacesAndNewlines)
-        let savedPreference = isDefaultAggregateAudioInputPreference(rawSavedPreference) ? "" : rawSavedPreference
-        let selectedDevice = audioInputDevice(matching: savedPreference, in: devices)
-        let canSwitch = !isRecording && !isBusy && !isTerminating
-        let parent = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
-        if !savedPreference.isEmpty && selectedDevice == nil {
-            parent.toolTip = savedPreference
-        }
-
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-
-        let system = NSMenuItem(title: "System default",
-                                action: #selector(selectInputDevice(_:)),
-                                keyEquivalent: "")
-        system.target = self
-        system.representedObject = ""
-        system.state = (savedPreference.isEmpty || selectedDevice == nil) ? .on : .off
-        system.isEnabled = canSwitch
-        sub.addItem(system)
-
-        if !savedPreference.isEmpty && selectedDevice == nil {
-            let unavailable = NSMenuItem(title: "Unavailable: \(savedPreference)",
-                                         action: nil,
-                                         keyEquivalent: "")
-            unavailable.isEnabled = false
-            sub.addItem(unavailable)
-        }
-
-        if !devices.isEmpty {
-            sub.addItem(.separator())
-        }
-
-        for device in devices {
-            let item = NSMenuItem(title: device.name,
-                                  action: #selector(selectInputDevice(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = device.uid
-            item.toolTip = device.uid
-            item.state = (selectedDevice?.uid == device.uid) ? .on : .off
-            item.isEnabled = canSwitch
-            sub.addItem(item)
-        }
-
-        parent.submenu = sub
-        return parent
-    }
+    // MARK: - Audio input reload
 
     @objc private func selectInputDevice(_ sender: NSMenuItem) {
         guard !isRecording, !isBusy, !isTerminating,
@@ -5248,127 +5197,6 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 recordStartupFailure(stage: .audioInput, error: error, reason: reason)
             }
         }
-    }
-
-    private func buildCorrectionsItem() -> NSMenuItem {
-        let corrections = settings.transcriptCorrections
-        let title = corrections.isEmpty ? "Text Corrections" : "Text Corrections (\(corrections.count))"
-        let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        let sub = NSMenu()
-        sub.autoenablesItems = false
-
-        let add = NSMenuItem(title: "Add Correction…",
-                             action: #selector(addCorrectionClicked(_:)),
-                             keyEquivalent: "")
-        add.target = self
-        sub.addItem(add)
-
-        let addFromLast = NSMenuItem(title: "Add Correction from Last Transcript…",
-                                     action: #selector(addCorrectionFromLastTranscriptClicked(_:)),
-                                     keyEquivalent: "")
-        addFromLast.target = self
-        addFromLast.isEnabled = visibleHistory.first != nil
-        if let newest = visibleHistory.first {
-            addFromLast.toolTip = previewLine(for: newest.text)
-        }
-        sub.addItem(addFromLast)
-
-        sub.addItem(.separator())
-
-        let importItem = NSMenuItem(title: "Import Corrections…",
-                                    action: #selector(importCorrectionsClicked(_:)),
-                                    keyEquivalent: "")
-        importItem.target = self
-        sub.addItem(importItem)
-
-        let exportItem = NSMenuItem(title: "Export Corrections…",
-                                    action: #selector(exportCorrectionsClicked(_:)),
-                                    keyEquivalent: "")
-        exportItem.target = self
-        exportItem.isEnabled = !corrections.isEmpty
-        sub.addItem(exportItem)
-
-        let shareItem = NSMenuItem(title: "Share Corrections…",
-                                   action: #selector(shareCorrectionsClicked(_:)),
-                                   keyEquivalent: "")
-        shareItem.target = self
-        shareItem.isEnabled = !corrections.isEmpty
-        sub.addItem(shareItem)
-
-        sub.addItem(.separator())
-
-        if let syncURL = correctionSyncFileURL() {
-            let syncLabel = NSMenuItem(title: "Syncing: \(syncURL.lastPathComponent)",
-                                       action: nil,
-                                       keyEquivalent: "")
-            syncLabel.isEnabled = false
-            syncLabel.toolTip = syncURL.path
-            sub.addItem(syncLabel)
-
-            let syncNow = NSMenuItem(title: "Sync Now",
-                                     action: #selector(syncCorrectionsNowClicked(_:)),
-                                     keyEquivalent: "")
-            syncNow.target = self
-            sub.addItem(syncNow)
-
-            let stopSync = NSMenuItem(title: "Stop Syncing…",
-                                      action: #selector(stopSyncingCorrectionsClicked(_:)),
-                                      keyEquivalent: "")
-            stopSync.target = self
-            sub.addItem(stopSync)
-        } else {
-            let startSync = NSMenuItem(title: "Set Up Sync…",
-                                       action: #selector(setUpCorrectionsSyncClicked(_:)),
-                                       keyEquivalent: "")
-            startSync.target = self
-            sub.addItem(startSync)
-        }
-
-        sub.addItem(.separator())
-
-        if corrections.isEmpty {
-            let empty = NSMenuItem(title: "No corrections", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            sub.addItem(empty)
-            parent.submenu = sub
-            return parent
-        }
-
-        for (index, correction) in corrections.enumerated() {
-            let item = NSMenuItem(title: correctionMenuTitle(correction),
-                                  action: nil,
-                                  keyEquivalent: "")
-            let itemSub = NSMenu()
-            itemSub.autoenablesItems = false
-
-            let edit = NSMenuItem(title: "Edit…",
-                                  action: #selector(editCorrectionClicked(_:)),
-                                  keyEquivalent: "")
-            edit.target = self
-            edit.representedObject = index
-            itemSub.addItem(edit)
-
-            let delete = NSMenuItem(title: "Delete",
-                                    action: #selector(deleteCorrectionClicked(_:)),
-                                    keyEquivalent: "")
-            delete.target = self
-            delete.representedObject = index
-            itemSub.addItem(delete)
-
-            item.submenu = itemSub
-            sub.addItem(item)
-        }
-
-        sub.addItem(.separator())
-
-        let removeAll = NSMenuItem(title: "Remove All Corrections…",
-                                   action: #selector(removeAllCorrectionsClicked(_:)),
-                                   keyEquivalent: "")
-        removeAll.target = self
-        sub.addItem(removeAll)
-
-        parent.submenu = sub
-        return parent
     }
 
     private func correctionMenuTitle(_ correction: TranscriptCorrection) -> String {
@@ -6536,33 +6364,38 @@ final class LexomorphApp: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 
     private func buildUpdateItem(for release: GitHubRelease) -> NSMenuItem {
-        let parent = NSMenuItem(title: "Update to v\(release.version)",
+        let parent = NSMenuItem(title: t("Обновить до v\(release.version)", "Update to v\(release.version)"),
                                 action: nil, keyEquivalent: "")
+        parent.image = menuSymbol("arrow.down.circle")
         let sub = NSMenu()
         sub.autoenablesItems = false
 
-        let whatsNew = NSMenuItem(title: "What's new…",
+        let whatsNew = NSMenuItem(title: t("Что нового…", "What's new…"),
                                   action: #selector(whatsNewClicked(_:)),
                                   keyEquivalent: "")
         whatsNew.target = self
+        whatsNew.image = menuSymbol("doc.text")
         sub.addItem(whatsNew)
 
-        let updateNow = NSMenuItem(title: "Update now…",
+        let updateNow = NSMenuItem(title: t("Обновить сейчас…", "Update now…"),
                                    action: #selector(updateNowClicked(_:)),
                                    keyEquivalent: "")
         updateNow.target = self
+        updateNow.image = menuSymbol("arrow.down.to.line")
         sub.addItem(updateNow)
 
-        let remindLater = NSMenuItem(title: "Remind me in 24 hours",
+        let remindLater = NSMenuItem(title: t("Напомнить через 24 часа", "Remind me in 24 hours"),
                                      action: #selector(remindMeLaterClicked(_:)),
                                      keyEquivalent: "")
         remindLater.target = self
+        remindLater.image = menuSymbol("clock")
         sub.addItem(remindLater)
 
-        let skip = NSMenuItem(title: "Skip v\(release.version)",
+        let skip = NSMenuItem(title: t("Пропустить v\(release.version)", "Skip v\(release.version)"),
                               action: #selector(skipVersionClicked(_:)),
                               keyEquivalent: "")
         skip.target = self
+        skip.image = menuSymbol("forward.end")
         sub.addItem(skip)
 
         parent.submenu = sub
