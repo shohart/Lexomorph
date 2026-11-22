@@ -35,6 +35,12 @@ PREROLL_BLOCKS = max(1, round(PREROLL_SECONDS * SAMPLE_RATE / BLOCK_FRAMES))
 # A real stream open faster than this lets the start cue play before the
 # stream is open; slower and the cue waits until capture is running.
 STOP_CUE_GUARD_SECONDS = 0.5  # pre-roll ignores the previous clip's tail and stop cue
+# Keep accepting callbacks briefly on stop so speech still sitting in the
+# driver / PortAudio input buffer (and the last syllable released right as the
+# key is pressed) arrives before halt() freezes the clip and the stop cue plays.
+TAIL_DRAIN_MIN_SECONDS = 0.20
+TAIL_DRAIN_MAX_SECONDS = 0.45
+TAIL_DRAIN_MARGIN_SECONDS = 0.10
 OPEN_FAST_MS = 60.0
 OPEN_EMA_ALPHA = 0.3
 
@@ -101,15 +107,36 @@ def _wasapi_index() -> Optional[int]:
     return None
 
 
-def resolve_device(name: str) -> Optional[int]:
-    """Map a persisted device name back to a PortAudio index."""
-    if not name:
+def default_wasapi_input_device() -> Optional[int]:
+    """System default input endpoint under WASAPI, if available.
+
+    Passing ``device=None`` to PortAudio on Windows opens the default host API
+    (MME), whose input buffer adds hundreds of milliseconds of latency and
+    causes the tail of dictations to be clipped on stop. Resolving the WASAPI
+    default endpoint directly keeps shared-mode latency low (~10–30 ms).
+    """
+    import sounddevice as sd
+
+    wasapi = _wasapi_index()
+    if wasapi is None:
         return None
+    try:
+        info = sd.query_hostapis(wasapi)
+        index = int(info.get("default_input_device", -1))
+        return index if index >= 0 else None
+    except Exception:
+        return None
+
+
+def resolve_device(name: str) -> Optional[int]:
+    """Map a persisted device name back to a PortAudio index (preferring WASAPI)."""
+    if not name:
+        return default_wasapi_input_device()
     for device in list_input_devices():
         if device.name == name:
             return device.index
     log.warning("Configured input device %r is gone; falling back to default", name)
-    return None
+    return default_wasapi_input_device()
 
 
 def device_sample_rate(device_index: Optional[int]) -> int:
@@ -204,6 +231,11 @@ class Recorder:
         self.open_ms_ema = 0.0
         self.on_open_measured: Optional[Callable[[float], None]] = None
         self._auto_stop_fired = False
+        self.auto_stop_reason = ""
+        self._status_warned = False
+        #: Optional override for tail drain duration before halt() (seconds).
+        #: None = adaptive from stream.latency, clamped to [0.20, 0.45] s.
+        self.tail_drain_seconds: Optional[float] = None
         self._capture_rate = SAMPLE_RATE
         self.last_error: Optional[str] = None
         # perf_counter_ns marks of the last start()/stop(), for the
@@ -281,6 +313,7 @@ class Recorder:
                     channels=1,
                     dtype="float32",
                     blocksize=max(256, int(BLOCK_FRAMES * rate / SAMPLE_RATE)),
+                    latency="low",
                     device=device_index,
                     callback=self._callback,
                 )
@@ -322,6 +355,8 @@ class Recorder:
         self.trace = {"start_call": time.perf_counter_ns()}
         self.last_error = None
         self._auto_stop_fired = False
+        self.auto_stop_reason = ""
+        self._status_warned = False
         self._heard_speech = False
         self._silence_started_at = 0.0
 
@@ -357,11 +392,47 @@ class Recorder:
             self._started_at = time.monotonic()
             self._recording = True
         self.trace["start_return"] = time.perf_counter_ns()
-        log.info("Recording started (device=%s, %d Hz%s%s)",
+        stream_latency = getattr(self._stream, "latency", None)
+        latency_note = (f", latency {float(stream_latency) * 1000:.0f} ms"
+                        if isinstance(stream_latency, (int, float)) and stream_latency > 0 else "")
+        log.info("Recording started (device=%s, %d Hz%s%s%s)",
                  device_name or "system default", self._capture_rate,
                  "" if self._capture_rate == SAMPLE_RATE else ", resampling to 16 kHz",
+                 latency_note,
                  ", warm stream" if self.trace.get("warm") else "")
         return True
+
+    def _tail_drain_duration(self) -> float:
+        if self.tail_drain_seconds is not None:
+            return max(0.0, float(self.tail_drain_seconds))
+        raw_latency = getattr(self._stream, "latency", 0.0)
+        latency = float(raw_latency) if isinstance(raw_latency, (int, float)) and raw_latency > 0 else 0.0
+        return min(TAIL_DRAIN_MAX_SECONDS,
+                   max(TAIL_DRAIN_MIN_SECONDS, latency + TAIL_DRAIN_MARGIN_SECONDS))
+
+    def drain_tail(self, seconds: Optional[float] = None) -> float:
+        """Keep accepting audio callbacks briefly before ``halt()``.
+
+        Windows audio drivers (especially MME, Bluetooth HFP, and virtual
+        microphones) buffer tens to hundreds of milliseconds before delivering
+        blocks to PortAudio's callback, and users commonly hit the stop hotkey
+        while still releasing the final syllable. Waiting briefly before
+        ``halt()`` freezes capture — and before the stop cue plays — lets that
+        in-flight tail land in ``_chunks`` without leaking the stop cue into
+        the clip.
+        """
+        if not self._recording or not self._accepting:
+            return 0.0
+        duration = self._tail_drain_duration() if seconds is None else max(0.0, float(seconds))
+        if duration <= 0.0:
+            return 0.0
+        deadline = time.monotonic() + duration
+        while self._recording and self._accepting:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(0.02, remaining))
+        return duration
 
     def halt(self) -> None:
         """End the clip *now*, without waiting for the stream to close.
@@ -500,7 +571,11 @@ class Recorder:
 
     def _callback(self, indata, frames, time_info, status) -> None:
         if status:
-            log.debug("Input stream status: %s", status)
+            if not self._status_warned:
+                self._status_warned = True
+                log.warning("Input stream status: %s", status)
+            else:
+                log.debug("Input stream status: %s", status)
         samples = indata[:, 0].copy()
         with self._lock:
             if not self._accepting:
@@ -520,16 +595,19 @@ class Recorder:
             except Exception:
                 pass
 
-        if (
-            not self._auto_stop_fired
-            and (self.elapsed >= MAX_RECORDING_SECONDS or self._silence_elapsed(rms))
-            and self._on_auto_stop is not None
-        ):
-            self._auto_stop_fired = True
-            try:
-                self._on_auto_stop()
-            except Exception:
-                pass
+        if not self._auto_stop_fired and self._on_auto_stop is not None:
+            reason = ""
+            if self.elapsed >= MAX_RECORDING_SECONDS:
+                reason = "max_duration"
+            elif self._silence_elapsed(rms):
+                reason = "silence"
+            if reason:
+                self._auto_stop_fired = True
+                self.auto_stop_reason = reason
+                try:
+                    self._on_auto_stop()
+                except Exception:
+                    pass
 
     def _silence_elapsed(self, rms: float) -> bool:
         """True once the speaker has gone quiet for long enough to stop.

@@ -2117,6 +2117,46 @@ def test_extended_account_sync() -> None:
            (False, True, "none", False, "strong", "ru"))
 
 
+def test_recording_flow_drains_before_halt() -> None:
+    """recording_flow.end() drains tail before halt(), and stays compatible with
+    recorders that do not implement drain_tail()."""
+    from . import recording_flow
+
+    order: list[str] = []
+
+    class WithDrain:
+        def drain_tail(self):
+            order.append("drain")
+
+        def halt(self):
+            order.append("halt")
+
+        def stop(self):
+            order.append("stop_done")
+            return "pcm"
+
+    class WithoutDrain:
+        def halt(self):
+            order.append("halt")
+
+        def stop(self):
+            order.append("stop_done")
+            return "pcm2"
+
+    class Sounds:
+        def play(self, event, then=None):
+            order.append(event)
+
+    out1 = recording_flow.end(WithDrain(), Sounds(), restore=lambda: order.append("restore"))
+    _check("recording_flow: drain -> halt -> restore -> stop -> stop_done",
+           (out1, order), ("pcm", ["drain", "halt", "restore", "stop", "stop_done"]))
+
+    order.clear()
+    out2 = recording_flow.end(WithoutDrain(), Sounds())
+    _check("recording_flow: recorder without drain_tail still works",
+           (out2, order), ("pcm2", ["halt", "stop", "stop_done"]))
+
+
 TESTS = [
     test_custom_hotwords_store,
     test_custom_hotwords_window,
@@ -2142,6 +2182,7 @@ TESTS = [
     test_hardware_capabilities,
     test_extended_vocabulary_audit,
     test_extended_account_sync,
+    test_recording_flow_drains_before_halt,
 ]
 
 

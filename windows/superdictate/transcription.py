@@ -135,16 +135,26 @@ def transcribe(model: SpeechModel, samples: np.ndarray, enqueued_at: float,
     failed = False
     last_error: Optional[BaseException] = None
     for piece in segments:
-        if not piece.has_signal:
-            continue
-        try:
-            text = model.transcribe(piece.samples, time.monotonic()).text
-        except Exception as exc:
-            failed = True
-            last_error = exc
-            continue
+        # Always send every segment to ASR (matching macOS SegmentedTranscription):
+        # a quiet trailing phrase on Windows can fall below the 0.02 RMS
+        # heuristic yet still contain real speech. ``has_signal`` only decides
+        # whether an empty transcript after retry counts as a loss.
+        text = ""
+        threw = False
+        for attempt in range(2):
+            try:
+                text = model.transcribe(piece.samples, time.monotonic()).text
+                threw = False
+            except Exception as exc:
+                threw = True
+                last_error = exc
+                text = ""
+            if text or (not threw and not piece.has_signal):
+                break
         if text:
             texts.append(text)
+        elif threw or piece.has_signal:
+            failed = True
     if last_error is not None:
         log.warning("segmented transcription ASR error: %s", last_error)
         if not texts:
@@ -163,9 +173,9 @@ def _overlap_path(model: SpeechModel, samples: np.ndarray, segments, max_segment
     per_window: list[list[Word]] = []
     reused = 0
     for window in windows:
-        if not window.has_signal:
-            per_window.append([])
-            continue
+        # Never skip windows with ``has_signal == False`` (matches macOS
+        # TranscriptionWorker.transcribeWithOverlapWindows): quiet trailing
+        # speech can sit below the 0.02 RMS cut while still decoding cleanly.
         cached = cache.lookup(window, model.generation) if cache is not None else None
         if cached is not None:
             reused += 1

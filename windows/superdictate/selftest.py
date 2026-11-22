@@ -2814,6 +2814,96 @@ def test_instant_start_idle_timeout_releases_the_microphone() -> None:
         _check("off: closed at once", first.closed, True)
 
 
+def test_quiet_tail_segment_is_not_dropped() -> None:
+    """A quiet trailing segment (RMS < 0.02, has_signal == False) must still be
+    transcribed in both the overlap and plain-fallback paths, matching macOS."""
+    import numpy as np
+
+    from . import transcription
+    from .asr import TranscriptionResult
+    from .onnx_host import HostTranscription, HostWord
+    from .segmentation import segment
+
+    sr = 16000
+    loud = np.full(16 * sr, 0.1, dtype=np.float32)
+    pause = np.zeros(1 * sr, dtype=np.float32)
+    quiet_tail = np.full(5 * sr, 0.014, dtype=np.float32)  # below 0.02 RMS cut
+    full = np.concatenate([loud, pause, quiet_tail])
+
+    segs = segment(full, sr)
+    _check("quiet tail: split into 2 segments with quiet tail",
+           (len(segs), segs[0].has_signal, segs[-1].has_signal), (2, True, False))
+
+    class TailModel:
+        generation = 1
+        max_window_seconds = 0.0
+
+        def __init__(self, fail_overlap: bool = False) -> None:
+            self.fail_overlap = fail_overlap
+            self.calls = 0
+
+        def transcribe_words(self, samples):
+            if self.fail_overlap:
+                raise RuntimeError("boom")
+            self.calls += 1
+            idx = self.calls
+            dur = len(samples) / sr
+            return HostTranscription(
+                f"head{idx} tail{idx}", 0.0,
+                (
+                    HostWord(f"head{idx}", 1.0, 1.5),
+                    HostWord(f"tail{idx}", max(2.0, dur - 0.5), dur),
+                ),
+            )
+
+        def transcribe(self, samples, enqueued_at):
+            self.calls += 1
+            return TranscriptionResult(f"plain{self.calls}", len(samples) / sr, 0.0, 0.0)
+
+    overlap_model = TailModel(fail_overlap=False)
+    res_overlap = transcription.transcribe(overlap_model, full, 0.0)
+    _check("quiet tail: overlap path transcribes quiet trailing window",
+           (res_overlap.overlap_path, overlap_model.calls, "tail2" in res_overlap.text),
+           (True, 2, True))
+
+    fallback_model = TailModel(fail_overlap=True)
+    res_fallback = transcription.transcribe(fallback_model, full, 0.0)
+    _check("quiet tail: plain fallback transcribes quiet trailing segment",
+           (res_fallback.overlap_path, fallback_model.calls, res_fallback.text),
+           (False, 2, "plain1 plain2"))
+
+
+def test_recorder_drains_tail_before_halt() -> None:
+    """recording_flow.end() drains in-flight tail blocks before halt()."""
+    import threading
+
+    from . import recording_flow
+
+    with _FakeAudio() as fake:
+        recorder = audio.Recorder()
+        recorder.tail_drain_seconds = 0.06
+        _check("tail drain: start", recorder.start(""), True)
+        stream = fake.stream.instances[0]
+        stream.feed(1.0)
+
+        def delayed_tail() -> None:
+            time.sleep(0.02)
+            stream.feed(2.0)
+
+        t = threading.Thread(target=delayed_tail, daemon=True)
+        t.start()
+
+        class Sounds:
+            def play(self, _event, then=None):
+                # Simulates stop-cue audio arriving after halt().
+                stream.feed(99.0)
+
+        clip = recording_flow.end(recorder, Sounds())
+        t.join(timeout=1.0)
+        _check("tail drain: keeps late in-flight block, drops post-halt stop cue",
+               _values(clip), [1.0, 2.0])
+
+
 def test_start_cue_order_adapts_to_the_measured_open_time() -> None:
     from . import recording_flow
 
@@ -2953,6 +3043,8 @@ _TESTS = [
     test_instant_start_ring_is_short,
     test_instant_start_idle_timeout_releases_the_microphone,
     test_start_cue_order_adapts_to_the_measured_open_time,
+    test_quiet_tail_segment_is_not_dropped,
+    test_recorder_drains_tail_before_halt,
 ]
 
 

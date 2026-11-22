@@ -33,11 +33,17 @@ def begin(recorder, sounds, device: str,
 
 
 def end(recorder, sounds, restore: Optional[Callable[[], None]] = None):
-    """Freeze the clip, play the stop cue, then close the stream.
+    """Drain the driver's tail buffer, freeze the clip, play the stop cue, then close.
 
+    ``drain_tail`` (when implemented) waits briefly while callbacks are still
+    accepted so audio sitting in the Windows driver / PortAudio input buffer
+    arrives before ``halt()`` freezes the clip and the stop cue plays.
     ``restore`` undoes the output mute first, otherwise the cue would be
     played into a muted device.
     """
+    drain = getattr(recorder, "drain_tail", None)
+    if drain is not None:
+        drain()
     recorder.halt()
     if restore is not None:
         restore()

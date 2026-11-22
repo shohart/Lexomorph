@@ -786,7 +786,11 @@ class DictationController(QObject):
         self.level_changed.emit(level)
 
     def _on_auto_stop(self) -> None:
-        log.info("Auto-stopping after %d minutes", audio.MAX_RECORDING_SECONDS // 60)
+        reason = getattr(self.recorder, "auto_stop_reason", "")
+        if reason == "silence":
+            log.info("Auto-stopping after %.1fs of silence", self.recorder.silence_stop_seconds)
+        else:
+            log.info("Auto-stopping after %d minutes", audio.MAX_RECORDING_SECONDS // 60)
         self._action_bridge.actions.emit([Action.RELEASE.value])
 
     # -- transcription while recording --------------------------------
