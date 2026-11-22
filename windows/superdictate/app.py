@@ -257,6 +257,11 @@ class DictationController(QObject):
         self._action_bridge = _ActionBridge()
         self._action_bridge.actions.connect(self._handle_actions,
                                             Qt.ConnectionType.QueuedConnection)
+        # Dedicated pre-start wake thread: when the keyboard hook sees PRESS,
+        # waking this thread starts opening the microphone immediately without
+        # waiting for the Qt event queue or UI-thread setup.
+        self._prestart_event = threading.Event()
+        self._prestart_thread: Optional[threading.Thread] = None
 
     # -- state --------------------------------------------------------
 
@@ -304,6 +309,12 @@ class DictationController(QObject):
         self._worker = threading.Thread(target=self._worker_loop,
                                         name="transcription-worker", daemon=True)
         self._worker.start()
+        self._prestart_thread = threading.Thread(
+            target=self._prestart_loop, name="mic-prestart", daemon=True)
+        self._prestart_thread.start()
+        # Warm PortAudio's device & sample-rate cache in the background without
+        # opening the microphone, so the first cold press skips enumeration.
+        self.recorder.warm_device_cache_async(self.settings.input_device)
 
         # Whether this machine has an Intel NPU decides what the settings
         # offer; asking takes a helper process a second or two, so it is
@@ -339,6 +350,7 @@ class DictationController(QObject):
 
     def shutdown(self) -> None:
         self._terminating = True
+        self._prestart_event.set()
         self._stop_preview()
         self._discard_speculative()
         self.edit_watch.stop()
@@ -439,6 +451,7 @@ class DictationController(QObject):
     def _apply_instant_start(self) -> None:
         self.recorder.configure_warm(self.settings.instant_start_mode,
                                      self.settings.input_device)
+        self.recorder.warm_device_cache_async(self.settings.input_device)
 
     def _save_open_time(self, ema: float) -> None:
         """Remember how slow the microphone is to open (see cue_before_open).
@@ -486,8 +499,27 @@ class DictationController(QObject):
     # -- hotkey plumbing ----------------------------------------------
 
     def _on_hotkey_actions(self, actions) -> None:
-        self._action_bridge.actions.emit(
-            [getattr(action, "value", action) for action in actions])
+        values = [getattr(action, "value", action) for action in actions]
+        # Kick microphone capture off the hook thread immediately so device open
+        # overlaps the Qt event-loop hop, focus capture, and media pause probe.
+        if (Action.PRESS.value in values
+                and self._can_start_recording()
+                and not self.recorder.is_recording):
+            self._prestart_event.set()
+        self._action_bridge.actions.emit(values)
+
+    def _prestart_loop(self) -> None:
+        while not self._terminating:
+            self._prestart_event.wait()
+            self._prestart_event.clear()
+            if self._terminating:
+                return
+            if not self._can_start_recording() or self.recorder.is_recording:
+                continue
+            try:
+                self.recorder.start(self.settings.input_device, prestart=True)
+            except Exception as exc:
+                log.debug("Microphone pre-start failed: %s", exc)
 
     def _handle_actions(self, action_values: list[str]) -> None:
         for value in action_values:
@@ -667,10 +699,10 @@ class DictationController(QObject):
         if not self._can_start_recording():
             self.sounds.play("rejected")
             return
-        # Pausing first: it decides by listening to the output device, which
-        # muting would silence and the start cue would fill with our own tone.
-        if self.settings.pause_media_while_recording:
-            self.media_pause.pause()
+        # Run media-pause probing asynchronously so it never delays microphone
+        # capture; OutputMute waits briefly on ``pause_done`` before muting.
+        pause_done = (self.media_pause.pause_async()
+                      if self.settings.pause_media_while_recording else None)
         # The field the user is in right now is where the text goes, even if
         # they switch windows while speaking (PendingTextInsertionTargetStore
         # on macOS). Captured off the Qt thread; the paste waits for it.
@@ -685,7 +717,7 @@ class DictationController(QObject):
             with self._playback_lock:
                 self._recording_session += 1
                 session = self._recording_session
-            then = lambda: self._mute_after_cue(session)
+            then = lambda: self._mute_after_cue(session, pause_done)
         if not recording_flow.begin(self.recorder, self.sounds,
                                     self.settings.input_device, then=then):
             self._drop_insertion_target()
@@ -753,7 +785,8 @@ class DictationController(QObject):
         self._set_state(AppState.READY)
         log.info("Recording cancelled")
 
-    def _mute_after_cue(self, session: int) -> None:
+    def _mute_after_cue(self, session: int,
+                        pause_done: Optional[threading.Event] = None) -> None:
         """Mute, unless the recording this belongs to is already over.
 
         Runs on the cue's thread, a fraction of a second after the
@@ -764,6 +797,8 @@ class DictationController(QObject):
         happens and the restore undoes it, or the restore happens and the
         mute is skipped.
         """
+        if pause_done is not None:
+            pause_done.wait(timeout=0.15)
         with self._playback_lock:
             if session != self._recording_session:
                 return

@@ -500,7 +500,8 @@ class SettingsWindow(QDialog):
         self._sounds = self._checkbox(capture, "settings_sounds", "play_feedback_sounds")
         self._instant_start = self._combo(
             capture, "settings_instant_start", "instant_start_mode",
-            [("off", i18n.tr("settings_instant_start_off")),
+            [("5sec", i18n.tr("settings_instant_start_5sec")),
+             ("off", i18n.tr("settings_instant_start_off")),
              ("1min", i18n.tr("settings_instant_start_1min")),
              ("always", i18n.tr("settings_instant_start_always"))],
             hint=i18n.tr("settings_instant_start_hint"))

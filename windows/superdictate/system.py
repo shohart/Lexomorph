@@ -181,11 +181,11 @@ KEYEVENTF_KEYUP = 0x0002
 # Anything quieter than this is background hiss from a session that is open
 # but not playing; anything louder is something the user is listening to.
 _AUDIBLE_PEAK = 0.004
-# One reading can land in a gap between words or beats, so a few are taken.
-# The whole probe runs before the recorder opens, so it is kept to 30 ms:
-# any longer and the delay would eat the start of the first word.
-_PEAK_SAMPLES = 3
-_PEAK_INTERVAL = 0.015
+# One reading can land in a gap between words or beats, so two quick readings
+# are taken (10 ms apart). Runs asynchronously in parallel with microphone open
+# so it never delays recording start.
+_PEAK_SAMPLES = 2
+_PEAK_INTERVAL = 0.010
 
 
 class MediaPause:
@@ -243,6 +243,23 @@ class MediaPause:
             except Exception as exc:
                 log.warning("Could not pause playback: %s", exc)
                 self._paused = False
+
+    def pause_async(self) -> threading.Event:
+        """Run :meth:`pause` off the recording-start critical path.
+
+        Returns an event that is set as soon as metering/pausing finishes so
+        :class:`OutputMute` can wait for it without blocking microphone open.
+        """
+        done = threading.Event()
+
+        def work() -> None:
+            try:
+                self.pause()
+            finally:
+                done.set()
+
+        threading.Thread(target=work, name="media-pause", daemon=True).start()
+        return done
 
     def resume(self) -> None:
         with self._lock:

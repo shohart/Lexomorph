@@ -2157,6 +2157,31 @@ def test_recording_flow_drains_before_halt() -> None:
            (out2, order), ("pcm2", ["halt", "stop", "stop_done"]))
 
 
+def test_instant_start_5sec_default_migration() -> None:
+    """5-second idle tail is the default (matching macOS); old 'off' installs
+    migrate once while explicit 'off' afterwards and '1min'/'always' stick."""
+    from .settings import Settings
+
+    work = Path(tempfile.mkdtemp(prefix="sd-instant5s-selftest-"))
+    fresh_path = work / "fresh.json"
+    _check("instant5s: fresh install defaults to 5sec",
+           Settings(fresh_path).instant_start_mode, "5sec")
+
+    legacy_off = work / "legacy_off.json"
+    legacy_off.write_text(json.dumps({"instant_start_mode": "off"}), encoding="utf-8")
+    migrated = Settings(legacy_off)
+    _check("instant5s: legacy default off moves to 5sec once",
+           migrated.instant_start_mode, "5sec")
+    migrated.apply({"instant_start_mode": "off"})
+    _check("instant5s: explicit off after migration sticks",
+           Settings(legacy_off).instant_start_mode, "off")
+
+    legacy_always = work / "legacy_always.json"
+    legacy_always.write_text(json.dumps({"instant_start_mode": "always"}), encoding="utf-8")
+    _check("instant5s: existing always choice is kept",
+           Settings(legacy_always).instant_start_mode, "always")
+
+
 TESTS = [
     test_custom_hotwords_store,
     test_custom_hotwords_window,
@@ -2183,6 +2208,7 @@ TESTS = [
     test_extended_vocabulary_audit,
     test_extended_account_sync,
     test_recording_flow_drains_before_halt,
+    test_instant_start_5sec_default_migration,
 ]
 
 

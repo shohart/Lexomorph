@@ -2937,6 +2937,56 @@ def test_start_cue_order_adapts_to_the_measured_open_time() -> None:
             recorder.stop()
 
 
+def test_fast_capture_optimizations() -> None:
+    """5s idle tail, device/rate cache, WASAPI native-rate-first, and prestart."""
+    import sounddevice as sd
+
+    saved = (sd.InputStream, audio.resolve_device, audio.device_sample_rate,
+             audio.Recorder._open_pending_file)
+    opened: list[int] = []
+    lookups = {"resolve": 0, "rate": 0}
+    try:
+        sd.InputStream = _fake_input_stream(opened, reject=(16000,))
+
+        def fake_resolve(_name):
+            lookups["resolve"] += 1
+            return 3  # concrete WASAPI endpoint index
+
+        def fake_rate(_index):
+            lookups["rate"] += 1
+            return 48000
+
+        audio.resolve_device = fake_resolve
+        audio.device_sample_rate = fake_rate
+        audio.Recorder._open_pending_file = lambda self: None
+
+        recorder = audio.Recorder()
+        recorder.warm_idle_seconds["5sec"] = 0.12
+        recorder.configure_warm("5sec", "")
+
+        # 1. WASAPI endpoint tries native_rate (48 kHz) first -> no failed 16 kHz probe.
+        _check("fast capture: prestart opens at native rate",
+               recorder.start("", prestart=True), True)
+        _check("fast capture: second start() reuses active prestart without reopening",
+               (recorder.start(""), opened), (True, [48000]))
+        first_stream = sd.InputStream.last
+        recorder.stop()
+        _check("fast capture: 5sec keeps stream warm right after stop",
+               first_stream.closed, False)
+        _check("fast capture: 5sec releases mic after idle timeout",
+               _wait(lambda: first_stream.closed), True)
+
+        # 2. Next cold start hits the device/rate cache (no second PortAudio enumeration).
+        _check("fast capture: next cold start succeeds", recorder.start(""), True)
+        _check("fast capture: device & rate lookups cached",
+               (lookups["resolve"], lookups["rate"], opened), (1, 1, [48000, 48000]))
+        recorder.stop()
+        recorder.shutdown()
+    finally:
+        (sd.InputStream, audio.resolve_device, audio.device_sample_rate,
+         audio.Recorder._open_pending_file) = saved
+
+
 def test_recorder_remembers_the_rate_that_opened() -> None:
     import sounddevice as sd
 
@@ -3045,6 +3095,7 @@ _TESTS = [
     test_start_cue_order_adapts_to_the_measured_open_time,
     test_quiet_tail_segment_is_not_dropped,
     test_recorder_drains_tail_before_halt,
+    test_fast_capture_optimizations,
 ]
 
 

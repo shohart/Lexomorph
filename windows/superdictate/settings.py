@@ -294,9 +294,12 @@ _DEFAULTS: dict[str, Any] = {
     "pause_media_while_recording": False,
     "play_feedback_sounds": True,
     "input_device": "",  # empty = system default
-    # Keep the input stream open between dictations: off | 1min | always.
-    # Off by default, it makes Windows show the microphone-in-use indicator.
-    "instant_start_mode": "off",
+    # Keep the input stream open between dictations: 5sec | off | 1min | always.
+    # 5 seconds by default (matching macOS AUDIO_IDLE_STOP_DELAY_SECONDS):
+    # back-to-back dictations start instantly while the mic is released
+    # automatically after 5 seconds of idle time.
+    "instant_start_mode": "5sec",
+    "instant_start_5sec_default_v1": True,
     # EMA of how long opening the stream took, ms (0 = never measured).
     # Written by the recorder, see _RUNTIME_KEYS.
     "mic_open_ms_ema": 0.0,
@@ -451,6 +454,12 @@ class Settings:
                 if str(self._data.get("rewrite_custom_base_url_v1") or "").strip():
                     self._data["rewrite_engine_backend_v1"] = "customEndpoint"
                 self._data["local_rewrite_v1"] = True
+            # Move installs that had the old "off" default to the macOS-parity
+            # 5-second idle release once; explicit "off" chosen afterwards sticks.
+            if "instant_start_5sec_default_v1" not in stored:
+                if self._data.get("instant_start_mode") == "off":
+                    self._data["instant_start_mode"] = "5sec"
+                self._data["instant_start_5sec_default_v1"] = True
 
     def save(self) -> None:
         paths.ensure_directories()
@@ -622,7 +631,7 @@ class Settings:
     @property
     def instant_start_mode(self) -> str:
         value = str(self._get("instant_start_mode"))
-        return value if value in ("off", "1min", "always") else "off"
+        return value if value in ("5sec", "off", "1min", "always") else "5sec"
 
     @property
     def mic_open_ms_ema(self) -> float:
