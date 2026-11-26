@@ -116,6 +116,7 @@ def stylesheet(p: Palette | None = None) -> str:
         font-size: 13px;
     }}
     QDialog, QMainWindow {{ background: {p.window}; }}
+    QLabel {{ background: transparent; }}
 
     #Card {{
         background: {p.card};
@@ -271,5 +272,73 @@ def stylesheet(p: Palette | None = None) -> str:
         border: 1px solid {p.card_border};
         padding: 5px 7px;
         border-radius: 6px;
+    }}
+
+    /* Unified Control Panel & Settings sidebar + segmented pills + footer */
+    #Sidebar {{
+        background: {p.field};
+        border-right: 1px solid {p.card_border};
+    }}
+    #SidebarDivider {{
+        background: {p.card_border};
+        max-height: 1px;
+        min-height: 1px;
+    }}
+    QPushButton#NavItem {{
+        background: transparent;
+        border: none;
+        border-radius: 8px;
+        padding: 7px 10px;
+        text-align: left;
+        color: {p.text_muted};
+        font-weight: 500;
+    }}
+    QPushButton#NavItem:hover {{
+        background: {p.control_hover};
+        color: {p.text};
+    }}
+    QPushButton#NavItem:checked {{
+        background: {p.control};
+        color: {p.text};
+        font-weight: 600;
+    }}
+    QPushButton#SegBtn {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        padding: 6px 14px;
+        color: {p.text_muted};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QPushButton#SegBtn:hover {{
+        background: {p.control_hover};
+        color: {p.text};
+    }}
+    QPushButton#SegBtn:checked {{
+        background: {p.control};
+        border: 1px solid {p.control_border};
+        color: {p.text};
+        font-weight: 600;
+    }}
+    #SegBar {{
+        background: {p.field};
+        border: 1px solid {p.card_border};
+        border-radius: 9px;
+    }}
+    #PageTitle {{
+        color: {p.text};
+        font-size: 18px;
+        font-weight: 700;
+        background: transparent;
+    }}
+    #PageSubtitle {{
+        color: {p.text_muted};
+        font-size: 12px;
+        background: transparent;
+    }}
+    #FooterBar {{
+        background: {p.card};
+        border-top: 1px solid {p.card_border};
     }}
     """

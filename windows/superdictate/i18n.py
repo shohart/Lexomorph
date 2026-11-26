@@ -313,7 +313,7 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "settings_record": ("Записать", "Record"),
     "settings_trigger_mode": ("Режим", "Mode"),
     "settings_trigger_hold": ("Удерживать", "Press and hold"),
-    "settings_trigger_toggle": ("Нажать и нажать снова", "Press to toggle"),
+    "settings_trigger_toggle": ("Нажатием (вкл/выкл)", "Press to toggle"),
     "settings_completion": ("Повторное нажатие", "Second press"),
     "settings_completion_insert": ("Вставить текст", "Insert text"),
     "settings_completion_enter": ("Вставить текст и Enter", "Insert text and press Enter"),
@@ -785,6 +785,62 @@ _STRINGS: dict[str, tuple[str, str]] = {
         "Недостаточно ресурсов для локальной пунктуации",
         "Insufficient hardware for local punctuation",
     ),
+
+    # -- Unified Control Panel & Settings overhaul -------------------------
+    "nav_overview": ("Главная", "Overview"),
+    "nav_dictation": ("Диктовка", "Dictation"),
+    "nav_text": ("Текст и словарь", "Text & Dictionary"),
+    "nav_ai": ("AI-обработка", "AI Processing"),
+    "nav_audio": ("Аудио и запись", "Audio & Input"),
+    "nav_appearance": ("Оформление", "Appearance"),
+    "nav_system": ("Система и аккаунт", "System & Account"),
+    "nav_statistics": ("Статистика", "Statistics"),
+
+    "subtitle_overview": (
+        "Состояние службы, быстрые режимы, синхронизация и статистика.",
+        "Service status, quick mode toggles, sync, and usage summary.",
+    ),
+    "subtitle_dictation": (
+        "Сочетания клавиш, режим активации, язык и история диктовок.",
+        "Keyboard shortcuts, trigger mode, language hint, and history.",
+    ),
+    "subtitle_text": (
+        "Словарь замен, ASR-термины, фильтры слов-паразитов и правила текста.",
+        "Corrections vocabulary, ASR terms, filler words, and text cleanup.",
+    ),
+    "subtitle_ai": (
+        "Коррекция, рерайт, пунктуация, выбор моделей и аппаратное ускорение.",
+        "Correction, rewriting, punctuation, model selection, and acceleration.",
+    ),
+    "subtitle_audio": (
+        "Выбор микрофона, автоостановка при тишине и звуковые сигналы.",
+        "Microphone input, silence auto-stop, and audio feedback.",
+    ),
+    "subtitle_appearance": (
+        "Язык интерфейса и внешний вид плавающей капсулы записи.",
+        "Interface language and floating recording capsule appearance.",
+    ),
+    "subtitle_system": (
+        "Автозапуск, обновления, движок речи, проверка ПК и аккаунт.",
+        "Startup, updates, speech engine, hardware capabilities, and account.",
+    ),
+    "subtitle_statistics": (
+        "Активность диктовки, экономия времени и статистика по устройствам.",
+        "Dictation activity, time saved, and multi-device statistics.",
+    ),
+
+    "sub_corrections": ("Словарь замен", "Vocabulary"),
+    "sub_hotwords": ("ASR-термины", "ASR Terms"),
+    "sub_cleanup": ("Фильтры и числа", "Cleanup & Numbers"),
+    "sub_ai_correction": ("Коррекция", "Correction"),
+    "sub_ai_rewrite": ("Рерайт", "Rewrite"),
+    "sub_ai_punctuation": ("Пунктуация", "Punctuation"),
+    "sub_ai_hardware": ("Модели и хоткеи", "Models & Hotkeys"),
+
+    "staged_unsaved": ("Есть несохранённые изменения", "You have unsaved changes"),
+    "staged_discard": ("Сбросить", "Discard"),
+    "staged_apply": ("Применить", "Apply"),
+    "panel_history_short": ("История", "History"),
 }
 
 

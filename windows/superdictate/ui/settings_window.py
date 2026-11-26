@@ -27,6 +27,7 @@ from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
+    QButtonGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -40,9 +41,9 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QScrollArea,
+    QSizePolicy,
     QSpinBox,
-    QTabWidget,
+    QStackedWidget,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -268,7 +269,7 @@ class Section(QWidget):
         self._row = 0
 
     def add_row(self, label: Optional[str], widget: QWidget,
-                hint: Optional[QWidget] = None) -> None:
+                hint: Optional[QWidget] = None, *, stretch: int = 0) -> None:
         if hint is not None:
             widget = _with_hint(widget, hint, stretch=bool(label))
         if label:
@@ -278,26 +279,94 @@ class Section(QWidget):
             self.grid.addWidget(widget, self._row, 1)
         else:
             self.grid.addWidget(widget, self._row, 0, 1, 2)
+        if stretch > 0:
+            self.grid.setRowStretch(self._row, stretch)
         self._row += 1
 
 
-def _page(*sections: QWidget) -> QWidget:
-    """Wrap sections in a scrollable page so a tall tab never clips."""
-    inner = QWidget()
-    layout = QVBoxLayout(inner)
-    # No side margins: the dialog already insets the tab widget, and a
-    # second inset made the cards look adrift in their own frame.
-    layout.setContentsMargins(0, 12, 0, 0)
-    layout.setSpacing(12)
-    for section in sections:
-        layout.addWidget(section)
-    layout.addStretch(1)
+def _page(*sections: QWidget, stretch_last: bool = False) -> QWidget:
+    """Arrange sections vertically without a scroll area.
 
-    scroll = QScrollArea()
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-    scroll.setWidget(inner)
-    return scroll
+    Windows' redesigned settings pages fit within the minimum window size
+    and stretch proportionally when resized, avoiding nested scrollbars.
+    """
+    inner = QWidget()
+    inner.setObjectName("Plain")
+    layout = QVBoxLayout(inner)
+    layout.setContentsMargins(0, 4, 0, 0)
+    layout.setSpacing(12)
+    for idx, section in enumerate(sections):
+        is_last = idx == len(sections) - 1
+        layout.addWidget(section, 1 if (stretch_last and is_last) else 0)
+    if not stretch_last:
+        layout.addStretch(1)
+    return inner
+
+
+def _page_header(title_key: str, subtitle_key: str) -> QWidget:
+    box = QWidget()
+    box.setObjectName("Plain")
+    col = QVBoxLayout(box)
+    col.setContentsMargins(0, 0, 0, 4)
+    col.setSpacing(2)
+    title = QLabel(i18n.tr(title_key))
+    title.setObjectName("PageTitle")
+    sub = QLabel(i18n.tr(subtitle_key))
+    sub.setObjectName("PageSubtitle")
+    sub.setWordWrap(True)
+    sub.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    col.addWidget(title)
+    col.addWidget(sub)
+    return box
+
+
+def _segmented_bar(items: list[tuple[str, str]],
+                   on_select) -> tuple[QWidget, QButtonGroup]:
+    bar = QWidget()
+    bar.setObjectName("SegBar")
+    bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    row = QHBoxLayout(bar)
+    row.setContentsMargins(3, 3, 3, 3)
+    row.setSpacing(3)
+    group = QButtonGroup(bar)
+    group.setExclusive(True)
+    for idx, (key, label_key) in enumerate(items):
+        btn = QPushButton(i18n.tr(label_key))
+        btn.setObjectName("SegBtn")
+        btn.setCheckable(True)
+        btn.setChecked(idx == 0)
+        btn.setProperty("seg_key", key)
+        btn.clicked.connect(lambda _=False, i=idx: on_select(i))
+        group.addButton(btn, idx)
+        row.addWidget(btn)
+    holder = QWidget()
+    holder.setObjectName("Plain")
+    h = QHBoxLayout(holder)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.addWidget(bar)
+    h.addStretch(1)
+    return holder, group
+
+
+class _TabCompatShim:
+    """Maps legacy 7-tab indices (used by selftest_vocab) to the new stack."""
+
+    _LEGACY_MAP = {
+        0: "dictation",
+        1: "dictation",
+        2: "appearance",
+        3: "text",
+        4: "ai",
+        5: "system",
+        6: "statistics",
+    }
+
+    def __init__(self, window: "SettingsWindow") -> None:
+        self._window = window
+
+    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+        key = self._LEGACY_MAP.get(index, "dictation")
+        self._window.select_section(key)
 
 
 class _SubmitLineEdit(QLineEdit):
@@ -316,15 +385,34 @@ class SettingsWindow(QDialog):
     # A sign-in / sync / sign-out finished on its worker thread:
     # (kind, detail), kind "ok" | "created" | "error".
     _sync_done = Signal(str, str)
+    dirty_changed = Signal(bool)
+    saved = Signal()
+
+    _SECTION_ALIASES = {
+        "hotkeys": "dictation",
+        "dictation": "dictation",
+        "corrections": "text",
+        "text": "text",
+        "postprocessing": "ai",
+        "ai": "ai",
+        "audio": "audio",
+        "appearance": "appearance",
+        "advanced": "system",
+        "system": "system",
+        "statistics": "statistics",
+    }
 
     def __init__(self, settings: Settings, corrections, controller, parent=None,
-                 initial_tab: str | None = None) -> None:
+                 initial_tab: str | None = None, *, embedded: bool = False) -> None:
         super().__init__(parent)
-        self.setWindowTitle(i18n.tr("settings_title"))
-        # Wide enough for all seven tabs without hiding the last one behind
-        # scroll arrows.
-        self.setMinimumSize(820, 640)
-        self.resize(860, 720)
+        self._embedded = embedded
+        self._dirty = False
+        if embedded:
+            self.setWindowFlags(Qt.WindowType.Widget)
+        else:
+            self.setWindowTitle(i18n.tr("settings_title"))
+            self.setMinimumSize(920, 620)
+            self.resize(980, 650)
 
         self._settings = settings
         self._corrections = corrections
@@ -339,84 +427,202 @@ class SettingsWindow(QDialog):
         self._correction_prompt_baseline = str(
             self._draft.get(system_prompt_key("correction")) or "")
         self._palette = palette()
-        self.setStyleSheet(stylesheet(self._palette))
+        if not embedded:
+            self.setStyleSheet(stylesheet(self._palette))
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self._tabs = QTabWidget()
-        self._tabs.setIconSize(icons.icon_size(16))
-        self._tabs.tabBar().setUsesScrollButtons(False)
-        self._tabs.tabBar().setExpanding(False)
-        muted = self._palette.text_muted
-        tabs = (
-            ("hotkeys", "keyboard", "settings_tab_hotkeys", self._build_shortcuts_tab),
-            ("dictation", "mic", "settings_tab_dictation", self._build_dictation_tab),
-            ("appearance", "palette", "settings_tab_appearance", self._build_appearance_tab),
-            ("corrections", "replace", "settings_tab_corrections", self._build_corrections_tab),
-            ("postprocessing", "sparkles", "settings_tab_postprocessing",
-             self._build_postprocessing_tab),
-            ("advanced", "sliders", "settings_tab_advanced", self._build_advanced_tab),
-            ("statistics", "chart", "settings_tab_statistics", self._build_statistics_tab),
-        )
+        self._nav_group: Optional[QButtonGroup] = None
+        self._nav_buttons: dict[str, QPushButton] = {}
+        self._section_keys: list[str] = []
         self._tab_indices: dict[str, int] = {}
-        for tab_key, icon_name, label_key, builder in tabs:
-            idx = self._tabs.addTab(builder(), icons.icon(icon_name, muted, 16),
-                                    i18n.tr(label_key))
-            self._tab_indices[tab_key] = idx
-        if initial_tab and initial_tab in self._tab_indices:
-            self._tabs.setCurrentIndex(self._tab_indices[initial_tab])
-        layout.addWidget(self._tabs)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        sections = (
+            ("dictation", "keyboard", "nav_dictation", self._build_dictation_page),
+            ("text", "replace", "nav_text", self._build_text_page),
+            ("ai", "sparkles", "nav_ai", self._build_ai_page),
+            ("audio", "mic", "nav_audio", self._build_audio_page),
+            ("appearance", "palette", "nav_appearance", self._build_appearance_page),
+            ("system", "sliders", "nav_system", self._build_system_page),
+            ("statistics", "chart", "nav_statistics", self._build_statistics_page),
         )
-        save = buttons.button(QDialogButtonBox.StandardButton.Save)
-        save.setText(i18n.tr("settings_save_restart"))
-        save.setObjectName("Primary")
-        save.setIcon(icons.icon("check", self._palette.accent_text, 16))
-        save.setIconSize(icons.icon_size(16))
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
-            i18n.tr("settings_cancel"))
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
 
-    # -- tabs ---------------------------------------------------------
+        if not embedded:
+            sidebar = QWidget()
+            sidebar.setObjectName("Sidebar")
+            sidebar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            sidebar.setFixedWidth(206)
+            sb_layout = QVBoxLayout(sidebar)
+            sb_layout.setContentsMargins(12, 16, 12, 14)
+            sb_layout.setSpacing(4)
+            title_lbl = QLabel(i18n.tr("settings_title"))
+            title_lbl.setObjectName("PageTitle")
+            title_lbl.setContentsMargins(8, 0, 8, 8)
+            sb_layout.addWidget(title_lbl)
 
-    def _build_shortcuts_tab(self) -> QWidget:
-        keys = Section(i18n.tr("settings_tab_hotkeys"))
-        self._hotkey_button = self._shortcut_row(
-            keys, "settings_primary_hotkey", "hotkey")
-        self._history_hotkey_button = self._shortcut_row(
-            keys, "settings_history_hotkey", "history_hotkey",
-            i18n.tr("settings_history_hotkey_hint"))
-        # The alternate finish, as on macOS: pressed during a recording it
-        # ends it the other way (paste + Enter when the primary only pastes).
-        self._alternate_enabled = self._checkbox(
-            keys, "settings_alternate_enabled", "alternate_completion_enabled",
-            i18n.tr("settings_alternate_hint"))
-        self._enter_hotkey_button = self._shortcut_row(
-            keys, "settings_enter_hotkey", "enter_hotkey")
+            self._nav_group = QButtonGroup(self)
+            self._nav_group.setExclusive(True)
+            for idx, (sec_key, icon_name, label_key, _) in enumerate(sections):
+                btn = QPushButton(i18n.tr(label_key))
+                btn.setObjectName("NavItem")
+                btn.setCheckable(True)
+                btn.setChecked(idx == 0)
+                btn.setIcon(icons.icon(icon_name, self._palette.text_muted, 16))
+                btn.setIconSize(icons.icon_size(16))
+                btn.clicked.connect(lambda _=False, k=sec_key: self.select_section(k))
+                self._nav_group.addButton(btn, idx)
+                self._nav_buttons[sec_key] = btn
+                sb_layout.addWidget(btn)
+            sb_layout.addStretch(1)
+            root.addWidget(sidebar)
 
-        # Post-processing from the keyboard, as on macOS: the toggles and
-        # the rewrite style are where dictation happens, not in this window.
-        processing = Section(i18n.tr("settings_section_processing_keys"),
-                             i18n.tr("settings_section_processing_keys_hint"))
-        self._correction_hotkey_button = self._shortcut_row(
-            processing, "settings_correction_hotkey", "correction_hotkey")
-        self._rewrite_hotkey_button = self._shortcut_row(
-            processing, "settings_rewrite_hotkey", "rewrite_hotkey")
-        self._rewrite_style_hotkey_button = self._shortcut_row(
-            processing, "settings_rewrite_style_hotkey", "rewrite_style_hotkey")
+        right = QWidget()
+        right.setObjectName("Plain")
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(18, 14, 18, 14)
+        right_layout.setSpacing(10)
 
+        self._stack = QStackedWidget()
+        for sec_key, _, _, builder in sections:
+            idx = self._stack.addWidget(builder())
+            self._tab_indices[sec_key] = idx
+            self._section_keys.append(sec_key)
+        right_layout.addWidget(self._stack, 1)
+
+        if not embedded:
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+            )
+            save = buttons.button(QDialogButtonBox.StandardButton.Save)
+            save.setText(i18n.tr("settings_save_restart"))
+            save.setObjectName("Primary")
+            save.setIcon(icons.icon("check", self._palette.accent_text, 16))
+            save.setIconSize(icons.icon_size(16))
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
+                i18n.tr("settings_cancel"))
+            buttons.accepted.connect(self._save)
+            buttons.rejected.connect(self.reject)
+            right_layout.addWidget(buttons)
+
+        root.addWidget(right, 1)
+        self._tabs = _TabCompatShim(self)
+        if initial_tab:
+            self.select_section(initial_tab)
+
+    def select_section(self, key: str) -> None:
+        canonical = self._SECTION_ALIASES.get(key, key)
+        idx = self._tab_indices.get(canonical)
+        if idx is None:
+            return
+        self._stack.setCurrentIndex(idx)
+        btn = self._nav_buttons.get(canonical)
+        if btn is not None:
+            btn.setChecked(True)
+
+    def _set_dirty(self, dirty: bool = True) -> None:
+        if self._dirty != dirty:
+            self._dirty = dirty
+            self.dirty_changed.emit(dirty)
+
+    def _update_draft(self, **kwargs) -> None:
+        self._draft.update(kwargs)
+        self._set_dirty(True)
+
+    def save_changes(self) -> None:
+        self._save()
+
+    # -- section pages ------------------------------------------------
+
+    def _build_dictation_page(self) -> QWidget:
+        # Card 1 (full width): 2x2 tile grid for shortcuts + trigger mode so
+        # long key names ("Shift + Правый Ctrl") never clip.
+        keys_card = QWidget()
+        keys_card.setObjectName("Card")
+        keys_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        keys_outer = QVBoxLayout(keys_card)
+        keys_outer.setContentsMargins(16, 13, 16, 14)
+        keys_outer.setSpacing(10)
+        keys_title = QLabel(i18n.tr("settings_tab_hotkeys"))
+        keys_title.setObjectName("CardTitle")
+        keys_outer.addWidget(keys_title)
+
+        keys_grid = QGridLayout()
+        keys_grid.setHorizontalSpacing(16)
+        keys_grid.setVerticalSpacing(10)
+        keys_grid.setColumnStretch(0, 1)
+        keys_grid.setColumnStretch(1, 1)
+
+        def _hotkey_btn(draft_key: str) -> QPushButton:
+            choice = HotkeyChoice.from_json(self._draft[draft_key],
+                                            getattr(self._settings, draft_key))
+            btn = QPushButton(hotkey_name(choice, i18n.language()))
+            btn.setIcon(icons.icon("keyboard", self._palette.text_muted, 15))
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.clicked.connect(lambda: self._record_shortcut(draft_key, btn))
+            return btn
+
+        def _tile(header_widget: QWidget, control: QWidget) -> QWidget:
+            box = QWidget()
+            box.setObjectName("Plain")
+            v = QVBoxLayout(box)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(5)
+            v.addWidget(header_widget)
+            v.addWidget(control)
+            return box
+
+        # Tile (0,0): Primary hotkey
+        p_lbl = QLabel(i18n.tr("settings_primary_hotkey"))
+        p_lbl.setObjectName("Key")
+        self._hotkey_button = _hotkey_btn("hotkey")
+        keys_grid.addWidget(_tile(p_lbl, self._hotkey_button), 0, 0)
+
+        # Tile (0,1): Alternate completion checkbox + hotkey
+        self._alternate_enabled = QCheckBox(i18n.tr("settings_alternate_enabled"))
+        self._alternate_enabled.setChecked(bool(self._draft.get("alternate_completion_enabled")))
+        self._alternate_enabled.toggled.connect(
+            lambda value: self._update_draft(alternate_completion_enabled=value))
+        alt_head = _with_hint(self._alternate_enabled,
+                              HintIcon(i18n.tr("settings_alternate_hint")),
+                              stretch=False)
+        self._enter_hotkey_button = _hotkey_btn("enter_hotkey")
+        self._enter_hotkey_button.setEnabled(self._alternate_enabled.isChecked())
+        self._alternate_enabled.toggled.connect(self._enter_hotkey_button.setEnabled)
+        keys_grid.addWidget(_tile(alt_head, self._enter_hotkey_button), 0, 1)
+
+        # Tile (1,0): History hotkey
+        h_lbl = QLabel(i18n.tr("settings_history_hotkey"))
+        h_lbl.setObjectName("Key")
+        h_head = _with_hint(h_lbl, HintIcon(i18n.tr("settings_history_hotkey_hint")),
+                            stretch=False)
+        self._history_hotkey_button = _hotkey_btn("history_hotkey")
+        keys_grid.addWidget(_tile(h_head, self._history_hotkey_button), 1, 0)
+
+        # Tile (1,1): Trigger mode
+        t_lbl = QLabel(i18n.tr("settings_trigger_mode"))
+        t_lbl.setObjectName("Key")
+        self._trigger = QComboBox()
+        self._trigger.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._trigger.setMinimumContentsLength(10)
+        self._trigger.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        for val, lbl_key in (
+            (TriggerMode.TOGGLE.value, "settings_trigger_toggle"),
+            (TriggerMode.HOLD.value, "settings_trigger_hold"),
+        ):
+            self._trigger.addItem(i18n.tr(lbl_key), val)
+        t_idx = self._trigger.findData(str(self._draft.get("trigger_mode", "")))
+        self._trigger.setCurrentIndex(t_idx if t_idx >= 0 else 0)
+        self._trigger.currentIndexChanged.connect(
+            lambda _: self._update_draft(trigger_mode=self._trigger.currentData()))
+        keys_grid.addWidget(_tile(t_lbl, self._trigger), 1, 1)
+
+        keys_outer.addLayout(keys_grid)
+
+        # Row 2: Two equal-height cards side by side (3 rows each)
         behaviour = Section(i18n.tr("settings_section_behaviour"))
-        self._trigger = self._combo(
-            behaviour, "settings_trigger_mode", "trigger_mode",
-            [(TriggerMode.TOGGLE.value, i18n.tr("settings_trigger_toggle")),
-             (TriggerMode.HOLD.value, i18n.tr("settings_trigger_hold"))],
-        )
         self._completion = self._combo(
             behaviour, "settings_completion", "primary_completion_behavior",
             [(CompletionBehavior.INSERT.value, i18n.tr("settings_completion_insert")),
@@ -427,15 +633,16 @@ class SettingsWindow(QDialog):
         self._enter_delay.setRange(0, 500)
         self._enter_delay.setSingleStep(10)
         self._enter_delay.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        # No suffix: the row label already carries the unit, and a hard-coded
-        # English one sat badly next to a Russian label.
         self._enter_delay.setValue(int(self._draft["enter_delay_milliseconds"]))
         self._enter_delay.valueChanged.connect(
-            lambda value: self._draft.update(enter_delay_milliseconds=value))
+            lambda value: self._update_draft(enter_delay_milliseconds=value))
         behaviour.add_row(i18n.tr("settings_enter_delay"), self._enter_delay)
-        return _page(keys, behaviour, processing)
+        limits = [("off", i18n.tr("settings_history_off"))]
+        limits += [(value, i18n.tr("settings_history_last", n=value))
+                   for value in ("1", "5", "10")]
+        self._history_limit = self._combo(
+            behaviour, "settings_history_limit", "recent_transcript_limit", limits)
 
-    def _build_dictation_tab(self) -> QWidget:
         recognition = Section(i18n.tr("settings_section_recognition"))
         self._language = self._combo(
             recognition, "settings_language", "dictation_language",
@@ -447,29 +654,37 @@ class SettingsWindow(QDialog):
              (PasteSuffix.NONE.value, i18n.tr("settings_suffix_none")),
              (PasteSuffix.NEWLINE.value, i18n.tr("settings_suffix_newline"))],
         )
-        # The style hint describes the chosen style only: four descriptions
-        # at once made the reader find their own in a paragraph.
         self._text_style_hint = HintIcon()
         self._text_style = QComboBox()
+        self._text_style.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._text_style.setMinimumContentsLength(10)
+        self._text_style.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         for style in (TextStyle.FORMAL, TextStyle.STANDARD,
                       TextStyle.INFORMAL, TextStyle.CASUAL):
             self._text_style.addItem(
                 i18n.tr(f"settings_text_style_{style.value}"), style.value)
         index = self._text_style.findData(str(self._draft.get("text_style", "")))
         self._text_style.setCurrentIndex(index if index >= 0 else 0)
-        self._text_style.currentIndexChanged.connect(self._text_style_changed)
+        self._text_style.currentIndexChanged.connect(
+            lambda _: self._text_style_changed(mark_dirty=True))
         recognition.add_row(i18n.tr("settings_text_style"), self._text_style,
                             self._text_style_hint)
-        self._text_style_changed()
+        self._text_style_changed(mark_dirty=False)
 
-        self._fillers = self._filler_row(recognition)
-        self._digits = self._checkbox(
-            recognition, "settings_numbers_as_digits", "numbers_as_digits",
-            i18n.tr("settings_numbers_as_digits_hint"))
-        self._remove_final_period = self._checkbox(
-            recognition, "settings_remove_final_period", "remove_final_period",
-            i18n.tr("settings_remove_final_period_hint"))
+        cols = QWidget()
+        cols.setObjectName("Plain")
+        grid = QHBoxLayout(cols)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(12)
+        grid.addWidget(behaviour, 1)
+        grid.addWidget(recognition, 1)
 
+        return _page(_page_header("nav_dictation", "subtitle_dictation"),
+                     keys_card, cols)
+
+    def _build_audio_page(self) -> QWidget:
         capture = Section(i18n.tr("settings_section_capture"))
         devices = [("", i18n.tr("settings_device_default"))]
         devices += [(device.name, device.name) for device in audio.list_input_devices()]
@@ -483,21 +698,14 @@ class SettingsWindow(QDialog):
         self._silence_seconds.setRange(1.0, 10.0)
         self._silence_seconds.setSingleStep(0.5)
         self._silence_seconds.setDecimals(1)
-        # Same reason as the stylesheet rule: Qt's native spin arrows do not
-        # follow the theme and looked stuck on.
         self._silence_seconds.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self._silence_seconds.setValue(float(self._draft.get("silence_stop_seconds", 2.5)))
         self._silence_seconds.valueChanged.connect(
-            lambda value: self._draft.update(silence_stop_seconds=value))
+            lambda value: self._update_draft(silence_stop_seconds=value))
         self._silence_seconds.setEnabled(bool(self._draft.get("stop_on_silence")))
         self._stop_on_silence.toggled.connect(self._silence_seconds.setEnabled)
         capture.add_row(i18n.tr("settings_silence_seconds"), self._silence_seconds)
 
-        self._mute = self._checkbox(capture, "settings_mute", "mute_while_recording")
-        self._pause_media = self._checkbox(
-            capture, "settings_pause_media", "pause_media_while_recording",
-            hint=i18n.tr("settings_pause_media_hint"))
-        self._sounds = self._checkbox(capture, "settings_sounds", "play_feedback_sounds")
         self._instant_start = self._combo(
             capture, "settings_instant_start", "instant_start_mode",
             [("5sec", i18n.tr("settings_instant_start_5sec")),
@@ -506,15 +714,15 @@ class SettingsWindow(QDialog):
              ("always", i18n.tr("settings_instant_start_always"))],
             hint=i18n.tr("settings_instant_start_hint"))
 
-        history = Section(i18n.tr("settings_tab_dictation"))
-        limits = [("off", i18n.tr("settings_history_off"))]
-        limits += [(value, i18n.tr("settings_history_last", n=value))
-                   for value in ("1", "5", "10")]
-        self._history_limit = self._combo(
-            history, "settings_history_limit", "recent_transcript_limit", limits)
-        return _page(recognition, capture, history)
+        sound = Section(i18n.tr("nav_audio"))
+        self._mute = self._checkbox(sound, "settings_mute", "mute_while_recording")
+        self._pause_media = self._checkbox(
+            sound, "settings_pause_media", "pause_media_while_recording",
+            hint=i18n.tr("settings_pause_media_hint"))
+        self._sounds = self._checkbox(sound, "settings_sounds", "play_feedback_sounds")
+        return _page(_page_header("nav_audio", "subtitle_audio"), capture, sound)
 
-    def _build_appearance_tab(self) -> QWidget:
+    def _build_appearance_page(self) -> QWidget:
         general = Section(i18n.tr("settings_tab_appearance"))
         self._interface_language = self._combo(
             general, "settings_interface_language", "interface_language",
@@ -522,6 +730,9 @@ class SettingsWindow(QDialog):
         )
         self._waveform = self._checkbox(
             general, "settings_waveform", "show_recording_waveform")
+        self._live_preview = self._checkbox(
+            general, "settings_live_preview", "live_preview",
+            i18n.tr("settings_live_preview_hint"))
 
         hud = Section("HUD")
         self._hud_size = self._combo(
@@ -554,15 +765,22 @@ class SettingsWindow(QDialog):
              (HUDBackgroundStyle.LIGHT.value, i18n.tr("settings_hud_background_light"))],
             hint=i18n.tr("settings_hud_background_hint"),
         )
-        self._live_preview = self._checkbox(
-            hud, "settings_live_preview", "live_preview",
-            i18n.tr("settings_live_preview_hint"))
-        return _page(general, hud)
+        return _page(_page_header("nav_appearance", "subtitle_appearance"), general, hud)
 
-    def _build_corrections_tab(self) -> QWidget:
+    def _build_text_page(self) -> QWidget:
+        sub_stack = QStackedWidget()
+        seg_bar, _ = _segmented_bar(
+            [
+                ("vocab", "sub_corrections"),
+                ("hotwords", "sub_hotwords"),
+                ("cleanup", "sub_cleanup"),
+            ],
+            sub_stack.setCurrentIndex,
+        )
+
+        # Sub-tab 1: Vocabulary / Corrections
         section = Section(i18n.tr("settings_tab_corrections"),
                           i18n.tr("corrections_note"))
-
         self._auto_learn = self._checkbox(
             section, "settings_auto_learn_vocabulary", "auto_learn_vocabulary",
             i18n.tr("settings_auto_learn_vocabulary_hint"))
@@ -581,20 +799,23 @@ class SettingsWindow(QDialog):
         self._corrections_list.setUniformItemSizes(True)
         self._corrections_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._corrections_list.setMinimumHeight(220)
+        self._corrections_list.setMinimumHeight(140)
+        self._corrections_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._corrections_baseline = []
         self._load_corrections()
-        section.add_row(None, self._corrections_list)
+        section.add_row(None, self._corrections_list, stretch=1)
 
         editor = QWidget()
         editor.setObjectName("Plain")
         row = QHBoxLayout(editor)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
-        self._correction_source = QLineEdit()
+        self._correction_source = _SubmitLineEdit()
         self._correction_source.setPlaceholderText(i18n.tr("corrections_source"))
-        self._correction_replacement = QLineEdit()
+        self._correction_replacement = _SubmitLineEdit()
         self._correction_replacement.setPlaceholderText(i18n.tr("corrections_replacement"))
+        self._correction_replacement.returnPressed.connect(self._add_correction)
         add = QPushButton(i18n.tr("corrections_add"))
         add.setIcon(icons.icon("plus", self._palette.text_muted, 15))
         add.clicked.connect(self._add_correction)
@@ -607,10 +828,6 @@ class SettingsWindow(QDialog):
         row.addWidget(remove)
         section.add_row(None, editor)
 
-        # Import/export use the same JSON shape as the macOS sync file, so
-        # a dictionary built up on one machine moves to the other — or to a
-        # Mac — without conversion. Import merges by default: somebody
-        # bringing a colleague's terms across should not lose their own.
         transfer = QWidget()
         transfer.setObjectName("Plain")
         transfer_row = QHBoxLayout(transfer)
@@ -628,7 +845,7 @@ class SettingsWindow(QDialog):
         transfer_row.addWidget(cleanup)
         section.add_row(None, transfer)
 
-        # ASR hotwords (asr-hotwords spec §8): drafts like every setting.
+        # Sub-tab 2: ASR Terms
         hotwords = Section(i18n.tr("settings_asr_hotwords"),
                            i18n.tr("settings_asr_hotwords_hint"))
         self._asr_hotwords = self._checkbox(
@@ -640,14 +857,43 @@ class SettingsWindow(QDialog):
         self._asr_hotwords_strength.setEnabled(self._asr_hotwords.isChecked())
         self._asr_hotwords.toggled.connect(self._asr_hotwords_strength.setEnabled)
 
-        sections = [section, hotwords, self._custom_hotwords_section()]
-        sync = self._sync_section()
-        if sync is not None:
-            sections.append(sync)
+        hotwords_page = QWidget()
+        hotwords_page.setObjectName("Plain")
+        hw_layout = QVBoxLayout(hotwords_page)
+        hw_layout.setContentsMargins(0, 0, 0, 0)
+        hw_layout.setSpacing(12)
+        hw_layout.addWidget(hotwords)
+        hw_layout.addWidget(self._custom_hotwords_section(), 1)
+
+        # Sub-tab 3: Cleanup & Numbers
+        cleanup_section = Section(i18n.tr("sub_cleanup"))
+        self._digits = self._checkbox(
+            cleanup_section, "settings_numbers_as_digits", "numbers_as_digits",
+            i18n.tr("settings_numbers_as_digits_hint"))
+        self._remove_final_period = self._checkbox(
+            cleanup_section, "settings_remove_final_period", "remove_final_period",
+            i18n.tr("settings_remove_final_period_hint"))
+        self._fillers = self._filler_row(cleanup_section)
+        if hasattr(self, "_filler_panel"):
+            self._filler_panel.setVisible(True)
+            self._update_filler_toggle()
+
+        cleanup_page = QWidget()
+        cleanup_page.setObjectName("Plain")
+        cl_layout = QVBoxLayout(cleanup_page)
+        cl_layout.setContentsMargins(0, 0, 0, 0)
+        cl_layout.setSpacing(12)
+        cl_layout.addWidget(cleanup_section)
+        cl_layout.addStretch(1)
+
+        sub_stack.addWidget(section)
+        sub_stack.addWidget(hotwords_page)
+        sub_stack.addWidget(cleanup_page)
+
         changed = getattr(self._controller, "vocabulary_changed", None)
         if changed is not None:
             changed.connect(self._on_vocabulary_changed)
-        return _page(*sections)
+        return _page(_page_header("nav_text", "subtitle_text"), seg_bar, sub_stack, stretch_last=True)
 
     # -- the user's recognition terms (user-hotword-vocabulary spec §7) ---
 
@@ -656,11 +902,13 @@ class SettingsWindow(QDialog):
         self._custom_hotwords_list = QListWidget()
         self._custom_hotwords_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._custom_hotwords_list.setMinimumHeight(180)
+        self._custom_hotwords_list.setMinimumHeight(120)
+        self._custom_hotwords_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._custom_hotwords_list.setAccessibleName(i18n.tr("custom_hotwords"))
         self._custom_hotwords_list.itemChanged.connect(self._custom_hotword_toggled)
         self._load_custom_hotwords()
-        section.add_row(None, self._custom_hotwords_list)
+        section.add_row(None, self._custom_hotwords_list, stretch=1)
 
         editor = QWidget()
         editor.setObjectName("Plain")
@@ -862,26 +1110,28 @@ class SettingsWindow(QDialog):
 
         self._sync_account = QWidget()
         self._sync_account.setObjectName("Plain")
-        account = QVBoxLayout(self._sync_account)
+        account = QHBoxLayout(self._sync_account)
         account.setContentsMargins(0, 0, 0, 0)
-        account.setSpacing(6)
+        account.setSpacing(12)
+        info = QVBoxLayout()
+        info.setContentsMargins(0, 0, 0, 0)
+        info.setSpacing(2)
         self._sync_account_label = QLabel()
+        self._sync_account_label.setObjectName("Value")
         self._sync_account_label.setWordWrap(True)
         self._sync_state_label = QLabel()
         self._sync_state_label.setObjectName("Caption")
         self._sync_state_label.setWordWrap(True)
-        account.addWidget(self._sync_account_label)
-        account.addWidget(self._sync_state_label)
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
+        info.addWidget(self._sync_account_label)
+        info.addWidget(self._sync_state_label)
+        account.addLayout(info, 1)
         self._sync_now_button = QPushButton(i18n.tr("sync_sync_now"))
+        self._sync_now_button.setIcon(icons.icon("refresh", self._palette.text_muted, 14))
         self._sync_now_button.clicked.connect(self._sync_now)
         sign_out = QPushButton(i18n.tr("sync_sign_out"))
         sign_out.clicked.connect(self._sync_sign_out)
-        actions.addWidget(self._sync_now_button)
-        actions.addWidget(sign_out)
-        actions.addStretch(1)
-        account.addLayout(actions)
+        account.addWidget(self._sync_now_button)
+        account.addWidget(sign_out)
         section.add_row(None, self._sync_account)
 
         self._sync_error = QLabel()
@@ -1057,16 +1307,8 @@ class SettingsWindow(QDialog):
 
         QMessageBox.information(self, i18n.tr("app_name"), message)
 
-    def _build_postprocessing_tab(self) -> QWidget:
-        """Correction and rewrite: what runs, where, with which prompt.
-
-        Each stage runs a bundled model in the local host (CPU or GPU) or
-        talks to an OpenAI-compatible endpoint the user names here. The
-        model lists are the macOS pickers'. The weights are gigabytes, so
-        the download is offered here rather than happening on the first
-        dictation that wants them. A build without the host
-        (``build.ps1 -SkipEngines``) shows the endpoint fields only.
-        """
+    def _build_ai_page(self) -> QWidget:
+        """Correction, rewrite, punctuation, and hardware/models in 4 sub-tabs."""
         from ..llm import RewriteStyle
         from ..llm.host import bundled_host_available
         from ..llm.models import CORRECTION_MODELS, PROFILES, REWRITE_MODELS
@@ -1077,6 +1319,18 @@ class SettingsWindow(QDialog):
         engines = [("bundledLocal", i18n.tr("settings_llm_engine_bundled")),
                    ("customEndpoint", i18n.tr("settings_llm_engine_custom"))]
 
+        sub_stack = QStackedWidget()
+        seg_bar, _ = _segmented_bar(
+            [
+                ("correction", "sub_ai_correction"),
+                ("rewrite", "sub_ai_rewrite"),
+                ("punctuation", "sub_ai_punctuation"),
+                ("hardware", "sub_ai_hardware"),
+            ],
+            sub_stack.setCurrentIndex,
+        )
+
+        # Sub-tab 1: Correction
         correction = Section(i18n.tr("settings_correction"),
                              i18n.tr("settings_correction_hint"))
         self._correction_mode = self._combo(
@@ -1085,7 +1339,8 @@ class SettingsWindow(QDialog):
              ("correction", i18n.tr("settings_correction_on"))],
         )
         if bundled:
-            self._combo(correction, "settings_llm_engine", "llm_engine_backend_v1", engines)
+            corr_engine = self._combo(
+                correction, "settings_llm_engine", "llm_engine_backend_v1", engines)
             self._correction_model = self._combo(
                 correction, "settings_correction_model", "correction_bundled_model_v2",
                 [(model.value, i18n.tr(f"llm_model_{model.value}"))
@@ -1095,91 +1350,174 @@ class SettingsWindow(QDialog):
                 correction, self._correction_model, hw, lang)
             self._correction_model.currentIndexChanged.connect(corr_compat_box)
             corr_compat_box()
-        self._endpoint_fields(correction, "llm_custom")
+            corr_ep = self._endpoint_group(correction, "llm_custom")
+            corr_ep.setVisible(corr_engine.currentData() == "customEndpoint")
+            corr_engine.currentIndexChanged.connect(
+                lambda _=0, c=corr_engine, g=corr_ep: g.setVisible(
+                    c.currentData() == "customEndpoint"))
+        else:
+            self._endpoint_fields(correction, "llm_custom")
         self._correction_prompt = self._prompt_editor(
-            correction, "settings_correction_prompt", "correction_system_prompt_v1")
+            correction, "settings_correction_prompt", "correction_system_prompt_v1",
+            stretch=1)
 
-        rewrite = Section(i18n.tr("settings_rewrite"),
-                          i18n.tr("settings_rewrite_hint"))
+        # Sub-tab 2: Rewrite (stacked vertically: settings + styles on top, full-width prompt below)
+        rw_top = Section(i18n.tr("settings_rewrite"),
+                         i18n.tr("settings_rewrite_hint"))
         self._rewrite_enabled = self._checkbox(
-            rewrite, "settings_rewrite_enabled", "rewrite_enabled_v1")
-        # Built-in modes plus the user's own, in one list. Two settings
-        # behind it: a built-in is ``rewrite_style_v1``, a custom mode is
-        # ``rewrite_custom_style_id_v1`` (see ``_select_rewrite_style``).
+            rw_top, "settings_rewrite_enabled", "rewrite_enabled_v1")
         self._rewrite_style = QComboBox()
+        self._rewrite_style.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._rewrite_style.setMinimumContentsLength(10)
+        self._rewrite_style.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._reload_style_combo()
         self._rewrite_style.currentIndexChanged.connect(self._select_rewrite_style)
-        rewrite.add_row(i18n.tr("settings_rewrite_style"), self._rewrite_style)
-        self._custom_styles = CustomStylesBlock(
-            self._controller.styles, self._settings, self._controller,
-            self._palette, self._reload_style_combo)
-        rewrite.add_row(None, self._custom_styles)
-        self._controller.custom_styles_changed.connect(self._on_styles_changed)
+        rw_top.add_row(i18n.tr("settings_rewrite_style"), self._rewrite_style)
         if bundled:
-            self._combo(rewrite, "settings_llm_engine", "rewrite_engine_backend_v1", engines)
+            rw_engine = self._combo(
+                rw_top, "settings_llm_engine", "rewrite_engine_backend_v1", engines)
             self._rewrite_model = self._combo(
-                rewrite, "settings_rewrite_model", "rewrite_bundled_model_v2",
+                rw_top, "settings_rewrite_model", "rewrite_bundled_model_v2",
                 [(model.value, i18n.tr(f"llm_model_{model.value}"))
                  for model in REWRITE_MODELS],
             )
             rw_compat_box = self._model_compat_banner_host(
-                rewrite, self._rewrite_model, hw, lang)
+                rw_top, self._rewrite_model, hw, lang)
             self._rewrite_model.currentIndexChanged.connect(rw_compat_box)
             rw_compat_box()
-        self._endpoint_fields(rewrite, "rewrite_custom")
-        for style in RewriteStyle:
-            self._prompt_editor(
-                rewrite, f"rewrite_style_{style.value}",
-                f"rewrite_system_prompt_{style.value}_v1")
+            rw_ep = self._endpoint_group(rw_top, "rewrite_custom")
+            rw_ep.setVisible(rw_engine.currentData() == "customEndpoint")
+            rw_engine.currentIndexChanged.connect(
+                lambda _=0, c=rw_engine, g=rw_ep: g.setVisible(
+                    c.currentData() == "customEndpoint"))
+        else:
+            self._endpoint_fields(rw_top, "rewrite_custom")
+        self._custom_styles = CustomStylesBlock(
+            self._controller.styles, self._settings, self._controller,
+            self._palette, self._reload_style_combo)
+        rw_top.add_row(None, self._custom_styles)
+        self._controller.custom_styles_changed.connect(self._on_styles_changed)
 
+        rw_prompt_card = Section(i18n.tr("settings_correction_prompt"))
+        prompt_picker = QComboBox()
+        prompt_picker.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        prompt_picker.setMinimumContentsLength(10)
+        prompt_picker.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        prompt_stack = QStackedWidget()
+        for style in RewriteStyle:
+            prompt_picker.addItem(i18n.tr(f"rewrite_style_{style.value}"), style.value)
+            ed = self._make_prompt_editor(f"rewrite_system_prompt_{style.value}_v1")
+            prompt_stack.addWidget(ed)
+        prompt_picker.currentIndexChanged.connect(prompt_stack.setCurrentIndex)
+        rw_prompt_card.add_row(i18n.tr("settings_rewrite_style"), prompt_picker)
+        rw_prompt_card.add_row(None, prompt_stack, stretch=1)
+
+        rw_page = QWidget()
+        rw_page.setObjectName("Plain")
+        rw_stack_v = QVBoxLayout(rw_page)
+        rw_stack_v.setContentsMargins(0, 0, 0, 0)
+        rw_stack_v.setSpacing(12)
+        rw_stack_v.addWidget(rw_top)
+        rw_stack_v.addWidget(rw_prompt_card, 1)
+
+        # Sub-tab 3: Punctuation
         punctuation = self._punctuation_section(hw)
+        punct_page = QWidget()
+        punct_page.setObjectName("Plain")
+        punct_layout = QVBoxLayout(punct_page)
+        punct_layout.setContentsMargins(0, 0, 0, 0)
+        punct_layout.setSpacing(12)
+        punct_layout.addWidget(punctuation)
+        punct_layout.addStretch(1)
+
+        # Sub-tab 4: Models, Hardware & AI Hotkeys (2-column layout)
+        hw_page = QWidget()
+        hw_page.setObjectName("Plain")
+        hw_cols = QHBoxLayout(hw_page)
+        hw_cols.setContentsMargins(0, 0, 0, 0)
+        hw_cols.setSpacing(12)
+
+        hw_left = QWidget()
+        hw_left.setObjectName("Plain")
+        hw_left_v = QVBoxLayout(hw_left)
+        hw_left_v.setContentsMargins(0, 0, 0, 0)
+        hw_left_v.setSpacing(12)
+
+        processing_keys = Section(i18n.tr("settings_section_processing_keys"),
+                                  i18n.tr("settings_section_processing_keys_hint"))
+        self._correction_hotkey_button = self._shortcut_row(
+            processing_keys, "settings_correction_hotkey", "correction_hotkey")
+        self._rewrite_hotkey_button = self._shortcut_row(
+            processing_keys, "settings_rewrite_hotkey", "rewrite_hotkey")
+        self._rewrite_style_hotkey_button = self._shortcut_row(
+            processing_keys, "settings_rewrite_style_hotkey", "rewrite_style_hotkey")
+        hw_left_v.addWidget(processing_keys)
 
         network = Section(i18n.tr("settings_llm_network"),
                           i18n.tr("settings_llm_network_hint"))
         self._llm_proxy = self._checkbox(
             network, "settings_llm_use_system_proxy", "llm_use_system_proxy_v1",
             hint=i18n.tr("settings_llm_use_system_proxy_hint"))
+        hw_left_v.addWidget(network)
 
-        if not bundled:
-            return _page(correction, rewrite, punctuation, network)
+        if bundled:
+            device = Section(i18n.tr("settings_llm_device"),
+                             i18n.tr("settings_llm_device_hint"))
+            self._llm_backend = self._combo(
+                device, "settings_llm_backend", "llm_compute_backend",
+                [("cpu", i18n.tr("settings_llm_backend_cpu")),
+                 ("gpu", i18n.tr("settings_llm_backend_gpu"))],
+            )
+            gpu_status = hw.vulkan_gpu_status(lang)
+            if not gpu_status.available:
+                gpu_idx = self._llm_backend.findData("gpu")
+                if gpu_idx >= 0:
+                    combo_model = self._llm_backend.model()
+                    if isinstance(combo_model, QStandardItemModel):
+                        item = combo_model.item(gpu_idx)
+                        if item is not None:
+                            item.setEnabled(False)
+                if self._llm_backend.currentData() == "gpu":
+                    cpu_idx = self._llm_backend.findData("cpu")
+                    if cpu_idx >= 0:
+                        self._llm_backend.setCurrentIndex(cpu_idx)
+                device.add_row(None, self._compat_banner(
+                    "warning", self._palette.warning,
+                    i18n.tr("hw_banner_gpu_unavailable"), gpu_status.message))
+            hw_left_v.addWidget(device)
+        hw_left_v.addStretch(1)
+        hw_cols.addWidget(hw_left, 1)
 
-        device = Section(i18n.tr("settings_llm_device"),
-                         i18n.tr("settings_llm_device_hint"))
-        self._llm_backend = self._combo(
-            device, "settings_llm_backend", "llm_compute_backend",
-            [("cpu", i18n.tr("settings_llm_backend_cpu")),
-             ("gpu", i18n.tr("settings_llm_backend_gpu"))],
-        )
-        gpu_status = hw.vulkan_gpu_status(lang)
-        if not gpu_status.available:
-            gpu_idx = self._llm_backend.findData("gpu")
-            if gpu_idx >= 0:
-                combo_model = self._llm_backend.model()
-                if isinstance(combo_model, QStandardItemModel):
-                    item = combo_model.item(gpu_idx)
-                    if item is not None:
-                        item.setEnabled(False)
-            if self._llm_backend.currentData() == "gpu":
-                cpu_idx = self._llm_backend.findData("cpu")
-                if cpu_idx >= 0:
-                    self._llm_backend.setCurrentIndex(cpu_idx)
-            device.add_row(None, self._compat_banner(
-                "warning", self._palette.warning,
-                i18n.tr("hw_banner_gpu_unavailable"), gpu_status.message))
+        if bundled:
+            models = Section(i18n.tr("settings_llm_models"),
+                             i18n.tr("settings_llm_models_hint"))
+            self._model_rows = {}
+            files = set()
+            for model in dict.fromkeys(CORRECTION_MODELS + REWRITE_MODELS):
+                pin = PROFILES[model].pin
+                if pin.local_path in files:
+                    continue
+                files.add(pin.local_path)
+                self._model_rows[model] = self._model_row(models, model, PROFILES[model], hw)
+            hw_right = QWidget()
+            hw_right.setObjectName("Plain")
+            hw_right_v = QVBoxLayout(hw_right)
+            hw_right_v.setContentsMargins(0, 0, 0, 0)
+            hw_right_v.setSpacing(12)
+            hw_right_v.addWidget(models)
+            hw_right_v.addStretch(1)
+            hw_cols.addWidget(hw_right, 1)
 
-        models = Section(i18n.tr("settings_llm_models"),
-                         i18n.tr("settings_llm_models_hint"))
-        self._model_rows = {}
-        # One row per file: the vanilla 0.8B is the VoiceScribe base.
-        files = set()
-        for model in dict.fromkeys(CORRECTION_MODELS + REWRITE_MODELS):
-            pin = PROFILES[model].pin
-            if pin.local_path in files:
-                continue
-            files.add(pin.local_path)
-            self._model_rows[model] = self._model_row(models, model, PROFILES[model], hw)
+        sub_stack.addWidget(correction)
+        sub_stack.addWidget(rw_page)
+        sub_stack.addWidget(punct_page)
+        sub_stack.addWidget(hw_page)
 
-        return _page(correction, rewrite, punctuation, network, device, models)
+        return _page(_page_header("nav_ai", "subtitle_ai"), seg_bar, sub_stack, stretch_last=True)
 
     def _reload_style_combo(self) -> None:
         """Rebuild the mode list from the store, keeping the selection.
@@ -1221,6 +1559,32 @@ class SettingsWindow(QDialog):
         self._reload_style_combo()
         self._custom_styles.reload()
 
+    def _endpoint_group(self, section: "Section", prefix: str) -> QWidget:
+        group = QWidget()
+        group.setObjectName("Plain")
+        grid = QGridLayout(group)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+        for row_idx, (suffix, label_key, placeholder, secret) in enumerate((
+                ("base_url_v1", "settings_endpoint_url", "http://127.0.0.1:1234", False),
+                ("api_key_v1", "settings_endpoint_key", i18n.tr("settings_endpoint_key_placeholder"), True),
+                ("model_name_v1", "settings_endpoint_model", "gpt-4o-mini", False))):
+            key = f"{prefix}_{suffix}"
+            lbl = QLabel(i18n.tr(label_key))
+            lbl.setObjectName("Key")
+            field = QLineEdit(str(self._draft.get(key, "") or ""))
+            field.setPlaceholderText(placeholder)
+            if secret:
+                field.setEchoMode(QLineEdit.EchoMode.Password)
+            field.textChanged.connect(
+                lambda value, k=key: self._update_draft(**{k: value.strip()}))
+            grid.addWidget(lbl, row_idx, 0)
+            grid.addWidget(field, row_idx, 1)
+        section.add_row(None, group)
+        return group
+
     def _endpoint_fields(self, section: "Section", prefix: str) -> None:
         """Base URL, API key and model name of one stage's endpoint."""
         for suffix, label_key, placeholder, secret in (
@@ -1233,29 +1597,27 @@ class SettingsWindow(QDialog):
             if secret:
                 field.setEchoMode(QLineEdit.EchoMode.Password)
             field.textChanged.connect(
-                lambda value, k=key: self._draft.update({k: value.strip()}))
+                lambda value, k=key: self._update_draft(**{k: value.strip()}))
             section.add_row(i18n.tr(label_key), field)
 
-    def _prompt_editor(self, section: "Section", label_key: str,
-                       draft_key: str) -> QWidget:
-        """A multi-line override for one built-in prompt.
-
-        Empty means "use the built-in", which is why the placeholder shows
-        the built-in text rather than the field being pre-filled with it:
-        pre-filling would store a copy the moment anything else was saved,
-        and the two platforms would then drift apart silently the next time
-        the built-in changed.
-        """
+    def _make_prompt_editor(self, draft_key: str) -> QWidget:
         from PySide6.QtWidgets import QPlainTextEdit
 
         editor = QPlainTextEdit()
         editor.setPlainText(str(self._draft.get(draft_key, "")))
         editor.setPlaceholderText(i18n.tr("settings_prompt_placeholder"))
-        editor.setMinimumHeight(96)
+        editor.setMinimumHeight(88)
+        editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         editor.textChanged.connect(
-            lambda e=editor, k=draft_key: self._draft.update(
-                {k: e.toPlainText().strip()}))
-        section.add_row(i18n.tr(label_key), editor)
+            lambda e=editor, k=draft_key: self._update_draft(
+                **{k: e.toPlainText().strip()}))
+        return editor
+
+    def _prompt_editor(self, section: "Section", label_key: str,
+                       draft_key: str, *, stretch: int = 0) -> QWidget:
+        """A multi-line override for one built-in prompt."""
+        editor = self._make_prompt_editor(draft_key)
+        section.add_row(i18n.tr(label_key), editor, stretch=stretch)
         return editor
 
     def _compat_banner(self, icon_name: str, color: str, title: str, detail: str) -> QWidget:
@@ -1323,6 +1685,29 @@ class SettingsWindow(QDialog):
 
         return refresh
 
+    def _apply_model_badge(self, badge: QLabel, state: str, size_mb: int,
+                           tooltip: str = "") -> None:
+        unit = "МБ" if i18n.language() == "ru" else "MB"
+        p = self._palette
+        if state == "present":
+            fg, bg, bd = p.ok, "rgba(48, 209, 88, 0.14)", "rgba(48, 209, 88, 0.38)"
+            prefix = "✓"
+            tip = i18n.tr("settings_model_present", size=size_mb)
+        elif state == "unsupported":
+            fg, bg, bd = p.warning, "rgba(255, 159, 10, 0.14)", "rgba(255, 159, 10, 0.38)"
+            prefix = "!"
+            tip = tooltip or i18n.tr("hw_status_limited")
+        else:
+            fg, bg, bd = p.danger, "rgba(255, 69, 58, 0.12)", "rgba(255, 69, 58, 0.35)"
+            prefix = "●"
+            tip = i18n.tr("settings_model_absent", size=size_mb)
+        badge.setText(f"{prefix}  {size_mb} {unit}")
+        badge.setToolTip(tooltip or tip)
+        badge.setStyleSheet(
+            f"color: {fg}; background: {bg}; border: 1px solid {bd}; "
+            "border-radius: 6px; padding: 4px 10px; font-weight: 600; font-size: 12px;"
+        )
+
     def _model_row(self, section: "Section", model, model_profile,
                    hw: Optional[hardware.HardwareProfile] = None) -> QWidget:
         """One model's presence, size and download button."""
@@ -1333,15 +1718,15 @@ class SettingsWindow(QDialog):
         row = QWidget()
         row.setObjectName("Plain")
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(10)
 
         status = QLabel()
-        status.setWordWrap(True)
+        status.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         progress = QProgressBar()
         progress.setRange(0, 100)
         progress.setVisible(False)
-        progress.setMaximumWidth(160)
+        progress.setMaximumWidth(140)
         button = QPushButton(i18n.tr("settings_model_download"))
 
         size_mb = model_profile.pin.size_bytes // (1 << 20)
@@ -1349,24 +1734,24 @@ class SettingsWindow(QDialog):
         compat = (hw.model_compatibility(model.value, i18n.language(),
                                          i18n.tr(f"llm_model_{model.value}"))
                   if hw is not None else hardware.ModelCompatibility("recommended"))
-        if not present and compat.status == "unsupported":
-            status.setText(f"{i18n.tr('settings_model_absent', size=size_mb)} · "
-                           f"{i18n.tr('hw_status_limited')}")
-            status.setStyleSheet(f"color: {self._palette.warning}; background: transparent;")
-            status.setToolTip(compat.reason)
-            button.setEnabled(False)
-            button.setToolTip(compat.reason)
+        if present:
+            self._apply_model_badge(status, "present", size_mb,
+                                    compat.reason if compat.status == "cpu_only" else "")
+            button.setVisible(False)
+        elif compat.status == "unsupported":
+            self._apply_model_badge(status, "unsupported", size_mb, compat.reason)
+            button.setVisible(False)
         else:
-            status.setText(i18n.tr("settings_model_present" if present
-                                   else "settings_model_absent", size=size_mb))
-            if compat.status == "cpu_only":
-                status.setToolTip(compat.reason)
-            button.setEnabled(not present)
+            self._apply_model_badge(status, "absent", size_mb,
+                                    compat.reason if compat.status == "cpu_only" else "")
+            button.setVisible(True)
+            button.setEnabled(True)
         button.clicked.connect(
             lambda _=False, m=model, p=model_profile.pin, st=status,
             pb=progress, bt=button: self._start_download(m, p, st, pb, bt))
 
-        layout.addWidget(status, 1)
+        layout.addWidget(status)
+        layout.addStretch(1)
         layout.addWidget(progress)
         layout.addWidget(button)
         section.add_row(i18n.tr(f"llm_model_{model.value}"), row)
@@ -1400,16 +1785,17 @@ class SettingsWindow(QDialog):
         row = QWidget()
         row.setObjectName("Plain")
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(10)
         status = QLabel()
-        status.setWordWrap(True)
+        status.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         progress = QProgressBar()
         progress.setRange(0, 100)
         progress.setVisible(False)
         progress.setMaximumWidth(160)
         button = QPushButton(i18n.tr("settings_model_download"))
-        layout.addWidget(status, 1)
+        layout.addWidget(status)
+        layout.addStretch(1)
         layout.addWidget(progress)
         layout.addWidget(button)
         section.add_row(i18n.tr("settings_punctuation_files"), row)
@@ -1418,9 +1804,16 @@ class SettingsWindow(QDialog):
             model = str(self._punctuation_model.currentData() or "base")
             size_mb = punctuation.download_bytes(model) // (1 << 20)
             present = punctuation.is_installed(model)
-            status.setText(i18n.tr("settings_model_present" if present
-                                   else "settings_model_absent", size=size_mb))
-            button.setEnabled(punct_status.available and not present and not progress.isVisible())
+            if present:
+                self._apply_model_badge(status, "present", size_mb)
+                button.setVisible(False)
+            elif not punct_status.available:
+                self._apply_model_badge(status, "unsupported", size_mb, punct_status.message)
+                button.setVisible(False)
+            else:
+                self._apply_model_badge(status, "absent", size_mb)
+                button.setVisible(not progress.isVisible())
+                button.setEnabled(True)
 
         self._punctuation_model.currentIndexChanged.connect(refresh)
         button.clicked.connect(lambda _=False: self._start_punctuation_download(
@@ -1505,13 +1898,13 @@ class SettingsWindow(QDialog):
             progress.setVisible(False)
             if state["state"] is DownloadState.READY:
                 size_mb = pin.size_bytes // (1 << 20)
-                status.setText(i18n.tr("settings_model_present", size=size_mb))
-                # The pipeline only complains about a missing model once per
-                # session; the file exists now, so let it speak again.
+                self._apply_model_badge(status, "present", size_mb)
+                button.setVisible(False)
                 postprocessor = getattr(self._controller, "postprocessor", None)
                 if postprocessor is not None:
                     postprocessor.forget_missing(model)
             else:
+                button.setVisible(True)
                 button.setEnabled(True)
                 status.setText(i18n.tr("settings_model_failed",
                                        error=state["message"] or "?"))
@@ -1519,100 +1912,176 @@ class SettingsWindow(QDialog):
         timer.timeout.connect(tick)
         timer.start()
 
-    def _build_advanced_tab(self) -> QWidget:
-        system = Section(i18n.tr("settings_tab_advanced"))
-        self._autostart = self._checkbox(
-            system, "settings_autostart", "start_at_login")
-        self._updates = self._checkbox(
-            system, "settings_check_updates", "check_for_updates")
+    def _build_system_page(self) -> QWidget:
+        # Card 1 (full width): System & Speech Engine in 2 clean columns
+        sys_card = QWidget()
+        sys_card.setObjectName("Card")
+        sys_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        sys_outer = QVBoxLayout(sys_card)
+        sys_outer.setContentsMargins(16, 13, 16, 14)
+        sys_outer.setSpacing(10)
+        sys_title = QLabel(i18n.tr("settings_tab_advanced"))
+        sys_title.setObjectName("CardTitle")
+        sys_outer.addWidget(sys_title)
 
-        # Moved off the control panel, which is a status window, not a
-        # place to run errands from.
+        sys_grid = QGridLayout()
+        sys_grid.setHorizontalSpacing(24)
+        sys_grid.setVerticalSpacing(8)
+        sys_grid.setColumnStretch(0, 0)
+        sys_grid.setColumnStretch(1, 1)
+
+        # Left column of Card 1: autostart, updates, check button
+        left_sys = QWidget()
+        left_sys.setObjectName("Plain")
+        left_sys.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        ls_v = QVBoxLayout(left_sys)
+        ls_v.setContentsMargins(0, 0, 0, 0)
+        ls_v.setSpacing(8)
+        self._autostart = QCheckBox(i18n.tr("settings_autostart"))
+        self._autostart.setChecked(bool(self._draft.get("start_at_login")))
+        self._autostart.toggled.connect(
+            lambda v: self._update_draft(start_at_login=v))
+        self._updates = QCheckBox(i18n.tr("settings_check_updates"))
+        self._updates.setChecked(bool(self._draft.get("check_for_updates")))
+        self._updates.toggled.connect(
+            lambda v: self._update_draft(check_for_updates=v))
         self._update_button = QPushButton(i18n.tr("panel_check_updates"))
         self._update_button.setIcon(icons.icon("download", self._palette.text_muted, 15))
         self._update_button.clicked.connect(self._check_updates)
         self._update_label = self._muted_label("")
-        system.add_row(None, self._update_button)
-        system.add_row(None, self._update_label)
+        upd_row = QHBoxLayout()
+        upd_row.setContentsMargins(0, 0, 0, 0)
+        upd_row.setSpacing(10)
+        upd_row.addWidget(self._update_button)
+        upd_row.addWidget(self._update_label)
+        ls_v.addWidget(self._autostart)
+        ls_v.addWidget(self._updates)
+        ls_v.addLayout(upd_row)
 
-        engine = Section(i18n.tr("panel_model"))
+        # Right column of Card 1: speech model & compute backend
+        right_sys = Section(i18n.tr("panel_model"))
+        right_sys.setObjectName("Plain")
+        right_sys.layout().setContentsMargins(0, 0, 0, 0)
         self._speech_model = self._combo(
-            engine, "settings_speech_model", "speech_model_profile",
+            right_sys, "settings_speech_model", "speech_model_profile",
             [(asr.PROFILE_PARAKEET_ULTRA, i18n.tr("settings_model_parakeet_ultra")),
              (asr.PROFILE_GIGAAM_V3, i18n.tr("settings_model_gigaam_v3"))],
             hint=i18n.tr("settings_speech_model_hint"),
         )
-        # The NPU choice exists only where there is an NPU. A stored "npu"
-        # on a machine without one (settings carried over) stays visible,
-        # so it can be switched back; the app runs it on the CPU meanwhile.
         npu = asr.npu_info()
         if npu is not None or self._draft.get("speech_compute_backend") == asr.BACKEND_NPU:
             npu_label = i18n.tr("settings_speech_backend_npu",
                                 name=(npu or {}).get("name") or "Intel NPU")
             self._speech_backend = self._combo(
-                engine, "settings_speech_backend", "speech_compute_backend",
+                right_sys, "settings_speech_backend", "speech_compute_backend",
                 [(asr.BACKEND_CPU, i18n.tr("settings_speech_backend_cpu")),
                  (asr.BACKEND_NPU, npu_label)],
                 hint=i18n.tr("settings_speech_backend_hint"),
             )
 
+        sys_grid.addWidget(left_sys, 0, 0, Qt.AlignmentFlag.AlignTop)
+        sys_grid.addWidget(right_sys, 0, 1, Qt.AlignmentFlag.AlignTop)
+        sys_outer.addLayout(sys_grid)
+
+        # Card 2 (full width): Account & Sync (horizontal, zero dead vertical space)
+        sync = self._sync_section()
+
+        # Card 3 (full width): Hardware & Compatibility 2x2 tile card
         hw = hardware.current()
         lang = i18n.language()
-        hw_section = Section(i18n.tr("hw_card_title"))
+        hw_card = QWidget()
+        hw_card.setObjectName("Card")
+        hw_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        hw_outer = QVBoxLayout(hw_card)
+        hw_outer.setContentsMargins(16, 13, 16, 14)
+        hw_outer.setSpacing(10)
+        hw_title = QLabel(i18n.tr("hw_card_title"))
+        hw_title.setObjectName("CardTitle")
+        hw_outer.addWidget(hw_title)
+
+        hw_grid = QGridLayout()
+        hw_grid.setHorizontalSpacing(18)
+        hw_grid.setVerticalSpacing(10)
+        hw_grid.setColumnStretch(0, 1)
+        hw_grid.setColumnStretch(1, 1)
+
+        def _hw_tile(title_key: str, text: str, color: str | None = None) -> QWidget:
+            box = QWidget()
+            box.setObjectName("Plain")
+            v = QVBoxLayout(box)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(2)
+            t = QLabel(i18n.tr(title_key))
+            t.setObjectName("Caption")
+            val = QLabel(text)
+            val.setObjectName("Value")
+            val.setWordWrap(True)
+            if color:
+                val.setStyleSheet(f"color: {color}; font-weight: 600; background: transparent;")
+            v.addWidget(t)
+            v.addWidget(val)
+            return box
+
         ram_unit = "ГБ ОЗУ" if lang == "ru" else "GB RAM"
         cores_unit = "ядер" if lang == "ru" else "cores"
-        cpu_val = QLabel(f"{hw.cpu_model} ({hw.cpu_cores} {cores_unit}) · {hw.ram_gb} {ram_unit}")
-        cpu_val.setObjectName("Value")
-        cpu_val.setWordWrap(True)
-        hw_section.add_row(i18n.tr("hw_cpu_ram"), cpu_val)
+        hw_grid.addWidget(
+            _hw_tile("hw_cpu_ram",
+                     f"{hw.cpu_model} ({hw.cpu_cores} {cores_unit}) · {hw.ram_gb} {ram_unit}"),
+            0, 0,
+        )
 
         gpu_st = hw.vulkan_gpu_status(lang)
-        gpu_lbl = QLabel(
-            f"{i18n.tr('hw_status_available')} · {gpu_st.message}" if gpu_st.available
-            else f"{i18n.tr('hw_status_cpu_only')} — {gpu_st.message}"
+        hw_grid.addWidget(
+            _hw_tile("hw_gpu_vulkan",
+                     f"{i18n.tr('hw_status_available')} · {gpu_st.message}" if gpu_st.available
+                     else f"{i18n.tr('hw_status_cpu_only')} — {gpu_st.message}",
+                     self._palette.ok if gpu_st.available else self._palette.warning),
+            0, 1,
         )
-        gpu_lbl.setWordWrap(True)
-        gpu_lbl.setStyleSheet(
-            f"color: {self._palette.ok if gpu_st.available else self._palette.warning}; "
-            "background: transparent;"
-        )
-        hw_section.add_row(i18n.tr("hw_gpu_vulkan"), gpu_lbl)
 
         ai_st = hw.local_llm_status(lang)
-        ai_lbl = QLabel(
-            f"{i18n.tr('hw_status_compatible')} · {ai_st.message}" if ai_st.available
-            else f"{i18n.tr('hw_status_limited')} — {ai_st.message}"
+        hw_grid.addWidget(
+            _hw_tile("hw_local_ai",
+                     f"{i18n.tr('hw_status_compatible')} · {ai_st.message}" if ai_st.available
+                     else f"{i18n.tr('hw_status_limited')} — {ai_st.message}",
+                     self._palette.ok if ai_st.available else self._palette.warning),
+            1, 0,
         )
-        ai_lbl.setWordWrap(True)
-        ai_lbl.setStyleSheet(
-            f"color: {self._palette.ok if ai_st.available else self._palette.warning}; "
-            "background: transparent;"
-        )
-        hw_section.add_row(i18n.tr("hw_local_ai"), ai_lbl)
 
         if hw.npu_name:
-            npu_lbl = QLabel(f"{i18n.tr('hw_status_available')} · {hw.npu_name}")
-            npu_lbl.setWordWrap(True)
-            npu_lbl.setStyleSheet(f"color: {self._palette.ok}; background: transparent;")
-            hw_section.add_row(i18n.tr("hw_npu"), npu_lbl)
+            hw_grid.addWidget(
+                _hw_tile("hw_npu",
+                         f"{i18n.tr('hw_status_available')} · {hw.npu_name}",
+                         self._palette.ok),
+                1, 1,
+            )
 
-        return _page(system, engine, hw_section)
+        hw_outer.addLayout(hw_grid)
+        cards = [sys_card]
+        if sync is not None:
+            cards.append(sync)
+        cards.append(hw_card)
+        return _page(_page_header("nav_system", "subtitle_system"), *cards)
 
-    def _build_statistics_tab(self) -> QWidget:
+    def _build_statistics_page(self) -> QWidget:
         usage = getattr(self._controller, "usage", None)
         if usage is None:
             empty = Section(i18n.tr("settings_tab_statistics"))
             empty.add_row(None, self._muted_label(i18n.tr("history_empty")))
-            return _page(empty)
+            return _page(_page_header("nav_statistics", "subtitle_statistics"), empty)
         self._stats_panel = StatsPanel(
             usage,
             lambda: self._settings.vocabulary_sync_enabled,
         )
-        return _page(self._stats_panel)
+        return _page(_page_header("nav_statistics", "subtitle_statistics"),
+                     self._stats_panel, stretch_last=True)
 
-    def _text_style_changed(self) -> None:
+    def _text_style_changed(self, *, mark_dirty: bool = True) -> None:
         value = str(self._text_style.currentData())
-        self._draft.update(text_style=value)
+        if mark_dirty:
+            self._update_draft(text_style=value)
+        else:
+            self._draft.update(text_style=value)
         self._text_style_hint.set_text(
             i18n.tr(f"settings_text_style_{value}_hint"))
 
@@ -1658,6 +2127,7 @@ class SettingsWindow(QDialog):
         label = QLabel(text)
         label.setObjectName("Caption")
         label.setWordWrap(True)
+        label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         return label
 
     def _color_row(self, section: Section, label_key: str, draft_key: str,
@@ -1665,7 +2135,7 @@ class SettingsWindow(QDialog):
                    hint: Optional[str] = None) -> ColorField:
         spec = ColorSpec.parse(self._draft.get(draft_key), ColorSpec.of(fallback))
         field = ColorField(spec,
-                           lambda value, k=draft_key: self._draft.update({k: value}),
+                           lambda value, k=draft_key: self._update_draft(**{k: value}),
                            self._palette)
         section.add_row(i18n.tr(label_key), field,
                         HintIcon(hint) if hint else None)
@@ -1690,7 +2160,7 @@ class SettingsWindow(QDialog):
         try:
             dialog = ShortcutRecorderDialog(current, self)
             if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected:
-                self._draft[draft_key] = dialog.selected.to_json()
+                self._update_draft(**{draft_key: dialog.selected.to_json()})
                 button.setText(hotkey_name(dialog.selected, i18n.language()))
         finally:
             self._controller.listener.paused = False
@@ -1700,13 +2170,17 @@ class SettingsWindow(QDialog):
                options: list[tuple[str, str]],
                hint: Optional[str] = None) -> QComboBox:
         combo = QComboBox()
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(10)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         for value, label in options:
             combo.addItem(label, value)
         current = str(self._draft.get(draft_key, ""))
         index = combo.findData(current)
         combo.setCurrentIndex(index if index >= 0 else 0)
         combo.currentIndexChanged.connect(
-            lambda _, c=combo, k=draft_key: self._draft.update({k: c.currentData()}))
+            lambda _, c=combo, k=draft_key: self._update_draft(**{k: c.currentData()}))
         section.add_row(i18n.tr(label_key), combo,
                         HintIcon(hint) if hint else None)
         return combo
@@ -1715,7 +2189,7 @@ class SettingsWindow(QDialog):
                   hint: Optional[str] = None) -> QCheckBox:
         box = QCheckBox(i18n.tr(label_key))
         box.setChecked(bool(self._draft.get(draft_key)))
-        box.toggled.connect(lambda value, k=draft_key: self._draft.update({k: value}))
+        box.toggled.connect(lambda value, k=draft_key: self._update_draft(**{k: value}))
         section.add_row(None, box, HintIcon(hint) if hint else None)
         return box
 
@@ -1995,7 +2469,15 @@ class SettingsWindow(QDialog):
                             for key in ("speech_model_profile", "speech_compute_backend"))
         if model_changed:
             self._controller.reload_model()
-        self.accept()
+        self._prompt_baseline = {style: str(self._draft.get(prompt_key(style)) or "")
+                                 for style in PROMPT_STYLES}
+        self._correction_prompt_baseline = str(
+            self._draft.get(system_prompt_key("correction")) or "")
+        self._corrections_baseline = self._current_entries()
+        self._set_dirty(False)
+        self.saved.emit()
+        if not self._embedded:
+            self.accept()
 
 
 class CleanupPreviewDialog(QDialog):

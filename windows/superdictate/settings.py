@@ -209,7 +209,7 @@ CONTRAST_COLOR = AccentColor.CONTRAST.value
 # Matches the macOS DictationLanguage enum: the 25-language Parakeet TDT v3
 # decoder, narrowed to the languages the macOS UI exposes.
 DICTATION_LANGUAGES: list[tuple[str, str]] = [
-    ("auto", "Автоопределение / Auto-detect"),
+    ("auto", "Auto"),
     ("en", "English"),
     ("es", "Español"),
     ("fr", "Français"),

@@ -281,8 +281,8 @@ class BarChart(QWidget):
         self._palette = palette()
         self._entries: list[tuple[date, int, int, float]] = []
         self._metric = "chars"
-        self.setMinimumHeight(124)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(104)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
 
     def set_data(self, by_day: dict, metric: str = "chars") -> None:
@@ -628,8 +628,8 @@ class StatsPanel(QWidget):
             bars_head.addWidget(btn)
         bars_layout.addLayout(bars_head)
         self._bars = BarChart()
-        bars_layout.addWidget(self._bars)
-        layout.addWidget(bars_card)
+        bars_layout.addWidget(self._bars, 1)
+        layout.addWidget(bars_card, 1)
 
         # 3. Side-by-side bottom card: 15-week Heatmap (left) + Summary & Insights (right)
         bottom_card = _card()

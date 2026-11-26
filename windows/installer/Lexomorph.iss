@@ -15,7 +15,7 @@
 ; where it is, as the way back.
 
 #define AppName        "Lexomorph"
-#define AppVersion     "1.0.3"
+#define AppVersion     "1.0.3.1"
 #define AppPublisher   "Lexomorph (formerly SuperDictate Next)"
 #define AppURL         "https://github.com/shohart/SuperDictate-Next"
 #define AppExeName     "Lexomorph.exe"
@@ -44,7 +44,7 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 AppUpdatesURL={#AppURL}/releases
-VersionInfoVersion={#AppVersion}.0
+VersionInfoVersion={#AppVersion}
 VersionInfoDescription={#AppName} setup
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}

@@ -68,6 +68,7 @@ _PATHS: dict[str, str] = {
     "warning": "M12 3.5L2 20.5h20zM12 10v4.5M12 17.5h.01",
     "error": "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 9l6 6M15 9l-6 6",
     "words": "M4 6h16M4 12h16M4 18h10",
+    "home": "M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
 }
 
 _STROKE_TEMPLATE = (

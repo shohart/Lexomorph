@@ -300,9 +300,11 @@ class CustomStylesBlock(QWidget):
         row = QHBoxLayout()
         row.setSpacing(8)
         chip = QLabel()
+        chip.setStyleSheet("background: transparent;")
         chip.setPixmap(icons.swatch(style.color, 14).pixmap(14, 14))
         row.addWidget(chip)
         name = QLabel(style.name)
+        name.setObjectName("Value")
         row.addWidget(name)
         hotkey = QLabel(hotkey_name(style.hotkey, i18n.language()) if style.hotkey
                         else i18n.tr("settings_style_hotkey_none"))

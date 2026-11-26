@@ -284,22 +284,22 @@ class _Windows:
             self._panel = ControlPanel(
                 self._controller, self.show_settings, self.toggle_history
             )
+            self._controller.settings_applied.connect(self._apply_hud_settings)
+        self._panel.show_section("overview")
         self._panel.show()
         self._panel.raise_()
         self._panel.activateWindow()
 
     def show_settings(self, initial_tab: str | None = None) -> None:
-        window = SettingsWindow(
-            self._controller.settings,
-            self._controller.corrections,
-            self._controller,
-            self._panel,
-            initial_tab=initial_tab,
-        )
-        window.exec()
-        if self._panel is not None:
-            self._panel.refresh()
-        self._apply_hud_settings()
+        if self._panel is None:
+            self._panel = ControlPanel(
+                self._controller, self.show_settings, self.toggle_history
+            )
+            self._controller.settings_applied.connect(self._apply_hud_settings)
+        self._panel.show_section(initial_tab or "dictation")
+        self._panel.show()
+        self._panel.raise_()
+        self._panel.activateWindow()
 
     def toggle_history(self) -> None:
         if self._history is None:

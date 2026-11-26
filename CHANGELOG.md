@@ -6,6 +6,13 @@ chronological order. This file covers the release history published on
 
 The format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 1.0.3.1 (2026-11-26) — Windows
+
+### Changed
+- **Unified Control Panel & Settings window (Windows).** Merged the separate Control Panel and Settings dialogs into a single resizable sidebar window (`Overview`, `Dictation`, `Text & Dictionary`, `AI Processing`, `Audio & Input`, `Appearance`, `System & Account`, `Statistics`) with a quick `RU / EN` language toggle, live status indicator, and a contextual bottom bar (`Discard` / `Apply`) for unsaved changes.
+- **Scrollbar-free responsive layout.** Removed `QScrollArea` from working pages, added segmented sub-tabs for `Text & Dictionary` and `AI Processing`, 2×2 tile grids for `Dictation` hotkeys and `Hardware & Compatibility`, and expanding lists/prompt editors/charts that adapt to the window size (minimum `920×620`).
+- **Model status badges & visual polish.** Added color-coded size badges (`✓` green when present, `●` red when absent, `!` yellow when unsupported) in `Punctuation` and `Models & Hotkeys`, fixed label backgrounds inside cards, and stacked `Rewrite` settings and prompt editor vertically.
+
 ## 1.0.3 (2026-11-22)
 
 ### Added
