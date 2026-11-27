@@ -56,10 +56,26 @@ REQUEST_TIMEOUT_SECONDS = 180.0
 # One opener for the whole module: build_opener with an empty ProxyHandler
 # disables proxy lookup entirely. See this module's docstring.
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-#: For remote endpoints: urllib's default handlers, i.e. the system proxy
-#: (WinINET settings on Windows, *_PROXY variables elsewhere) and its bypass
-#: list.
-_REMOTE_OPENER = urllib.request.build_opener()
+
+
+class _SystemProxyOpener:
+    """Opener that reads the current OS/environment proxy on each request.
+
+    ``urllib.request.build_opener()`` caches ``getproxies()`` once at
+    construction time, which would freeze whatever VPN/proxy was active at
+    app startup. Building per-request picks up proxy toggles immediately.
+    """
+
+    def open(self, fullurl, data=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler(urllib.request.getproxies())
+        )
+        return opener.open(fullurl, data=data, timeout=timeout)
+
+
+#: For remote endpoints: reads the current system proxy (WinINET settings on
+#: Windows, *_PROXY variables elsewhere) and its bypass list on each request.
+_REMOTE_OPENER = _SystemProxyOpener()
 
 _LOCAL_HOST_NAMES = {"localhost", "::1", "0.0.0.0"}
 # Explicit LAN ranges rather than ``ipaddress.is_private``: the latter also

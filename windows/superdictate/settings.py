@@ -293,6 +293,7 @@ _DEFAULTS: dict[str, Any] = {
     "mute_while_recording": False,
     "pause_media_while_recording": False,
     "play_feedback_sounds": True,
+    "feedback_sound_pack": "default",
     "input_device": "",  # empty = system default
     # Keep the input stream open between dictations: 5sec | off | 1min | always.
     # 5 seconds by default (matching macOS AUDIO_IDLE_STOP_DELAY_SECONDS):
@@ -623,6 +624,13 @@ class Settings:
     @property
     def play_feedback_sounds(self) -> bool:
         return bool(self._get("play_feedback_sounds"))
+
+    @property
+    def feedback_sound_pack(self) -> str:
+        value = str(self._get("feedback_sound_pack") or "default")
+        return value if value in (
+            "default", "focus", "select", "check", "redo", "open", "start"
+        ) else "default"
 
     @property
     def input_device(self) -> str:

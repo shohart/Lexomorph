@@ -66,7 +66,8 @@ datas = []
 datas += [("assets/Lexomorph.png", "assets")]
 # The recording cues are played straight off disk by winsound.
 datas += [("assets/record-start.wav", "assets"),
-          ("assets/record-stop.wav", "assets")]
+          ("assets/record-stop.wav", "assets"),
+          ("assets/cues", "assets/cues")]
 datas += [("onnx-asr", "onnx-asr")]
 # The pinned catalog of the NPU models (onnx_models.openvino_catalog_path).
 datas += [("assets/openvino-models.json", "assets")]

@@ -841,6 +841,15 @@ _STRINGS: dict[str, tuple[str, str]] = {
     "staged_discard": ("Сбросить", "Discard"),
     "staged_apply": ("Применить", "Apply"),
     "panel_history_short": ("История", "History"),
+    "settings_sound_pack": ("Вариант звука", "Sound style"),
+    "sound_pack_default": ("Классический", "Classic"),
+    "sound_pack_focus": ("Focus / Long Press", "Focus / Long Press"),
+    "sound_pack_select": ("Select / Deselect", "Select / Deselect"),
+    "sound_pack_check": ("Check / Uncheck", "Check / Uncheck"),
+    "sound_pack_redo": ("Redo / Undo", "Redo / Undo"),
+    "sound_pack_open": ("Open / Close", "Open / Close"),
+    "sound_pack_start": ("Start / Stop", "Start / Stop"),
+    "sound_pack_preview": ("Прослушать", "Preview"),
 }
 
 

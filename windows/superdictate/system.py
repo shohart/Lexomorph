@@ -22,6 +22,7 @@ import ctypes.wintypes as wt
 import io
 import math
 import os
+import queue
 import struct
 import sys
 import threading
@@ -328,18 +329,68 @@ def _cue_file(event: str) -> bytes:
         return b""
 
 
+def _wav_to_pcm(data: bytes) -> tuple[object, int]:
+    """Decode a 16-bit PCM WAV byte buffer into ``(float32[N, 2], samplerate)``."""
+    import numpy as np
+
+    with wave.open(io.BytesIO(data), "rb") as w:
+        sr = w.getframerate()
+        ch = w.getnchannels()
+        raw = w.readframes(w.getnframes())
+    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    if ch == 1:
+        pcm = np.column_stack((pcm, pcm))
+    else:
+        pcm = pcm.reshape(-1, ch)[:, :2]
+    return np.ascontiguousarray(pcm, dtype=np.float32), sr
+
+
+def _resample_stereo(pcm, src_sr: int, dst_sr: int):
+    import numpy as np
+
+    if src_sr == dst_sr or len(pcm) == 0:
+        return pcm
+    n_out = max(1, int(round(len(pcm) * dst_sr / src_sr)))
+    x_old = np.linspace(0.0, 1.0, len(pcm), endpoint=False)
+    x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
+    left = np.interp(x_new, x_old, pcm[:, 0])
+    right = np.interp(x_new, x_old, pcm[:, 1])
+    return np.ascontiguousarray(np.column_stack((left, right)), dtype=np.float32)
+
+
+def _wasapi_output_device() -> tuple[Optional[int], int]:
+    """Return ``(device_index, default_samplerate)`` preferring WASAPI."""
+    import sounddevice as sd
+
+    try:
+        for api in sd.query_hostapis():
+            if "wasapi" in str(api.get("name", "")).lower():
+                idx = api.get("default_output_device", -1)
+                if isinstance(idx, int) and idx >= 0:
+                    info = sd.query_devices(idx)
+                    return idx, int(info.get("default_samplerate") or 48000)
+    except Exception:
+        pass
+    try:
+        idx = sd.default.device[1]
+        if isinstance(idx, int) and idx >= 0:
+            info = sd.query_devices(idx)
+            return idx, int(info.get("default_samplerate") or 48000)
+    except Exception:
+        pass
+    return None, 48000
+
+
+_CUE_PACKS = ("focus", "select", "check", "redo", "open", "start")
+
+
 class Sounds:
-    """Short non-blocking cues for start / stop / error.
+    """Zero-latency non-blocking cues for start / stop / error via WASAPI.
 
-    Start and stop play bundled WAV files, the product's own recording
-    cue and the same cue reversed, so the two are obviously a pair and
-    obviously opposite. They used to be Windows system event sounds,
-    which meant "recording started" was whatever the user's theme
-    assigned to Asterisk: often a long chime, sometimes the same sound as
-    an error dialog, and on a silent theme nothing at all.
-
-    Error and rejected stay synthesised. They fire while the user is
-    already annoyed and want to be plain and short, not branded.
+    Keeps a lightweight PortAudio/WASAPI ``OutputStream`` callback running
+    while feedback sounds are enabled so playing a cue never pays device
+    wake-up latency (1-2s on laptop audio codecs) and never clips the tail
+    by closing the stream prematurely.
     """
 
     _FILES = {
@@ -351,70 +402,326 @@ class Sounds:
         "rejected": ((420, 55),),
     }
 
-    def __init__(self, enabled: bool = True) -> None:
-        self.enabled = enabled
-        # Read the bundled cues now, not at the first hotkey press.
-        threading.Thread(target=self._preload, name="sound-preload",
-                         daemon=True).start()
+    _DEFAULT_IDLE_SECONDS = 5.0
+    _WARMUP_PAD_SECONDS = 0.085
 
-    @classmethod
-    def _preload(cls) -> None:
-        for event in cls._FILES:
+    def __init__(self, enabled: bool = True,
+                 enabled_getter: Optional[Callable[[], bool]] = None,
+                 pack_getter: Optional[Callable[[], str]] = None,
+                 idle_seconds_getter: Optional[Callable[[], Optional[float]]] = None) -> None:
+        self._enabled = bool(enabled)
+        self._enabled_getter = enabled_getter
+        self._pack_getter = pack_getter
+        self._idle_seconds_getter = idle_seconds_getter
+        self._pcm_cache: dict[tuple[str, str], tuple[object, int]] = {}
+        self._out_device: Optional[int] = None
+        self._out_sr: int = 48000
+        self._stream = None
+        self._stream_started_at: float = 0.0
+        self._stream_lock = threading.Lock()
+        self._play_lock = threading.Lock()
+        self._idle_timer: Optional[threading.Timer] = None
+        self._active_pcm = None
+        self._active_pos: int = 0
+        self._active_then: Optional[Callable[[], None]] = None
+        self._ready = False
+        self._closed = False
+        self._preload_thread = threading.Thread(
+            target=self._init_audio, name="sound-init", daemon=True
+        )
+        self._preload_thread.start()
+        import weakref
+        ref = weakref.ref(self)
+        atexit.register(lambda r=ref: (s := r()) and s.close())
+
+    def close(self) -> None:
+        self._closed = True
+        self._cancel_idle_timer()
+        with self._play_lock:
+            self._active_pcm = None
+            self._active_pos = 0
+            self._active_then = None
+        self._close_stream()
+
+    def _cancel_idle_timer(self) -> None:
+        timer, self._idle_timer = self._idle_timer, None
+        if timer is not None:
+            timer.cancel()
+
+    def _idle_seconds(self) -> Optional[float]:
+        if self._idle_seconds_getter is not None:
+            return self._idle_seconds_getter()
+        return self._DEFAULT_IDLE_SECONDS
+
+    def refresh_idle_policy(self) -> None:
+        """Apply updated instant-start idle policy to the sound stream."""
+        if self._closed or not self._is_enabled():
+            return
+        if self._idle_seconds() is None:
+            self.warm_async()
+        elif self._stream is not None:
+            self._schedule_idle_close()
+
+    def _schedule_idle_close(self) -> None:
+        self._cancel_idle_timer()
+        if self._closed:
+            return
+        delay = self._idle_seconds()
+        if delay is None:
+            return
+        interval = max(0.2, float(delay))
+        timer = threading.Timer(interval, self._on_idle_timeout)
+        timer.daemon = True
+        timer.name = "sound-idle-close"
+        self._idle_timer = timer
+        timer.start()
+
+    def _on_idle_timeout(self) -> None:
+        with self._play_lock:
+            if self._active_pcm is not None:
+                self._schedule_idle_close()
+                return
+        self._close_stream()
+
+    def warm_async(self) -> None:
+        """Pre-warm the WASAPI output stream in the background (e.g. on key press)."""
+        if self._closed or not self._is_enabled():
+            return
+        if self._stream is not None:
+            self._schedule_idle_close()
+            return
+        threading.Thread(target=self._warm_sync, name="sound-warm", daemon=True).start()
+
+    def _warm_sync(self) -> None:
+        if not self._ready:
+            self._preload_thread.join(timeout=2.0)
+        if not self._closed and self._is_enabled():
+            if self._ensure_stream():
+                self._schedule_idle_close()
+
+    @property
+    def enabled(self) -> bool:
+        if self._enabled_getter is not None:
+            return bool(self._enabled_getter())
+        return bool(self._enabled)
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = bool(value)
+        if not self._enabled:
+            with self._play_lock:
+                self._active_pcm = None
+                self._active_pos = 0
+                then, self._active_then = self._active_then, None
+            if then is not None:
+                threading.Thread(target=then, name="after-cue", daemon=True).start()
+            self._close_stream()
+        else:
+            threading.Thread(target=self._ensure_stream, name="sound-open", daemon=True).start()
+
+    def _is_enabled(self) -> bool:
+        return self.enabled
+
+    def _current_pack(self) -> str:
+        if self._pack_getter is not None:
+            return str(self._pack_getter() or "default")
+        return "default"
+
+    def _init_audio(self) -> None:
+        dev, sr = _wasapi_output_device()
+        self._out_device = dev
+        self._out_sr = sr
+        for event in self._FILES:
             try:
-                _cue_file(event)
+                data = _cue_file(event)
+                if data:
+                    pcm, wav_sr = _wav_to_pcm(data)
+                    self._pcm_cache[("default", event)] = (_resample_stereo(pcm, wav_sr, sr), sr)
             except Exception as exc:
                 log.debug("Could not preload the %s cue: %s", event, exc)
+        for pack in _CUE_PACKS:
+            for event in ("start", "stop"):
+                try:
+                    path = paths.resource_path("assets", "cues", f"{pack}-{event}.wav")
+                    if path.is_file():
+                        pcm, wav_sr = _wav_to_pcm(path.read_bytes())
+                        self._pcm_cache[(pack, event)] = (_resample_stereo(pcm, wav_sr, sr), sr)
+                except Exception as exc:
+                    log.debug("Could not preload %s/%s cue: %s", pack, event, exc)
+        for event, segments in self._TONES.items():
+            try:
+                pcm, wav_sr = _wav_to_pcm(_cue(segments))
+                self._pcm_cache[("default", event)] = (_resample_stereo(pcm, wav_sr, sr), sr)
+            except Exception as exc:
+                log.debug("Could not preload the %s tone: %s", event, exc)
+        self._ready = True
+
+    def _audio_callback(self, outdata, frames: int, _time, _status) -> None:
+        then_to_call: Optional[Callable[[], None]] = None
+        with self._play_lock:
+            pcm = self._active_pcm
+            if pcm is None:
+                outdata.fill(0.0)
+                return
+            pos = self._active_pos
+            rem = len(pcm) - pos
+            if rem <= 0:
+                outdata.fill(0.0)
+                self._active_pcm = None
+                self._active_pos = 0
+                then_to_call, self._active_then = self._active_then, None
+            elif rem >= frames:
+                outdata[:] = pcm[pos:pos + frames]
+                self._active_pos = pos + frames
+                if self._active_pos >= len(pcm):
+                    self._active_pcm = None
+                    self._active_pos = 0
+                    then_to_call, self._active_then = self._active_then, None
+            else:
+                outdata[:rem] = pcm[pos:]
+                outdata[rem:].fill(0.0)
+                self._active_pcm = None
+                self._active_pos = 0
+                then_to_call, self._active_then = self._active_then, None
+        if then_to_call is not None:
+            threading.Thread(target=then_to_call, name="after-cue", daemon=True).start()
+
+    def _ensure_stream(self) -> bool:
+        import sounddevice as sd
+
+        if self._closed or not self._ready:
+            return False
+        with self._stream_lock:
+            if self._closed:
+                return False
+            if self._stream is not None:
+                try:
+                    if self._stream.active:
+                        return True
+                except Exception:
+                    pass
+                self._close_stream_locked()
+            try:
+                stream = sd.OutputStream(
+                    device=self._out_device,
+                    samplerate=self._out_sr,
+                    channels=2,
+                    dtype="float32",
+                    blocksize=512,
+                    latency="low",
+                    callback=self._audio_callback,
+                )
+                stream.start()
+                self._stream = stream
+                self._stream_started_at = time.monotonic()
+                return True
+            except Exception as exc:
+                log.debug("Could not open persistent WASAPI output stream: %s", exc)
+                self._stream = None
+                return False
+
+    def _close_stream_locked(self) -> None:
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+
+    def _close_stream(self) -> None:
+        with self._stream_lock:
+            self._close_stream_locked()
+
+    def _play_winsound_fallback(self, event: str, blocking: bool) -> None:
+        import winsound
+
+        if event in self._FILES:
+            path = str(paths.resource_path("assets", self._FILES[event]))
+            if os.path.exists(path):
+                flags = winsound.SND_FILENAME | winsound.SND_NODEFAULT
+                if not blocking:
+                    flags |= winsound.SND_ASYNC
+                winsound.PlaySound(path, flags)
+                return
+        segments = self._TONES.get(event)
+        if segments is not None:
+            winsound.PlaySound(_cue(segments), winsound.SND_MEMORY | winsound.SND_NODEFAULT)
+
+    def _schedule_pcm(self, pcm, then: Optional[Callable[[], None]]) -> None:
+        if not self._ensure_stream():
+            # Fallback if audio output stream could not be opened.
+            if then is not None:
+                threading.Thread(target=then, name="after-cue", daemon=True).start()
+            return
+        # Wait-free hardware unmute pad: a freshly started WASAPI OutputStream
+        # takes ~60-85 ms for the DAC/amp to unmute, so prepend silent frames
+        # instead of losing the attack of short cues.
+        elapsed = time.monotonic() - self._stream_started_at
+        if 0.0 <= elapsed < self._WARMUP_PAD_SECONDS:
+            import numpy as np
+
+            pad_frames = int(self._out_sr * (self._WARMUP_PAD_SECONDS - elapsed))
+            if pad_frames > 0:
+                pcm = np.ascontiguousarray(
+                    np.vstack((np.zeros((pad_frames, 2), dtype=np.float32), pcm)),
+                    dtype=np.float32,
+                )
+        old_then: Optional[Callable[[], None]] = None
+        with self._play_lock:
+            old_then = self._active_then
+            self._active_pcm = pcm
+            self._active_pos = 0
+            self._active_then = then
+        self._schedule_idle_close()
+        if old_then is not None:
+            threading.Thread(target=old_then, name="after-cue", daemon=True).start()
 
     def play(self, event: str, then: Optional[Callable[[], None]] = None) -> None:
-        """Play a cue, and run ``then`` once it has finished sounding.
-
-        ``then`` exists for one caller: muting the system output at the
-        start of a recording. The mute silences the speakers, so a cue
-        played into it is a cue nobody hears; waiting for the last sample
-        is the difference between a start sound and no start sound at all.
-
-        It runs on the cue's own thread, never on the caller's, and it runs
-        even when sounds are switched off or the cue could not be played —
-        whatever it is meant to do still has to happen.
-        """
-        if not self.enabled:
+        """Play a cue, and run ``then`` once it has finished sounding."""
+        if not self._is_enabled():
             if then is not None:
-                threading.Thread(target=then, name="after-cue",
-                                 daemon=True).start()
+                threading.Thread(target=then, name="after-cue", daemon=True).start()
+            return
+        pack = self._current_pack()
+        cached = self._pcm_cache.get((pack, event)) or self._pcm_cache.get(("default", event))
+        if cached is not None and self._ready and self._stream is not None:
+            self._schedule_pcm(cached[0], then)
             return
 
-        blocking = then is not None
-
-        def worker() -> None:
-            try:
-                import winsound
-
-                # SND_ASYNC returns as soon as playback starts; without it
-                # PlaySound returns when the sound is over, which is what
-                # a follow-up action has to wait for.
-                mode = 0 if blocking else winsound.SND_ASYNC
-                if event in self._FILES:
-                    data = _cue_file(event)
-                    if data:
-                        # From memory: no disk read between the key press
-                        # and the sound. The lru_cache keeps the buffer
-                        # alive for SND_ASYNC.
-                        winsound.PlaySound(data, winsound.SND_MEMORY | mode)
-                        return
-                    log.warning("Cue %s is missing from the build", event)
-                segments = self._TONES.get(event)
-                if segments is None:
-                    return
-                # SND_MEMORY with SND_ASYNC needs the buffer to outlive the
-                # call; the lru_cache is what keeps it alive.
-                winsound.PlaySound(_cue(segments), winsound.SND_MEMORY | mode)
-            except Exception as exc:
-                log.debug("Could not play the %s cue: %s", event, exc)
-            finally:
+        def _deferred() -> None:
+            if not self._ready:
+                self._preload_thread.join(timeout=2.0)
+            c = self._pcm_cache.get((pack, event)) or self._pcm_cache.get(("default", event))
+            if c is not None and self._ensure_stream():
+                self._schedule_pcm(c[0], then)
+            else:
+                try:
+                    self._play_winsound_fallback(event, blocking=(then is not None))
+                except Exception as exc:
+                    log.debug("Fallback cue %s/%s failed: %s", pack, event, exc)
                 if then is not None:
                     then()
 
-        threading.Thread(target=worker, name="sound", daemon=True).start()
+        threading.Thread(target=_deferred, name="sound-play", daemon=True).start()
+
+    def preview_pack(self, pack: str) -> None:
+        """Play the full start + pause + stop pair from ``pack`` without clipping."""
+        def _run() -> None:
+            import numpy as np
+
+            if not self._ready:
+                self._preload_thread.join(timeout=2.0)
+            s_entry = self._pcm_cache.get((pack, "start")) or self._pcm_cache.get(("default", "start"))
+            e_entry = self._pcm_cache.get((pack, "stop")) or self._pcm_cache.get(("default", "stop"))
+            if s_entry is None or e_entry is None:
+                return
+            sr = s_entry[1]
+            gap = np.zeros((max(1, int(sr * 0.18)), 2), dtype=np.float32)
+            combined = np.ascontiguousarray(np.vstack((s_entry[0], gap, e_entry[0])), dtype=np.float32)
+            self._schedule_pcm(combined, None)
+
+        threading.Thread(target=_run, name="sound-preview", daemon=True).start()
 
 
 # -- autostart -----------------------------------------------------------

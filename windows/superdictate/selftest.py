@@ -2624,6 +2624,7 @@ def test_sound_cue_does_not_block_the_caller() -> None:
 
     real = winsound.PlaySound
     winsound.PlaySound = lambda sound, flags: time.sleep(0.3)
+    sounds = None
     try:
         sounds = system.Sounds(True)
         for event in ("start", "stop", "error"):
@@ -2635,6 +2636,8 @@ def test_sound_cue_does_not_block_the_caller() -> None:
                all(isinstance(system._cue_file(e), bytes) and system._cue_file(e)
                    for e in ("start", "stop")), True)
     finally:
+        if sounds is not None:
+            sounds.close()
         winsound.PlaySound = real
 
 

@@ -43,9 +43,9 @@ TAIL_DRAIN_MAX_SECONDS = 0.45
 TAIL_DRAIN_MARGIN_SECONDS = 0.10
 # Cached PortAudio device index + native rate TTL (seconds). Invalidated
 # immediately if opening fails (e.g. a USB microphone was unplugged).
-DEVICE_CACHE_TTL_SECONDS = 30.0
+DEVICE_CACHE_TTL_SECONDS = 120.0
 RECENT_OPEN_FAILURE_SECONDS = 0.5
-OPEN_FAST_MS = 60.0
+OPEN_FAST_MS = 100.0
 OPEN_EMA_ALPHA = 0.3
 
 PENDING_MAGIC = b"SDPD"
@@ -481,9 +481,24 @@ class Recorder:
                  ", warm stream" if self.trace.get("warm") else "")
         return True
 
+    def _tail_is_quiet(self) -> bool:
+        """True if the last ~128 ms of captured audio is already below speech threshold."""
+        with self._lock:
+            tail = self._chunks[-4:] if self._chunks else []
+        if not tail:
+            return True
+        try:
+            recent = np.concatenate(tail)
+            rms = float(np.sqrt(np.mean(np.square(recent))))
+            return rms < SILENCE_RMS_THRESHOLD
+        except Exception:
+            return False
+
     def _tail_drain_duration(self) -> float:
         if self.tail_drain_seconds is not None:
             return max(0.0, float(self.tail_drain_seconds))
+        if self._tail_is_quiet():
+            return 0.06
         raw_latency = getattr(self._stream, "latency", 0.0)
         latency = float(raw_latency) if isinstance(raw_latency, (int, float)) and raw_latency > 0 else 0.0
         return min(TAIL_DRAIN_MAX_SECONDS,

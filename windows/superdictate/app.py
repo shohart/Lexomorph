@@ -198,7 +198,12 @@ class DictationController(QObject):
         self.postprocessor.on_gpu_fallback = (
             lambda model: self.state_toast_requested.emit(
                 i18n.tr("toast_gpu_fallback"), "off"))
-        self.sounds = system.Sounds(settings.play_feedback_sounds)
+        self.sounds = system.Sounds(
+            settings.play_feedback_sounds,
+            enabled_getter=lambda: self.settings.play_feedback_sounds,
+            pack_getter=lambda: self.settings.feedback_sound_pack,
+            idle_seconds_getter=self._sound_idle_seconds,
+        )
         self.output_mute = system.OutputMute()
         self.media_pause = system.MediaPause()
         # The mute now trails the start cue by a thread, so it has to be
@@ -359,6 +364,7 @@ class DictationController(QObject):
             if self.recorder.is_recording:
                 self.recorder.discard()
         finally:
+            self.sounds.close()
             self._restore_playback()
         self.recorder.shutdown()
         self.listener.stop()
@@ -448,10 +454,17 @@ class DictationController(QObject):
         self._warm_up_punctuation()
         self.settings_applied.emit()
 
+    def _sound_idle_seconds(self) -> Optional[float]:
+        mode = self.settings.instant_start_mode
+        if mode == "off":
+            return 0.0
+        return self.recorder.warm_idle_seconds.get(mode, 5.0)
+
     def _apply_instant_start(self) -> None:
         self.recorder.configure_warm(self.settings.instant_start_mode,
                                      self.settings.input_device)
         self.recorder.warm_device_cache_async(self.settings.input_device)
+        self.sounds.refresh_idle_policy()
 
     def _save_open_time(self, ema: float) -> None:
         """Remember how slow the microphone is to open (see cue_before_open).
@@ -506,6 +519,7 @@ class DictationController(QObject):
                 and self._can_start_recording()
                 and not self.recorder.is_recording):
             self._prestart_event.set()
+            self.sounds.warm_async()
         self._action_bridge.actions.emit(values)
 
     def _prestart_loop(self) -> None:
@@ -703,10 +717,6 @@ class DictationController(QObject):
         # capture; OutputMute waits briefly on ``pause_done`` before muting.
         pause_done = (self.media_pause.pause_async()
                       if self.settings.pause_media_while_recording else None)
-        # The field the user is in right now is where the text goes, even if
-        # they switch windows while speaking (PendingTextInsertionTargetStore
-        # on macOS). Captured off the Qt thread; the paste waits for it.
-        self._insertion_target = self.focus.capture()
         # A new dictation ends the watch on the previous one.
         self.edit_watch.stop()
         # The start cue goes out before the microphone is opened, so the
@@ -720,7 +730,6 @@ class DictationController(QObject):
             then = lambda: self._mute_after_cue(session, pause_done)
         if not recording_flow.begin(self.recorder, self.sounds,
                                     self.settings.input_device, then=then):
-            self._drop_insertion_target()
             self._restore_playback()
             message = self._microphone_error_message(self.recorder.last_error or "")
             self.last_error = message
@@ -728,6 +737,9 @@ class DictationController(QObject):
             self.error_raised.emit(message)
             self.listener.reset_toggle()
             return
+        # Capture the target window after starting capture so UIAutomation
+        # probing never delays the start sound or microphone open.
+        self._insertion_target = self.focus.capture()
         self._set_state(AppState.RECORDING)
         # Before the recording-time windows start, so they and the final
         # pass decode with the same list.
@@ -815,7 +827,8 @@ class DictationController(QObject):
         with self._playback_lock:
             self._recording_session += 1
             self.output_mute.restore()
-        self.media_pause.resume()
+        threading.Thread(target=self.media_pause.resume, name="media-resume",
+                         daemon=True).start()
 
     def _on_level(self, level: float) -> None:
         self.level_changed.emit(level)

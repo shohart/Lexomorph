@@ -381,6 +381,28 @@ class _SubmitLineEdit(QLineEdit):
         super().keyPressEvent(event)
 
 
+_STAGED_KEYS: frozenset[str] = frozenset({
+    "speech_model_profile",
+    "speech_compute_backend",
+    "llm_engine_backend_v1",
+    "correction_bundled_model_v2",
+    "llm_custom_base_url_v1",
+    "llm_custom_api_key_v1",
+    "llm_custom_model_name_v1",
+    "rewrite_engine_backend_v1",
+    "rewrite_bundled_model_v2",
+    "rewrite_custom_base_url_v1",
+    "rewrite_custom_api_key_v1",
+    "rewrite_custom_model_name_v1",
+    "llm_compute_backend",
+    "punctuation_model_v1",
+    "correction_system_prompt_v1",
+    "rewrite_system_prompt_polish_v1",
+    "rewrite_system_prompt_structured_task_v1",
+    "rewrite_system_prompt_official_v1",
+})
+
+
 class SettingsWindow(QDialog):
     # A sign-in / sync / sign-out finished on its worker thread:
     # (kind, detail), kind "ok" | "created" | "error".
@@ -528,7 +550,21 @@ class SettingsWindow(QDialog):
 
     def _update_draft(self, **kwargs) -> None:
         self._draft.update(kwargs)
-        self._set_dirty(True)
+        if not self._embedded:
+            self._set_dirty(True)
+            return
+
+        instant = {k: v for k, v in kwargs.items() if k not in _STAGED_KEYS}
+        if instant:
+            previous = self._settings.snapshot()
+            self._settings.apply(instant)
+            pref_sync = getattr(self._controller, "pref_sync", None)
+            if pref_sync is not None:
+                pref_sync.record_local_diff(previous, self._settings.snapshot())
+            self._controller.apply_settings()
+
+        if any(k in _STAGED_KEYS for k in kwargs):
+            self._set_dirty(True)
 
     def save_changes(self) -> None:
         self._save()
@@ -720,7 +756,27 @@ class SettingsWindow(QDialog):
             sound, "settings_pause_media", "pause_media_while_recording",
             hint=i18n.tr("settings_pause_media_hint"))
         self._sounds = self._checkbox(sound, "settings_sounds", "play_feedback_sounds")
+        self._sound_pack = self._combo(
+            sound, "settings_sound_pack", "feedback_sound_pack",
+            [("default", i18n.tr("sound_pack_default")),
+             ("focus", i18n.tr("sound_pack_focus")),
+             ("select", i18n.tr("sound_pack_select")),
+             ("check", i18n.tr("sound_pack_check")),
+             ("redo", i18n.tr("sound_pack_redo")),
+             ("open", i18n.tr("sound_pack_open")),
+             ("start", i18n.tr("sound_pack_start"))],
+        )
+        preview_btn = QPushButton(i18n.tr("sound_pack_preview"))
+        preview_btn.setIcon(icons.icon("volume", self._palette.text_muted, 14))
+        preview_btn.clicked.connect(self._preview_sound_pack)
+        sound.add_row(None, preview_btn)
         return _page(_page_header("nav_audio", "subtitle_audio"), capture, sound)
+
+    def _preview_sound_pack(self) -> None:
+        sounds = getattr(self._controller, "sounds", None)
+        if sounds is not None and hasattr(sounds, "preview_pack"):
+            pack = str(self._sound_pack.currentData() or "default")
+            sounds.preview_pack(pack)
 
     def _build_appearance_page(self) -> QWidget:
         general = Section(i18n.tr("settings_tab_appearance"))
